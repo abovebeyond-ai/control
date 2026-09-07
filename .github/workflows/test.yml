@@ -1,0 +1,34 @@
+name: test
+on: [push, pull_request]
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+  crosscheck:
+    # The judge is not our code: the standard's validator and reference verifier, and the
+    # ProveML JavaScript package, replay a chain this gateway wrote.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: git clone --depth 1 https://github.com/AAI-Society/ov-poc-standard.git /tmp/standard
+      - run: pip install cryptography jsonschema
+      - run: mkdir /tmp/pv && cd /tmp/pv && npm init -y >/dev/null && npm install proveml@^0.9.0 --no-audit --no-fund
+      - run: go run ./cmd/demo /tmp/demo
+      - run: python3 tools/crosscheck.py /tmp/demo --standard=/tmp/standard --proveml=/tmp/pv
+      - run: go run ./cmd/verify --store /tmp/demo/store --key "$(cat /tmp/demo/public-key.hex)" --checkpoint /tmp/demo/checkpoint.json

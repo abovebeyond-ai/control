@@ -1,0 +1,8 @@
+control
+Copyright 2026 Above Beyond (Shane Deconinck)
+
+A reference gateway service for the Proof-of-Control Standard (Advanced AI Society,
+Working Draft v0.1, CC BY 4.0). The test vectors under testdata/poc-vectors are copied
+unchanged from the standard's repository; the premises are verified with proveml-go,
+Apache License 2.0. Nothing of the standard's reference implementation is copied; it is
+run against this gateway's evidence as the independent cross-check (tools/crosscheck.py).
