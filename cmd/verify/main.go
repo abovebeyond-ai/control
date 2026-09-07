@@ -9,13 +9,16 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/abovebeyond-ai/control/anchor"
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
@@ -28,6 +31,8 @@ func main() {
 	keyHex := flag.String("key", "", "the gateway's public key, hex")
 	measurement := flag.String("measurement", "", "the expected measurement, hex (default: the first record's)")
 	checkpoint := flag.String("checkpoint", "", "a signed checkpoint to check against the chain")
+	anchors := flag.String("anchors", "", "a receipts directory written by cmd/anchor: the latest receipt per agent is checked and the chain must extend it")
+	offline := flag.Bool("offline", false, "check anchor receipts without the network")
 	flag.Parse()
 	if *dir == "" || *keyHex == "" {
 		fmt.Fprintln(os.Stderr, "usage: verify --store DIR --key HEX [--measurement HEX] [--checkpoint FILE]")
@@ -82,6 +87,33 @@ func main() {
 			if err := premises.Replay(c, material); err != nil {
 				fmt.Printf("BROKEN %s record %d: %v\n", agent, i, err)
 				broken++
+			}
+		}
+		if *anchors != "" {
+			r, err := anchor.Latest(*anchors, agent)
+			fail(err)
+			if r == nil {
+				fmt.Printf("note   %s: no anchor receipt\n", agent)
+			} else {
+				b, err := anchor.BackendOf(r)
+				fail(err)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				err = anchor.Check(ctx, r, pub, b, !*offline)
+				cancel()
+				size := r.Checkpoint.TreeSize
+				switch {
+				case err != nil:
+					fmt.Printf("BROKEN %s: anchor %s: %v\n", agent, r.Backend, err)
+					broken++
+				case size > len(records):
+					fmt.Printf("BROKEN %s: truncation detected: the anchor covers %d records, only %d presented\n", agent, size, len(records))
+					broken++
+				case records[size-1].Claims()["chain_head"] != r.Checkpoint.ChainHead:
+					fmt.Printf("BROKEN %s: history rewritten: the chain presented at size %d does not fold to the anchored head\n", agent, size)
+					broken++
+				default:
+					fmt.Printf("holds  %s: anchored at size %d on %s at %s, and the chain extends it\n", agent, size, r.Backend, r.AnchoredAt)
+				}
 			}
 		}
 		if *checkpoint != "" {

@@ -69,8 +69,34 @@ for a first deployment beside an existing hand.
 | `GET /v1/proof?agent=&step=` | an inclusion proof against the current tree |
 | `GET /v1/key` | the public key and issuer |
 
-`verify --store DIR --key HEX [--checkpoint FILE]` replays everything with nothing but the
-store, the public key and the measurement.
+`verify --store DIR --key HEX [--checkpoint FILE] [--anchors DIR]` replays everything with
+nothing but the store, the public key and the measurement, and, given the receipts, that
+the chain extends every anchored head.
+
+## Anchoring, outside
+
+`anchor` is a separate binary that never holds a key. It reads the signed checkpoint from
+the gateway, verifies the signature under the key the gateway publishes, posts the
+checkpoint bytes to a backend, and keeps what the backend answered as a receipt, one per
+tree size and backend. A size already anchored is skipped, so running it every minute
+costs nothing when nothing moved.
+
+```
+anchor pin --gateway http://127.0.0.1:8471 --agent DID --out anchors --tsa http://timestamp.digicert.com
+anchor pin --gateway http://127.0.0.1:8471 --agent DID --out anchors --hedera operator.json
+anchor check --out anchors --agent DID --key HEX [--offline]
+```
+
+Two backends from the start, so that no ledger is load-bearing and a third is an
+afternoon: an **RFC 3161 timestamp authority** (a signed timestamp over the checkpoint's
+hash from a public authority, no account, verified offline against the certificate in the
+token) and **Hedera Consensus Service** (a consensus timestamp from a public ledger, kept as
+the mirror node returned it). The standard accepts either, and running both makes
+presenting two histories to two readers a matter of forging two independent parties.
+
+What this design gives up on purpose: nothing inside the gateway knows a ledger exists.
+A client who wants the anchor inside their own consortium chain writes a backend against
+this interface and never touches the measured core.
 
 ## Checked against what is not ours
 
