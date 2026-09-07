@@ -163,3 +163,31 @@ func signCheckpoint(cp gateway.Checkpoint, key ed25519.PrivateKey) string {
 }
 
 func mustHex(s string) []byte { b, _ := hex.DecodeString(s); return b }
+
+// The agent id carries a fragment; the checkpoint request must escape it, or
+// the gateway is asked for a different agent. Caught on the box on 7 September.
+func TestFetchCheckpointEscapesTheAgentId(t *testing.T) {
+	cp, pub := signedCheckpoint(t)
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/checkpoint":
+			asked = r.URL.Query().Get("agent")
+			if asked != cp.Agent {
+				w.WriteHeader(404)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(cp)
+		case "/v1/key":
+			_ = json.NewEncoder(w).Encode(map[string]string{"public_key": hex.EncodeToString(pub)})
+		}
+	}))
+	defer srv.Close()
+	got, key, err := FetchCheckpoint(context.Background(), srv.URL, cp.Agent)
+	if err != nil {
+		t.Fatalf("asked for %q: %v", asked, err)
+	}
+	if got.ChainHead != cp.ChainHead || hex.EncodeToString(key) != hex.EncodeToString(pub) {
+		t.Errorf("got %+v", got)
+	}
+}

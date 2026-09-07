@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -413,7 +414,9 @@ func BackendOf(r *Receipt) (Backend, error) {
 // FetchCheckpoint reads a gateway's checkpoint and key over HTTP.
 func FetchCheckpoint(ctx context.Context, gatewayURL, agent string) (gateway.Checkpoint, []byte, error) {
 	var cp gateway.Checkpoint
-	if err := getJSON(ctx, gatewayURL+"/v1/checkpoint?agent="+agent, &cp); err != nil {
+	// An agent id is a DID with a fragment; unescaped, the '#' ends the URL and the
+	// gateway is asked for an agent it does not know.
+	if err := getJSON(ctx, gatewayURL+"/v1/checkpoint?agent="+url.QueryEscape(agent), &cp); err != nil {
 		return cp, nil, err
 	}
 	var key struct {
