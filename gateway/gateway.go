@@ -11,12 +11,14 @@ package gateway
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/log"
@@ -48,12 +50,19 @@ type Config struct {
 	AgbomDigest string           // digest of the agent bill of materials; the deployed commit is honest for deterministic hands
 	Platform    string           // SOFTWARE until an enclave attests
 	Clock       func() time.Time // injectable for reproducible records
+	// Attestation, when present, is the hardware's word: the platform becomes
+	// INTEL_TDX and the measurement the MRTD from the quote, which must bind
+	// this gateway's key. Without it the measurement is the software one, the
+	// digest of the engine and the policy bundle, and nobody but the operator
+	// vouches for it.
+	Attestation *attest.Record
 }
 
 // Gateway holds the chain state of one agent. One instance is one path.
 type Gateway struct {
 	cfg         Config
-	measurement string
+	measurement string // hex, untagged
+	alg         string // the measurement's algorithm: sha-256 for software, sha-384 for an MRTD
 	mu          sync.Mutex
 	head        string
 	tree        *merkle.Tree
@@ -80,7 +89,20 @@ func Open(cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &Gateway{cfg: cfg, measurement: measurement, head: evidence.GenesisHead(), tree: merkle.New(), phi: policy.PathSummary{PerKind: map[string]int{}}}
+	alg := canonical.Algorithm
+	if cfg.Attestation != nil {
+		// A quote that binds another key is somebody else's attestation.
+		quote, err := attest.Parse(mustDecodeB64(cfg.Attestation.QuoteB64))
+		if err != nil || !attest.BindsKey(quote, cfg.Key.Public().(ed25519.PublicKey)) {
+			return nil, errors.New("gateway: the attestation does not bind this gateway's key")
+		}
+		cfg.Platform = attest.PlatformTDX
+		alg, measurement, err = canonical.UntagAny(cfg.Attestation.Measurement())
+		if err != nil {
+			return nil, err
+		}
+	}
+	g := &Gateway{cfg: cfg, measurement: measurement, alg: alg, head: evidence.GenesisHead(), tree: merkle.New(), phi: policy.PathSummary{PerKind: map[string]int{}}}
 	records, err := cfg.Store.Records(cfg.Agent)
 	if err != nil {
 		return nil, err
@@ -104,8 +126,16 @@ func Open(cfg Config) (*Gateway, error) {
 	return g, nil
 }
 
-// Measurement names the code and policy that judge.
+// Measurement names what judges, as untagged hex: under hardware attestation
+// the MRTD of the trust domain, otherwise the digest of the engine and the
+// policy bundle.
 func (g *Gateway) Measurement() string { return g.measurement }
+
+// Platform is what vouches for the measurement.
+func (g *Gateway) Platform() string { return g.cfg.Platform }
+
+// Attestation is the hardware's record, or nil when software attests.
+func (g *Gateway) Attestation() *attest.Record { return g.cfg.Attestation }
 
 // PublicKey of the evidence signer.
 func (g *Gateway) PublicKey() ed25519.PublicKey { return g.cfg.Key.Public().(ed25519.PublicKey) }
@@ -175,7 +205,7 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 	token := evidence.Token{
 		"iss": g.cfg.Issuer, "iat": g.cfg.Clock().Unix(), "nonce": "n-" + hex.EncodeToString(nonce),
 		"eat_profile": evidence.Profile, "poc_claims": claims,
-		"submods": map[string]any{"attestation": map[string]any{"platform": g.cfg.Platform, "measurement": canonical.Tag(g.measurement)}},
+		"submods": map[string]any{"attestation": map[string]any{"platform": g.cfg.Platform, "measurement": g.alg + ":" + g.measurement}},
 	}
 	if err := evidence.Sign(token, g.cfg.Key); err != nil {
 		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the token cannot be signed: " + err.Error()}
@@ -283,4 +313,12 @@ func first(list []string) string {
 		return "unknown"
 	}
 	return list[0]
+}
+
+func mustDecodeB64(s string) []byte {
+	raw, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil
+	}
+	return raw
 }

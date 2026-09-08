@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/abovebeyond-ai/proveml-go v0.0.0-20260907185127-c93e189cc5f7
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea
+	github.com/google/go-tdx-guest v0.3.1
 	github.com/hiero-ledger/hiero-sdk-go/v2 v2.84.0
 )
 
@@ -12,6 +13,8 @@ require (
 	github.com/btcsuite/btcd/btcec/v2 v2.5.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230713084857-e76b763bdc49 // indirect
+	github.com/google/go-configfs-tsm v0.2.2 // indirect
+	github.com/google/logger v1.1.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -21,6 +24,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

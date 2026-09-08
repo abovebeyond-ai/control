@@ -185,17 +185,35 @@ func Digest(v any) (string, error) {
 // before a hash migration is still interpretable after one.
 func Tag(hex string) string { return Algorithm + ":" + hex }
 
-// Untag refuses an untagged, foreign or malformed digest rather than guessing.
+// Untag refuses an untagged, foreign or malformed sha-256 digest rather than guessing.
 func Untag(digest string) (string, error) {
-	alg, value, ok := strings.Cut(digest, ":")
-	if !ok || value == "" {
-		return "", fmt.Errorf("untagged digest %q: the algorithm is mandatory", digest)
+	alg, value, err := UntagAny(digest)
+	if err != nil {
+		return "", err
 	}
 	if alg != Algorithm {
 		return "", fmt.Errorf("unsupported digest algorithm %q", alg)
 	}
-	if len(value) != 64 || strings.ToLower(value) != value || strings.Trim(value, "0123456789abcdef") != "" {
-		return "", fmt.Errorf("digest %q is not 64 lowercase hex characters", digest)
-	}
 	return value, nil
+}
+
+// widths is what the standard's schema admits: each algorithm carries its own length.
+var widths = map[string]int{"sha-256": 64, "sha-384": 96, "sha-512": 128, "sha3-256": 64}
+
+// UntagAny accepts any digest the schema admits and returns its algorithm and
+// hex. A measurement from a TDX quote is sha-384; the chain and snapshot
+// digests stay sha-256.
+func UntagAny(digest string) (alg, value string, err error) {
+	alg, value, ok := strings.Cut(digest, ":")
+	if !ok || value == "" {
+		return "", "", fmt.Errorf("untagged digest %q: the algorithm is mandatory", digest)
+	}
+	width, known := widths[alg]
+	if !known {
+		return "", "", fmt.Errorf("unsupported digest algorithm %q", alg)
+	}
+	if len(value) != width || strings.ToLower(value) != value || strings.Trim(value, "0123456789abcdef") != "" {
+		return "", "", fmt.Errorf("digest %q is not %d lowercase hex characters", digest, width)
+	}
+	return alg, value, nil
 }

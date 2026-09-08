@@ -114,7 +114,7 @@ func VerifyChain(records []Token, pub ed25519.PublicKey, expectedMeasurement str
 		c := tok.Claims()
 		att, _ := tok["submods"].(map[string]any)
 		attestation, _ := att["attestation"].(map[string]any)
-		m, err := canonical.Untag(str(attestation["measurement"]))
+		_, m, err := canonical.UntagAny(str(attestation["measurement"]))
 		if err != nil || m != expectedMeasurement {
 			return ChainResult{false, fmt.Sprintf("measurement mismatch at record %d: judged by another policy", i), i}
 		}
@@ -150,7 +150,7 @@ func VerifyRecord(record Token, pub ed25519.PublicKey, expectedMeasurement strin
 	c := record.Claims()
 	att, _ := record["submods"].(map[string]any)
 	attestation, _ := att["attestation"].(map[string]any)
-	if m, err := canonical.Untag(str(attestation["measurement"])); err != nil || m != expectedMeasurement {
+	if _, m, err := canonical.UntagAny(str(attestation["measurement"])); err != nil || m != expectedMeasurement {
 		return errors.New("measurement mismatch")
 	}
 	snapshot, err := canonical.Untag(str(c["canonical_snapshot_hash"]))

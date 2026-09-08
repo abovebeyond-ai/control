@@ -37,6 +37,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/effects"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
@@ -55,11 +56,17 @@ type config struct {
 	// Dry means: judge and record, perform nothing. For a first deployment
 	// beside an existing hand, so the evidence starts before the credentials move.
 	Dry bool `json:"dry"`
+	// Attestation is "software" (the default: the operator vouches) or "tdx":
+	// the gateway asks the hardware for a quote binding its key at start and
+	// refuses to run without one. A gateway configured to prove and unable to
+	// must not judge, because its evidence would claim what it cannot show.
+	Attestation string `json:"attestation"`
 }
 
 type service struct {
 	cfg      config
 	key      ed25519.PrivateKey
+	attested *attest.Record
 	store    *log.Store
 	effects  effects.Registry
 	mu       sync.Mutex
@@ -82,6 +89,8 @@ func main() {
 	fail(err)
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets})
+	s.attested, err = attestation(cfg, key)
+	fail(err)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/submit", s.submit)
@@ -89,15 +98,55 @@ func main() {
 	mux.HandleFunc("GET /v1/records", s.records)
 	mux.HandleFunc("GET /v1/proof", s.proof)
 	mux.HandleFunc("GET /v1/key", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer})
+		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform()})
 	})
-	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, map[bool]string{true: ", dry", false: ""}[cfg.Dry])
+	mux.HandleFunc("GET /v1/attestation", s.attestation)
+	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s, %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, s.platform(), map[bool]string{true: ", dry", false: ""}[cfg.Dry])
 	fail(http.ListenAndServe(cfg.Listen, mux))
 }
 
+// attestation asks the hardware for a quote binding the key when the
+// configuration says so, and writes the record beside the store so the
+// anchorer and any verifier can read it: attestation.json is the one file a
+// stranger needs together with the log to check that the key that signed
+// lives in the measured environment.
+func attestation(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
+	switch cfg.Attestation {
+	case "", "software":
+		return nil, nil
+	case "tdx":
+		r, err := attest.Acquire(key.Public().(ed25519.PublicKey))
+		if err != nil {
+			return nil, fmt.Errorf("configured to attest on Intel TDX but cannot: %w", err)
+		}
+		raw, _ := json.MarshalIndent(r, "", "  ")
+		if err := os.WriteFile(filepath.Join(cfg.Store, "attestation.json"), append(raw, '\n'), 0o644); err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
+	return nil, fmt.Errorf("attestation %q: software or tdx", cfg.Attestation)
+}
+
+func (s *service) platform() string {
+	if s.attested == nil {
+		return attest.PlatformSoftware
+	}
+	return s.attested.Platform
+}
+
+func (s *service) attestation(w http.ResponseWriter, r *http.Request) {
+	if s.attested == nil {
+		writeJSON(w, 404, map[string]any{"platform": attest.PlatformSoftware, "error": "this gateway attests in software: the operator vouches for the measurement"})
+		return
+	}
+	writeJSON(w, 200, s.attested)
+}
+
 // loadKey reads the Ed25519 seed from the secrets directory, making it on first
-// use with owner-only permissions. In an enclave this is where the key is
-// generated inside and its digest goes into the attestation.
+// use with owner-only permissions. Under TDX the seed file lives on the trust
+// domain's encrypted disk, the key is made there on first start, and the quote
+// binds it: attestation() runs right after this.
 func loadKey(path string) (ed25519.PrivateKey, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -133,7 +182,7 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 	if !ok {
 		return nil, errors.New("unknown agent: no grant configured")
 	}
-	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key})
+	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested})
 	if err != nil {
 		return nil, err
 	}

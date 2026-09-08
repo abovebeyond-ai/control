@@ -3,6 +3,8 @@ package gateway
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"github.com/abovebeyond-ai/control/attest"
+	"github.com/google/go-tdx-guest/testing/testdata"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,5 +165,55 @@ func TestPremisesDecideBeforeTheGrant(t *testing.T) {
 	}
 	if err := premises.Replay(records[1].Claims(), m2); err != nil {
 		t.Error(err)
+	}
+}
+
+// Under hardware attestation the token names the platform and carries the
+// MRTD as its measurement, and the chain replays against that measurement.
+// A quote that binds another key is refused at open: a gateway must never
+// sign under an attestation that is not its own.
+func TestAnAttestedGatewayNamesThePlatformAndTheMRTD(t *testing.T) {
+	seed := make([]byte, 32)
+	for i := range seed {
+		seed[i] = 7
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	pub := key.Public().(ed25519.PublicKey)
+	foreign, err := attest.FromRaw(testdata.RawQuote, "sample", pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := log.Open(t.TempDir())
+	cfg := Config{Issuer: "https://gateway.example", Agent: "did:example:agent#a", Policy: policy.Policy{Grant: policy.Grant{Kinds: []string{"pull.open"}, Resources: []string{"o/r"}, MaxPerKind: 2}}, Store: store, Key: key, Attestation: foreign}
+	if _, err := Open(cfg); err == nil || !strings.Contains(err.Error(), "does not bind") {
+		t.Fatalf("a foreign attestation must be refused: %v", err)
+	}
+
+	raw := append([]byte(nil), testdata.RawQuote...)
+	rd := attest.ReportDataForKey(pub)
+	copy(raw[attest.ReportDataOffset:], rd[:])
+	own, _ := attest.FromRaw(raw, "sample", pub)
+	cfg.Attestation = own
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Platform() != attest.PlatformTDX || len(g.Measurement()) != 96 || g.Measurement() != own.MRTD {
+		t.Fatalf("platform %s measurement %s", g.Platform(), g.Measurement())
+	}
+	v := g.Submit(policy.Action{Kind: "pull.open", Resource: "o/r"}, "did:example:principal", nil, nil)
+	if !v.Allowed() {
+		t.Fatal(v.Reason)
+	}
+	att := v.Token["submods"].(map[string]any)["attestation"].(map[string]any)
+	if att["platform"] != "INTEL_TDX" || att["measurement"] != "sha-384:"+own.MRTD {
+		t.Fatalf("attestation submodule: %v", att)
+	}
+	records, _ := store.Records(cfg.Agent)
+	if r := evidence.VerifyChain(records, pub, g.Measurement()); !r.OK {
+		t.Fatal(r.Reason)
+	}
+	if r := evidence.VerifyChain(records, pub, strings.Repeat("0", 96)); r.OK {
+		t.Fatal("another MRTD must not verify")
 	}
 }

@@ -91,7 +91,7 @@ independent monitors (7.2.2, 7.3.3, 7.3.5, 8.1.6, 8.1.7) describe.
 | 7.1.4 effect channel mediated inside the boundary | Yes in service mode (adapters hold the credential); not yet live. |
 | 7.2.1 contemporaneous records | Yes. |
 | 7.2.2 timestamps anchored outside the operator | Yes, two backends, daily. Testnet on Hedera; mainnet before external use. |
-| 7.2.3, 7.2.4 hardware attestation binding the key | **No.** Platform SOFTWARE; the standard's validator says "Tier 2 at most" on every token. |
+| 7.2.3, 7.2.4 hardware attestation binding the key | **Not yet in production.** Platform SOFTWARE; the standard's validator says "Tier 2 at most" on every token. The binding is built (`attest`: Intel TDX quote, key digest in REPORTDATA as the reference does it, MRTD as the measurement, verifier side included) and tested on Intel's sample quote; it waits for a confidential VM. |
 | 7.3.1 chain replayed on a schedule with results recorded | Yes, 07:20 UTC daily, reported to Portal, alert on a break. |
 | 7.3.2 keys the operator cannot access | **No.** The key is a file the operator can read. |
 | 7.3.3 equivocation resistance | Two independent anchors; no witness on the identity log yet. |
@@ -103,8 +103,10 @@ independent monitors (7.2.2, 7.3.3, 7.3.5, 8.1.6, 8.1.7) describe.
 | C10.2 trust-assumption disclosure | Published. |
 
 So: Tier 2, disclosed. Tier 3 is the same service in a confidential VM with the key
-generated inside and bound in the attestation, which is the next milestone and changes the
-`platform` claim and nothing else in the design.
+generated inside and bound in the attestation. The code for that is in the repository
+(`"attestation": "tdx"` in the gateway's configuration, `--attestation` on the verifier)
+and changes the `platform` claim and the measurement's width and nothing else in the
+design; what it needs is a machine.
 
 ## What running it taught
 

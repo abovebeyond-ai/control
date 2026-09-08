@@ -109,12 +109,25 @@ repository's code. CI runs both.
 
 ## What it is, no larger than the evidence supports
 
-Software attestation. The standard's own validator says it on every token: platform
+Software attestation, today. The standard's own validator says it on every token: platform
 SOFTWARE, Tier 2 at most. The records prove they were not altered after the gateway wrote
 them, that the chain is whole, and that a stranger can replay every judgement; they do not
-yet prove the operator could not have written them differently. Tier 3 is the same binary
-in a confidential VM, the key generated inside and bound to the attestation. Everything in
-this repository is built for that move to change the `platform` claim and nothing else.
+yet prove the operator could not have written them differently.
+
+The move to Tier 3 is built and waits for a machine. The `attest` package binds the
+evidence key to an Intel TDX quote the way the standard's reference does: REPORTDATA is
+SHA-512 of `poc-evidence-key\0` and the public key, so the hardware's signature covers
+both the code that runs and the key it holds. With `"attestation": "tdx"` in its
+configuration the gateway asks the hardware for that quote at start, refuses to run
+without one, writes the record as `attestation.json` beside the store and serves it at
+`/v1/attestation`; every token then says platform INTEL_TDX with the MRTD, a sha-384
+digest, as its measurement. `verify --attestation attestation.json` checks the quote under
+Intel's roots (collateral from Intel's provisioning service unless `--offline`), that it
+binds the key given, and that every record carries that MRTD. Tested against the quote
+Google ships with go-tdx-guest: it parses, verifies at the date its certificates were
+valid, and a copy with our key's digest written into REPORTDATA binds the key and fails
+Intel's signature, which is the two checks being separate on purpose. What remains is a
+confidential VM to run it on, and the disclosure page saying so.
 
 Apache-2.0. Offered to the Advanced AI Society as a lab project beside the
 reason-as-evidence profile.

@@ -95,3 +95,19 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 		t.Errorf("dry: %d %v, calls %d", code, out, len(calls))
 	}
 }
+
+// A gateway told to attest on hardware it does not have refuses to start:
+// evidence that claims INTEL_TDX from a laptop would be the lie the whole
+// scheme exists to make impossible.
+func TestAGatewayConfiguredToAttestWithoutHardwareRefuses(t *testing.T) {
+	key := ed25519.NewKeyFromSeed(make([]byte, 32))
+	if _, err := attestation(config{Attestation: "tdx", Store: t.TempDir()}, key); err == nil || !strings.Contains(err.Error(), "cannot") {
+		t.Fatalf("expected a refusal: %v", err)
+	}
+	if _, err := attestation(config{Attestation: "software"}, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attestation(config{Attestation: "sgx"}, key); err == nil {
+		t.Fatal("an unknown platform must be refused")
+	}
+}

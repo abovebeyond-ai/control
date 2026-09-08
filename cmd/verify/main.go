@@ -2,10 +2,13 @@
 // the public key and the measurement: every chain, every record's premises
 // against the material beside it, and the checkpoint against the head.
 //
-//	verify --store DIR --key HEX [--measurement HEX] [--checkpoint checkpoint.json]
+//	verify --store DIR --key HEX [--measurement HEX] [--checkpoint checkpoint.json] [--attestation attestation.json]
 //
 // Exit 0 when everything holds. Without --measurement the first record of each
-// chain says which policy judged and the rest must agree with it.
+// chain says which policy judged and the rest must agree with it. With
+// --attestation the hardware's quote is verified under Intel's roots, it must
+// bind the key given, and its MRTD becomes the measurement every record must
+// carry: that is what makes the chain Tier 3 to a stranger.
 package main
 
 import (
@@ -19,6 +22,7 @@ import (
 	"time"
 
 	"github.com/abovebeyond-ai/control/anchor"
+	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
@@ -32,7 +36,8 @@ func main() {
 	measurement := flag.String("measurement", "", "the expected measurement, hex (default: the first record's)")
 	checkpoint := flag.String("checkpoint", "", "a signed checkpoint to check against the chain")
 	anchors := flag.String("anchors", "", "a receipts directory written by cmd/anchor: the latest receipt per agent is checked and the chain must extend it")
-	offline := flag.Bool("offline", false, "check anchor receipts without the network")
+	offline := flag.Bool("offline", false, "check anchor receipts and the attestation without the network")
+	attestation := flag.String("attestation", "", "the gateway's attestation record (attestation.json beside the store)")
 	flag.Parse()
 	if *dir == "" || *keyHex == "" {
 		fmt.Fprintln(os.Stderr, "usage: verify --store DIR --key HEX [--measurement HEX] [--checkpoint FILE]")
@@ -49,6 +54,25 @@ func main() {
 	agents, err := store.Agents()
 	fail(err)
 	broken := 0
+	if *attestation != "" {
+		raw, err := os.ReadFile(*attestation)
+		fail(err)
+		var rec attest.Record
+		fail(json.Unmarshal(raw, &rec))
+		if rec.PublicKey != *keyHex {
+			fmt.Printf("BROKEN attestation: it binds key %s, not %s\n", rec.PublicKey, *keyHex)
+			os.Exit(1)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		err = attest.Verify(ctx, &rec, attest.Options{Collateral: !*offline})
+		cancel()
+		if err != nil {
+			fmt.Printf("BROKEN attestation: %v\n", err)
+			os.Exit(1)
+		}
+		_, *measurement, _ = canonical.UntagAny(rec.Measurement())
+		fmt.Printf("holds  attestation: %s quote binds the key, MRTD %s\n", rec.Platform, rec.MRTD)
+	}
 	for _, agent := range agents {
 		records, err := store.Records(agent)
 		if err != nil {
@@ -63,7 +87,7 @@ func main() {
 		if m == "" {
 			att, _ := records[0]["submods"].(map[string]any)
 			attestation, _ := att["attestation"].(map[string]any)
-			m, _ = canonical.Untag(fmt.Sprint(attestation["measurement"]))
+			_, m, _ = canonical.UntagAny(fmt.Sprint(attestation["measurement"]))
 		}
 		r := evidence.VerifyChain(records, pub, m)
 		if !r.OK {
