@@ -17,8 +17,13 @@ PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN
 # Where to listen. 127.0.0.1 for a rehearsal reached over ssh; 0.0.0.0 when a hand on
 # another machine reaches it through Google's IAP tunnel (the firewall admits only
 # 35.235.240.0/20 on the port, and the token below guards the submission).
-LISTEN="${CONTROL_LISTEN:-127.0.0.1:8471}"
+# The listen address comes from the instance attribute control-listen; the client token
+# from a file the operator placed in the secrets directory, never from metadata, which
+# anyone with compute.viewer on the project can read.
+meta() { curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1" 2>/dev/null || true; }
+LISTEN="${CONTROL_LISTEN:-$(meta control-listen)}"; LISTEN="${LISTEN:-127.0.0.1:8471}"
 CLIENT_TOKEN="${CONTROL_CLIENT_TOKEN:-}"
+[ -z "$CLIENT_TOKEN" ] && [ -f /var/lib/control/secrets/client-token ] && CLIENT_TOKEN="$(cat /var/lib/control/secrets/client-token)"
 
 if [ -x /usr/local/bin/control-gateway ] && systemctl is-active --quiet control-gateway; then
   echo "control gateway already installed and running"; exit 0
