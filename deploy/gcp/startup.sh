@@ -9,8 +9,8 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.2.1}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-1fb2f976992778d33ea147ff90d19b892eac6fd768f6a6ffe29c128828d11a26}"
+RELEASE="${CONTROL_RELEASE:-v0.2.2}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-2c6fa73ea307097b73133f3e92201a9aeff86d35fc8a8bf86aa1672611865996}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
 AGENT="${CONTROL_AGENT:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal}"
 PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai}"
@@ -53,15 +53,12 @@ cat > /var/lib/control/config.json <<JSON
 JSON
 chown control:control /var/lib/control/config.json
 
-# The quote door. configfs-tsm exists on this kernel but every report entry
-# it creates is root-only, so an unprivileged gateway cannot use it; the older
-# /dev/tdx_guest device takes a group and a mode, and a udev rule keeps them
-# across reboots. The gateway tries configfs first and falls back to the device.
-cat > /etc/udev/rules.d/80-tdx-guest.rules <<'RULE'
-KERNEL=="tdx_guest", GROUP="control", MODE="0660"
-RULE
-udevadm control --reload-rules && udevadm trigger --name-match=tdx_guest || true
-[ -e /dev/tdx_guest ] && chgrp control /dev/tdx_guest && chmod 660 /dev/tdx_guest || true
+# The quote door. On this kernel (7.0, Ubuntu 24.04 on GCP) quotes come only
+# through configfs-tsm, and every report entry it creates is root-only; the
+# older /dev/tdx_guest device makes reports, not quotes. So the unit acquires
+# the quote as root in ExecStartPre (the "+" prefix), hands the key and the
+# record to the gateway's user, and the gateway then runs unprivileged and
+# accepts only a record that binds its own key.
 
 cat > /etc/systemd/system/control-gateway.service <<'UNIT'
 [Unit]
@@ -72,12 +69,14 @@ Wants=network-online.target
 [Service]
 User=control
 Group=control
+ExecStartPre=+/usr/local/bin/control-gateway --config /var/lib/control/config.json --attest
+ExecStartPre=+/bin/chown -R control:control /var/lib/control/secrets /var/lib/control/store
 ExecStart=/usr/local/bin/control-gateway --config /var/lib/control/config.json
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/control /sys/kernel/config
+ReadWritePaths=/var/lib/control
 PrivateTmp=true
 
 [Install]

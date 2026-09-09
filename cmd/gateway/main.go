@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,7 @@ type service struct {
 
 func main() {
 	path := flag.String("config", "config.json", "configuration file")
+	attestOnly := flag.Bool("attest", false, "acquire the hardware quote binding the key, write attestation.json beside the store, and exit; run as root before the service drops to its own user")
 	flag.Parse()
 	raw, err := os.ReadFile(*path)
 	fail(err)
@@ -87,6 +89,12 @@ func main() {
 	fail(err)
 	key, err := loadKey(filepath.Join(cfg.Secrets, "control-signing.key"))
 	fail(err)
+	if *attestOnly {
+		r, err := acquire(cfg, key)
+		fail(err)
+		fmt.Fprintf(os.Stderr, "attested on %s via %s, MRTD %s\n", r.Platform, r.Provider, r.MRTD)
+		return
+	}
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets})
 	s.attested, err = attestation(cfg, key)
@@ -105,27 +113,65 @@ func main() {
 	fail(http.ListenAndServe(cfg.Listen, mux))
 }
 
-// attestation asks the hardware for a quote binding the key when the
-// configuration says so, and writes the record beside the store so the
-// anchorer and any verifier can read it: attestation.json is the one file a
-// stranger needs together with the log to check that the key that signed
-// lives in the measured environment.
+// attestation is the hardware's record binding the key when the configuration
+// says so: attestation.json beside the store, the one file a stranger needs
+// together with the log to check that the key that signed lives in the
+// measured environment. A record already there that binds this key is used;
+// otherwise the quote is acquired now, which works only as root, because the
+// kernel's configfs-tsm creates every report entry root-only (the older
+// /dev/tdx_guest device no longer produces quotes on current kernels). The
+// service therefore runs `--attest` as root in ExecStartPre and the gateway
+// itself, under its own user, only accepts what binds its key.
 func attestation(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 	switch cfg.Attestation {
 	case "", "software":
 		return nil, nil
 	case "tdx":
-		r, err := attest.Acquire(key.Public().(ed25519.PublicKey))
+		if r, err := stored(cfg, key); err == nil {
+			return r, nil
+		}
+		r, err := acquire(cfg, key)
 		if err != nil {
 			return nil, fmt.Errorf("configured to attest on Intel TDX but cannot: %w", err)
-		}
-		raw, _ := json.MarshalIndent(r, "", "  ")
-		if err := os.WriteFile(filepath.Join(cfg.Store, "attestation.json"), append(raw, '\n'), 0o644); err != nil {
-			return nil, err
 		}
 		return r, nil
 	}
 	return nil, fmt.Errorf("attestation %q: software or tdx", cfg.Attestation)
+}
+
+func stored(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
+	raw, err := os.ReadFile(filepath.Join(cfg.Store, "attestation.json"))
+	if err != nil {
+		return nil, err
+	}
+	var r attest.Record
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, err
+	}
+	quoteRaw, err := base64.StdEncoding.DecodeString(r.QuoteB64)
+	if err != nil {
+		return nil, err
+	}
+	quote, err := attest.Parse(quoteRaw)
+	if err != nil {
+		return nil, err
+	}
+	if !attest.BindsKey(quote, key.Public().(ed25519.PublicKey)) {
+		return nil, errors.New("attestation.json binds another key")
+	}
+	return &r, nil
+}
+
+func acquire(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
+	r, err := attest.Acquire(key.Public().(ed25519.PublicKey))
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.MarshalIndent(r, "", "  ")
+	if err := os.WriteFile(filepath.Join(cfg.Store, "attestation.json"), append(raw, '\n'), 0o644); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func (s *service) platform() string {

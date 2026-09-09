@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/abovebeyond-ai/control/attest"
+	"github.com/google/go-tdx-guest/testing/testdata"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,5 +111,28 @@ func TestAGatewayConfiguredToAttestWithoutHardwareRefuses(t *testing.T) {
 	}
 	if _, err := attestation(config{Attestation: "sgx"}, key); err == nil {
 		t.Fatal("an unknown platform must be refused")
+	}
+}
+
+// A record already beside the store is used when it binds this key and
+// refused when it binds another: the privileged pre-step writes it, the
+// unprivileged service must not be able to be handed somebody else's.
+func TestAStoredAttestationIsUsedOnlyWhenItBindsTheKey(t *testing.T) {
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32))
+	pub := key.Public().(ed25519.PublicKey)
+	dir := t.TempDir()
+	raw := append([]byte(nil), testdata.RawQuote...)
+	rd := attest.ReportDataForKey(pub)
+	copy(raw[attest.ReportDataOffset:], rd[:])
+	own, _ := attest.FromRaw(raw, "rehearsal", pub)
+	b, _ := json.Marshal(own)
+	os.WriteFile(filepath.Join(dir, "attestation.json"), b, 0o644)
+	r, err := attestation(config{Attestation: "tdx", Store: dir}, key)
+	if err != nil || r == nil || r.MRTD != own.MRTD || r.Provider != "rehearsal" {
+		t.Fatalf("the stored record must be used: %v %+v", err, r)
+	}
+	other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{10}, 32))
+	if _, err := attestation(config{Attestation: "tdx", Store: dir}, other); err == nil {
+		t.Fatal("a record binding another key must not be used, and this machine cannot acquire one")
 	}
 }
