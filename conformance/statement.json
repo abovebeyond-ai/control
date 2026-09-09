@@ -1,0 +1,35 @@
+{
+  "standard": "Advanced AI Society Proof-of-Control",
+  "standard_version": "0.1",
+  "claim_date": "2026-09-09",
+  "stage": "self-declared",
+  "system": {
+    "name": "Elixir repair hands with the control gateway",
+    "operator": "Above Beyond",
+    "operator_did": "did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai",
+    "components": [
+      {"name": "abovebeyond-ai/elixir", "version": "deployed commit", "environment": "Hetzner, 167.233.221.164"},
+      {"name": "abovebeyond-ai/control", "version": "v0.4.0", "environment": "Google Cloud europe-west4, Intel TDX, shadow (dry)"}
+    ],
+    "boundary": {
+      "inside": ["gateway process", "policy", "premises verifier", "chain and tree", "signing key", "evidence log", "effect adapters", "configuration", "secrets"],
+      "outside": ["Portal", "hands", "anchorer", "verifier", "DigiCert TSA", "Hedera", "Intel PCS", "did:webvh log", "GitHub"]
+    },
+    "in_scope_actions": ["workflow.dispatch", "branch.push", "pull.open"],
+    "excluded_actions": [
+      {"class": "pull.merge", "rationale": "no hand holds a grant for it; a person merges, or the ledger rung outside this claim"},
+      {"class": "reads", "rationale": "measurements change nothing"},
+      {"class": "manual use of the same tokens by a person", "rationale": "not an agent action"}
+    ]
+  },
+  "domains_claimed": ["C4", "C5", "C7", "C8", "C10"],
+  "claims": "register.json",
+  "anchoring_interval": "P1D",
+  "attestation_refresh_interval": "P1D",
+  "retention": "P1Y",
+  "verification": {
+    "tooling": "https://github.com/abovebeyond-ai/control",
+    "evidence": "https://github.com/abovebeyond-ai/control-evidence",
+    "key": "https://abovebeyond.ai/.well-known/did.jsonl"
+  }
+}

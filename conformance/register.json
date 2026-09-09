@@ -1,0 +1,54 @@
+{
+  "claims": [
+    {
+      "id": "judged-before-effect",
+      "statement": "every in-scope action was judged by the gateway and recorded before its effect was released",
+      "domain": "C4",
+      "mechanism": "signed evidence token per action, hash chain, RFC 6962 tree, write before release",
+      "fact_evidenced": "existence, order and integrity of the judgement record for each action",
+      "tier": 2,
+      "trust_analysis": ["operator (holds the signing key on disk in production)", "the mathematics"],
+      "rows_open_for_tier_3": ["7.1.1", "7.1.4", "7.3.2"]
+    },
+    {
+      "id": "reason-verified",
+      "statement": "each repository-changing action carried a certificate of premises that verified against the material beside the record",
+      "domain": "C4",
+      "mechanism": "ProveML certificate, store, registry and provenance; replay by PHP gate, proveml-go and the ProveML JavaScript package",
+      "fact_evidenced": "the certificate's digests and the verifier's boolean, recomputable by a stranger",
+      "tier": 2,
+      "trust_analysis": ["operator", "the OSV advisory data the hands read (graded inferred/gateway)"],
+      "rows_open_for_tier_3": ["7.1.1", "7.1.4", "7.3.2"]
+    },
+    {
+      "id": "history-anchored",
+      "statement": "the chain head existed by the anchored time and has not been rewritten below the anchored size",
+      "domain": "C7",
+      "mechanism": "RFC 3161 timestamp (DigiCert) and Hedera Consensus Service on the signed checkpoint, daily",
+      "fact_evidenced": "a consensus time and a TSA time for a given root and head",
+      "tier": 3,
+      "trust_analysis": ["DigiCert as TSA", "Hedera consensus and mirror nodes", "the mathematics"],
+      "note": "Hedera testnet until first external use; the mechanism satisfies 7.3.3 (single-history consensus)"
+    },
+    {
+      "id": "agent-identified",
+      "statement": "the record names the agent by a fragment of a DID whose key history is signed",
+      "domain": "C5",
+      "mechanism": "did:webvh log at abovebeyond.ai with pre-rotation",
+      "fact_evidenced": "which key was valid for the agent at the record's time",
+      "tier": 2,
+      "trust_analysis": ["the domain and its DNS", "the operator's update key custody (moving to a hardware token)"],
+      "rows_open_for_tier_3": ["witness on the log"]
+    },
+    {
+      "id": "gateway-attested",
+      "statement": "the shadow gateway's key was generated inside an Intel TDX trust domain and is bound in the hardware quote",
+      "domain": "C7",
+      "mechanism": "TDX quote with REPORTDATA = SHA-512('poc-evidence-key\\0' || key); MRTD as the record's measurement; daily refresh",
+      "fact_evidenced": "that the signer of shadow records runs inside the measured domain",
+      "tier": 2,
+      "trust_analysis": ["Intel's attestation chain", "Google's hypervisor and disk", "operator login to the VM"],
+      "note": "dry: the hands perform; becomes the production claim at service mode"
+    }
+  ]
+}
