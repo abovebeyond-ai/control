@@ -41,6 +41,11 @@ rm -f "$tmp"
 
 # Dry: judge, record, attest; perform nothing. A rehearsal proves the quote and
 # the chain, it has no business touching a repository.
+# A configuration the operator carried over (rehearse.sh config) is left alone: the
+# policy of this gateway is set by a deliberate act, not rewritten at boot.
+if [ -f /var/lib/control/config.json ] && grep -q '"carried_over": true' /var/lib/control/config.json; then
+  echo "configuration carried over by the operator, left as is"
+else
 cat > /var/lib/control/config.json <<JSON
 {
   "listen": "${LISTEN}",
@@ -62,6 +67,7 @@ cat > /var/lib/control/config.json <<JSON
   }
 }
 JSON
+fi
 chown control:control /var/lib/control/config.json
 
 # The quote door. On this kernel (7.0, Ubuntu 24.04 on GCP) quotes come only
