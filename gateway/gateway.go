@@ -199,6 +199,28 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 	return g.SubmitIn("", action, principal, extension, prem)
 }
 
+// SubmitSigned is SubmitIn for a hand that signs what it sends: body is exactly
+// the bytes the hand signed, signature the Ed25519 signature over them. When the
+// grant names a submitter key the signature must verify under it, or the request
+// is refused and the refusal recorded; when it names none, the signature is noted
+// if present. The record carries control_submitter: verified, unsigned or invalid.
+func (g *Gateway) SubmitSigned(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, body, signature []byte) Verdict {
+	state := "unsigned"
+	if len(signature) > 0 {
+		state = "invalid"
+		if key := g.cfg.Policy.Grant.SubmitterKey; key != "" {
+			if pub, err := hex.DecodeString(key); err == nil && len(pub) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(pub), body, signature) {
+				state = "verified"
+			}
+		}
+	}
+	merged := map[string]any{"control_submitter": state}
+	for k, v := range extension {
+		merged[k] = v
+	}
+	return g.submit(run, action, principal, merged, prem, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified")
+}
+
 // SubmitIn is one intercepted step within a run. The path summary the policy
 // judges against is the run's: a second dispatch in the same run is refused,
 // the first dispatch of the next run is not. The run's name is written as the
@@ -206,6 +228,10 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 // moves only after the durable write, so a store failure leaves the chain
 // exactly as it was.
 func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material) Verdict {
+	return g.submit(run, action, principal, extension, prem, g.cfg.Policy.Grant.SubmitterKey != "")
+}
+
+func (g *Gateway) submit(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, unsigned bool) Verdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	phi := g.summary(run)
@@ -245,6 +271,8 @@ func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, e
 
 	var verdict, reason string
 	switch {
+	case unsigned:
+		verdict, reason = "DENY", "the submission is not signed by the agent's key"
 	case g.cfg.Policy.RequiresPremises(action.Kind) && prem == nil:
 		verdict, reason = "DENY", "no certificate of premises for "+action.Kind
 	case prem != nil && !prem.Verified:

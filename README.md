@@ -72,6 +72,12 @@ for a first deployment beside an existing hand.
 | `GET /v1/key` | the public key, issuer and platform |
 | `GET /v1/attestation` | the hardware's record binding the key, or 404 when software attests |
 
+A grant may name the hand's own public key as `submitter_key`: every submission must then
+be signed by it, `Control-Signature` carrying the Ed25519 signature over the request body in
+hex, and the record says `control_submitter: verified`; an unsigned or wrongly signed
+submission is refused and the refusal recorded (row 5.1.2). Parameters are held to a schema
+per kind (row 4.1.4).
+
 `client_token` in the configuration, when set, is what a hand must present as a bearer
 token to submit: a gateway reached from another machine holds credentials and judges within
 grants, and without it anyone who can reach the port could make it act. Reading stays open;

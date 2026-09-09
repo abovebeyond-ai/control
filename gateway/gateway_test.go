@@ -340,3 +340,33 @@ func TestTheRecordNamesTheMatchAndTheParametersAndCarriesTheGrant(t *testing.T) 
 		t.Fatalf("%v", bad)
 	}
 }
+
+// A hand that signs what it sends is recorded as verified; when the grant names its
+// key, an unsigned or wrongly signed submission is refused, and the refusal itself
+// is a record (row 5.1.2).
+func TestASignedSubmissionIsVerifiedAgainstTheAgentsKey(t *testing.T) {
+	handSeed, _ := hex.DecodeString(strings.Repeat("22", 32))
+	hand := ed25519.NewKeyFromSeed(handSeed)
+	store, _ := log.Open(t.TempDir())
+	gwSeed, _ := hex.DecodeString(strings.Repeat("11", 32))
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:agent#s", Policy: policy.Policy{Grant: policy.Grant{Kinds: []string{"pull.open"}, Resources: []string{"x/y"}, MaxPerKind: 3, SubmitterKey: hex.EncodeToString(hand.Public().(ed25519.PublicKey))}}, Store: store, Key: ed25519.NewKeyFromSeed(gwSeed)}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}
+	body := []byte(`{"agent":"did:example:agent#s","action":{"kind":"pull.open"}}`)
+	v := g.SubmitSigned("r", a, "p", nil, nil, body, ed25519.Sign(hand, body))
+	if !v.Allowed() || v.Token.Claims()["control_submitter"] != "verified" {
+		t.Fatalf("%s %s %v", v.Verdict, v.Reason, v.Token.Claims()["control_submitter"])
+	}
+	if u := g.SubmitSigned("r", a, "p", nil, nil, body, nil); u.Allowed() || u.Token.Claims()["control_submitter"] != "unsigned" || !strings.Contains(u.Reason, "not signed") {
+		t.Fatalf("unsigned: %s %s", u.Verdict, u.Reason)
+	}
+	if w := g.SubmitSigned("r", a, "p", nil, nil, body, ed25519.Sign(hand, []byte("other bytes"))); w.Allowed() || w.Token.Claims()["control_submitter"] != "invalid" {
+		t.Fatalf("invalid: %s %s", w.Verdict, w.Reason)
+	}
+	if plain := g.SubmitIn("r", a, "p", nil, nil); plain.Allowed() {
+		t.Fatal("with a submitter key in the grant, an unsigned submission must be refused")
+	}
+}

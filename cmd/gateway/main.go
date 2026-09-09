@@ -31,6 +31,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -255,10 +256,23 @@ type submitRequest struct {
 }
 
 func (s *service) submit(w http.ResponseWriter, r *http.Request) {
-	var req submitRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": "bad request: " + err.Error()})
 		return
+	}
+	var req submitRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, 400, map[string]any{"error": "bad request: " + err.Error()})
+		return
+	}
+	// The hand's signature over exactly these bytes, hex, in Control-Signature.
+	var signature []byte
+	if h := r.Header.Get("Control-Signature"); h != "" {
+		if signature, err = hex.DecodeString(h); err != nil {
+			writeJSON(w, 400, map[string]any{"error": "Control-Signature is not hex"})
+			return
+		}
 	}
 	g, err := s.gateway(req.Agent)
 	if err != nil {
@@ -268,7 +282,7 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
-	v := g.SubmitIn(req.Run, req.Action, req.Principal, req.Extension, req.Premises)
+	v := g.SubmitSigned(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature)
 	if v.Verdict == "FAIL_CLOSED" {
 		writeJSON(w, 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token})
 		return

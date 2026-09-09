@@ -43,6 +43,10 @@ type Grant struct {
 	MaxPerKind     int      `json:"max_per_kind"`
 	PremisesFor    []string `json:"premises_for"`
 	MaxSensitivity string   `json:"max_sensitivity_egress,omitempty"`
+	// SubmitterKey, when set, is the hand's own Ed25519 public key (hex): every
+	// submission must be signed by it, and the record says so (row 5.1.2). The key
+	// is the one the DID log publishes for the agent, so a stranger can check it.
+	SubmitterKey string `json:"submitter_key,omitempty"`
 }
 
 // PathSummary is bounded path state: counts per kind and the resources
@@ -128,7 +132,8 @@ func (p Policy) Bundle() map[string]any {
 		"principal": p.Grant.Principal, "kinds": kinds, "resources": resources,
 		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises,
 		"path_aware": p.PathAware, "version": Version, "schemas": schemaDocument(),
-		"expiry": "none: a standing grant, replaced by a new bundle when it changes",
+		"submitter_key": p.Grant.SubmitterKey,
+		"expiry":        "none: a standing grant, replaced by a new bundle when it changes",
 	}
 }
 
