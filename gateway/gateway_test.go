@@ -217,3 +217,57 @@ func TestAnAttestedGatewayNamesThePlatformAndTheMRTD(t *testing.T) {
 		t.Fatal("another MRTD must not verify")
 	}
 }
+
+// Path limits are per run: the first dispatch of the next run is not "a second
+// dispatch". A restart rebuilds each run's path from the actions beside the
+// log, so what a run already did is not forgotten. And a log judged under
+// another measurement refuses to open.
+func TestPathLimitsArePerRunAndSurviveARestart(t *testing.T) {
+	seed := make([]byte, 32)
+	for i := range seed {
+		seed[i] = 3
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	store, _ := log.Open(t.TempDir())
+	cfg := Config{Issuer: "https://gateway.example", Agent: "did:example:agent#m", Policy: policy.Policy{Grant: policy.Grant{Kinds: []string{"workflow.dispatch"}, Resources: []string{"o/r", "o/s"}, MaxPerKind: 1}, PathAware: true}, Store: store, Key: key}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := func(run, res string) Verdict {
+		return g.SubmitIn(run, policy.Action{Kind: "workflow.dispatch", Resource: res}, "did:example:p", nil, nil)
+	}
+	if v := dispatch("run-1", "o/r"); !v.Allowed() {
+		t.Fatal(v.Reason)
+	}
+	if v := dispatch("run-2", "o/s"); !v.Allowed() {
+		t.Fatalf("the first dispatch of another run must be allowed: %s", v.Reason)
+	}
+	if v := dispatch("run-1", "o/r"); v.Allowed() {
+		t.Fatal("a second dispatch in run-1 must be refused")
+	}
+	records, _ := store.Records(cfg.Agent)
+	if records[0].Claims()["control_run"] != "run-1" || records[1].Claims()["control_run"] != "run-2" {
+		t.Fatal("the run must be a claim on the record")
+	}
+	g, err = Open(cfg) // a restart
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := dispatch("run-2", "o/s"); v.Allowed() {
+		t.Fatal("after a restart run-2 must still remember its dispatch")
+	}
+	if v := dispatch("run-3", "o/s"); !v.Allowed() {
+		t.Fatal(v.Reason)
+	}
+	if r := evidence.VerifyChain(func() []evidence.Token { r, _ := store.Records(cfg.Agent); return r }(), g.PublicKey(), g.Measurement()); !r.OK {
+		t.Fatal(r.Reason)
+	}
+	// Another engine, another measurement: the log refuses to open under it.
+	old := Engine
+	defer func() { engineForTest(old) }()
+	engineForTest("control-other")
+	if _, err := Open(cfg); err == nil || !strings.Contains(err.Error(), "rotate the log") {
+		t.Fatalf("a log judged under another measurement must refuse to open: %v", err)
+	}
+}

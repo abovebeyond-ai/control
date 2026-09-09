@@ -237,6 +237,7 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 }
 
 type submitRequest struct {
+	Run       string             `json:"run"` // the hand's run; path limits are per run
 	Agent     string             `json:"agent"`
 	Principal string             `json:"principal"`
 	Action    policy.Action      `json:"action"`
@@ -258,7 +259,7 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
-	v := g.Submit(req.Action, req.Principal, req.Extension, req.Premises)
+	v := g.SubmitIn(req.Run, req.Action, req.Principal, req.Extension, req.Premises)
 	out := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token}
 	if v.Allowed() && !s.cfg.Dry {
 		adapter, ok := s.effects[req.Action.Kind]

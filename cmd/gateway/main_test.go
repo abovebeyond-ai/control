@@ -89,10 +89,11 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 	if len(records) != 3 {
 		t.Errorf("%d records", len(records))
 	}
-	// Dry: judge and record, perform nothing.
+	// Dry: judge and record, perform nothing. A restart in between: the first
+	// run's dispatch is remembered from the log, so this one names a new run.
 	s.cfg.Dry = true
 	s.gateways = map[string]*gateway.Gateway{}
-	code, out = post(submitRequest{Agent: agent, Action: policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, Premises: &material})
+	code, out = post(submitRequest{Run: "run-2", Agent: agent, Action: policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, Premises: &material})
 	if code != 200 || out["verdict"] != "ALLOW" || out["effect"] != nil || len(calls) != 2 {
 		t.Errorf("dry: %d %v, calls %d", code, out, len(calls))
 	}

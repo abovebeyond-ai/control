@@ -27,7 +27,10 @@ import (
 	"github.com/abovebeyond-ai/control/premises"
 )
 
-const Engine = "control-1"
+// Engine names the code that judges; it is the software measurement.
+var Engine = "control-1"
+
+func engineForTest(name string) { Engine = name }
 
 // Verdict is the gateway's answer with the evidence that answers for it.
 type Verdict struct {
@@ -67,7 +70,7 @@ type Gateway struct {
 	head        string
 	tree        *merkle.Tree
 	step        int
-	phi         policy.PathSummary
+	runs        map[string]policy.PathSummary // path summary per run; "" is the run of a hand that names none
 }
 
 // Open rebuilds the chain from the store. A log whose last record does not
@@ -85,7 +88,13 @@ func Open(cfg Config) (*Gateway, error) {
 	if cfg.AgbomDigest == "" {
 		cfg.AgbomDigest, _ = canonical.Digest(map[string]any{"agbom": "control", "version": "unknown"})
 	}
-	measurement, err := canonical.Digest(map[string]any{"engine": Engine, "bundle": cfg.Policy.BundleHash()})
+	// The software measurement names the code that judges and nothing else. The
+	// policy is a claim of its own on every record (policy_bundle_hash), so a
+	// grant that changes does not break the chain; a chain is one measured
+	// environment, and a verifier holds every record to the same measurement.
+	// Folding the bundle in here made Elixir's own chain, whose grant names
+	// one repository per run, fail verification at its third record.
+	measurement, err := canonical.Digest(map[string]any{"engine": Engine})
 	if err != nil {
 		return nil, err
 	}
@@ -102,13 +111,24 @@ func Open(cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
-	g := &Gateway{cfg: cfg, measurement: measurement, alg: alg, head: evidence.GenesisHead(), tree: merkle.New(), phi: policy.PathSummary{PerKind: map[string]int{}}}
+	g := &Gateway{cfg: cfg, measurement: measurement, alg: alg, head: evidence.GenesisHead(), tree: merkle.New(), runs: map[string]policy.PathSummary{}}
 	records, err := cfg.Store.Records(cfg.Agent)
 	if err != nil {
 		return nil, err
 	}
 	for i, tok := range records {
 		c := tok.Claims()
+		if i == 0 {
+			// A chain judged under another measurement is another environment's
+			// chain: appending to it would hand the verifier a break at this
+			// record. Rotate it (rename the log and its attachments) and start
+			// anew; the retired chain verifies on its own with its own measurement.
+			att, _ := tok["submods"].(map[string]any)
+			attestation, _ := att["attestation"].(map[string]any)
+			if _, m, err := canonical.UntagAny(str(attestation["measurement"])); err != nil || m != measurement {
+				return nil, fmt.Errorf("the evidence log for %s was judged under measurement %s, this gateway measures %s:%s; rotate the log before acting", cfg.Agent, str(attestation["measurement"]), alg, measurement)
+			}
+		}
 		snapshot, err := canonical.Untag(str(c["canonical_snapshot_hash"]))
 		if err != nil || num(c["step_index"]) != i {
 			return nil, fmt.Errorf("the evidence log for %s has a gap at record %d; refusing to act on top of it", cfg.Agent, i)
@@ -121,9 +141,29 @@ func Open(cfg Config) (*Gateway, error) {
 		leaf, _ := evidence.Leaf(snapshot, verdict)
 		g.tree.Append(leaf)
 		g.head = link
+		// The path summary of each run is rebuilt from the action written beside
+		// the record, so a restart does not forget what a run already did.
+		var done stepAction
+		if found, _ := cfg.Store.Attachment(cfg.Agent, i, "action", &done); found {
+			g.runs[done.Run] = g.summary(done.Run).Fold(done.Action, verdict)
+		}
 	}
 	g.step = len(records)
 	return g, nil
+}
+
+// stepAction is what is written beside each record so the run's path can be
+// folded again at open: the run and the action, which the claims do not carry.
+type stepAction struct {
+	Run    string        `json:"run"`
+	Action policy.Action `json:"action"`
+}
+
+func (g *Gateway) summary(run string) policy.PathSummary {
+	if phi, ok := g.runs[run]; ok {
+		return phi
+	}
+	return policy.PathSummary{PerKind: map[string]int{}}
 }
 
 // Measurement names what judges, as untagged hex: under hardware attestation
@@ -143,11 +183,29 @@ func (g *Gateway) PublicKey() ed25519.PublicKey { return g.cfg.Key.Public().(ed2
 // Step is the next step index.
 func (g *Gateway) Step() int { g.mu.Lock(); defer g.mu.Unlock(); return g.step }
 
-// Submit is one intercepted step. The instance state moves only after the
-// durable write, so a store failure leaves the chain exactly as it was.
+// Submit is one intercepted step of a hand that names no run: every step it
+// ever takes counts as one run, the strictest reading of the grant.
 func (g *Gateway) Submit(action policy.Action, principal string, extension map[string]any, prem *premises.Material) Verdict {
+	return g.SubmitIn("", action, principal, extension, prem)
+}
+
+// SubmitIn is one intercepted step within a run. The path summary the policy
+// judges against is the run's: a second dispatch in the same run is refused,
+// the first dispatch of the next run is not. The run's name is written as the
+// claim control_run so a reader can tell the runs apart. The instance state
+// moves only after the durable write, so a store failure leaves the chain
+// exactly as it was.
+func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material) Verdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	phi := g.summary(run)
+	if run != "" {
+		merged := map[string]any{"control_run": run}
+		for k, v := range extension {
+			merged[k] = v
+		}
+		extension = merged
+	}
 
 	if prem != nil {
 		premises.Check(prem)
@@ -165,7 +223,7 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 		extension = merged
 	}
 
-	snapshot := map[string]any{"agent_id": g.cfg.Agent, "action": action.ToMap(), "path_summary": g.phi.Digest(), "step_index": g.step}
+	snapshot := map[string]any{"agent_id": g.cfg.Agent, "action": action.ToMap(), "path_summary": phi.Digest(), "step_index": g.step}
 	snapshotDigest, err := canonical.Digest(snapshot)
 	if err != nil {
 		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the snapshot cannot be canonicalised: " + err.Error()}
@@ -178,7 +236,7 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 	case prem != nil && !prem.Verified:
 		verdict, reason = "DENY", "the certificate of premises does not verify: "+first(prem.Errors)
 	default:
-		verdict, reason = g.cfg.Policy.Evaluate(action, g.phi)
+		verdict, reason = g.cfg.Policy.Evaluate(action, phi)
 	}
 
 	link := evidence.Link(g.head, snapshotDigest, verdict)
@@ -194,7 +252,7 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 		"step_index": g.step, "chain_head": canonical.Tag(link),
 		"merkle_root": canonical.Tag(hex.EncodeToString(treeAfter.Root())), "tree_size": treeAfter.Size(),
 		"policy_bundle_hash": canonical.Tag(g.cfg.Policy.BundleHash()), "target_resource": action.Resource,
-		"canonical_snapshot_hash": canonical.Tag(snapshotDigest), "path_summary_hash": canonical.Tag(g.phi.Digest()),
+		"canonical_snapshot_hash": canonical.Tag(snapshotDigest), "path_summary_hash": canonical.Tag(phi.Digest()),
 		"verdict": verdict, "reason": reason, "alg": "EdDSA",
 	}
 	for k, v := range extension {
@@ -221,9 +279,12 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 	step := g.step
 	g.head = link
 	g.tree = treeAfter
-	g.phi = g.phi.Fold(action, verdict)
+	g.runs[run] = phi.Fold(action, verdict)
 	g.step++
 
+	if err := g.cfg.Store.Attach(g.cfg.Agent, step, "action", stepAction{Run: run, Action: action}); err != nil {
+		_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "step": step, "error": "action not attached: " + err.Error()})
+	}
 	if prem != nil {
 		if err := g.cfg.Store.Attach(g.cfg.Agent, step, "premises", prem); err != nil {
 			_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "step": step, "error": "premises not attached: " + err.Error()})
