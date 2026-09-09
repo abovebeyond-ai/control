@@ -63,11 +63,12 @@ for a first deployment beside an existing hand.
 
 | method | what |
 | --- | --- |
-| `POST /v1/submit` | `{agent, principal, action:{kind,resource,params}, extension, premises}` → verdict, reason, step, token, effect |
+| `POST /v1/submit` | `{run, agent, principal, action:{kind,resource,params}, extension, premises}` → verdict, reason, step, token, effect. Path limits count per `run`; a hand that names none has one run for life. |
 | `GET /v1/checkpoint?agent=` | the signed tree head an anchorer or witness picks up |
 | `GET /v1/records?agent=&from=` | the records, for a verifier |
 | `GET /v1/proof?agent=&step=` | an inclusion proof against the current tree |
-| `GET /v1/key` | the public key and issuer |
+| `GET /v1/key` | the public key, issuer and platform |
+| `GET /v1/attestation` | the hardware's record binding the key, or 404 when software attests |
 
 `verify --store DIR --key HEX [--checkpoint FILE] [--anchors DIR]` replays everything with
 nothing but the store, the public key and the measurement, and, given the receipts, that

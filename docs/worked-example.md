@@ -124,6 +124,30 @@ All three were found within hours of real traffic and none by a test we had writ
 beforehand. They are the argument for a reference *service* beside the reference
 *library*: the library proves the protocol, the service meets the world.
 
+Then the first real traffic, 9 September 2026, three maintenance runs and one security
+run through both gateways at once, taught three more, in one afternoon:
+
+4. **The measurement must name the code, not the policy.** Both gateways folded the policy
+   bundle into the software measurement. Elixir's in-process grant names one repository
+   per run, so its measurement changed with the project and the verifier reported its own
+   chain broken at record 2, "judged by another policy". The policy is already a claim on
+   every record; the measurement now names the engine alone. Corollary the standard
+   implies but does not spell out: a chain is one measured environment, so an engine
+   upgrade rotates the chain, and a gateway that finds a log judged under another
+   measurement refuses to open it rather than hand the verifier a break.
+5. **A path has a run.** The service kept one path summary per process. The second run of
+   the day was refused as "a second dispatch in one run", correctly by its own reading and
+   wrongly by anyone's. A hand now names its run; the gateway keeps a summary per run,
+   writes run and action beside the record, and rebuilds them at open so a restart forgets
+   nothing. Elixir's in-process gateway never had this problem because it is made per run,
+   which is the kind of difference a shadow exists to find.
+6. **Agreement is on the judgement, not the hashes.** Comparing the two chains, the verdict,
+   the reason, the target, the principal and the seven premises claims were identical
+   where both were right; the snapshot, path and policy hashes differed on every record,
+   because two implementations encode an action map and a path summary differently. A
+   comparison that expected equal hashes would have found two disagreeing gateways where
+   there was one disagreeing design decision.
+
 ## What is offered
 
 To the Society, as lab projects beside the reason-as-evidence profile: the gateway service
