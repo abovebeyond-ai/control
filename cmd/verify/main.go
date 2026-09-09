@@ -137,6 +137,34 @@ func main() {
 			continue
 		}
 		fmt.Printf("holds  %s: %s\n", agent, r.Reason)
+		// Row 7.1.2: every request has its effect and its result, under one action id.
+		phases := map[string]map[string]bool{}
+		order := []string{}
+		for _, tok := range records {
+			c := tok.Claims()
+			id, _ := c["control_action"].(string)
+			ph, _ := c["control_phase"].(string)
+			if id == "" {
+				continue
+			}
+			if phases[id] == nil {
+				phases[id] = map[string]bool{}
+				order = append(order, id)
+			}
+			phases[id][ph] = true
+		}
+		incomplete := 0
+		for _, id := range order {
+			if !phases[id]["request"] || !phases[id]["effect"] || !phases[id]["result"] {
+				fmt.Printf("BROKEN %s: action %s lacks one of request, effect, result\n", agent, id[:8])
+				incomplete++
+			}
+		}
+		if incomplete > 0 {
+			broken += incomplete
+		} else if len(order) > 0 {
+			fmt.Printf("holds  %s: %d action(s), each with request, effect and result\n", agent, len(order))
+		}
 		for i, tok := range records {
 			c := tok.Claims()
 			if _, ok := c["proveml_certificate_hash"]; !ok {

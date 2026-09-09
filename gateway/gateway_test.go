@@ -271,3 +271,43 @@ func TestPathLimitsArePerRunAndSurviveARestart(t *testing.T) {
 		t.Fatalf("a log judged under another measurement must refuse to open: %v", err)
 	}
 }
+
+// One action is three records sharing one action id: the request as judged, the
+// effect as performed, the result as returned. A refused request still gets its
+// effect record, saying nothing was performed, so the count per action never varies.
+func TestOneActionIsThreeLinkedRecords(t *testing.T) {
+	g, store := fixture(t)
+	a := policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b"}}
+	v := g.SubmitIn("r1", a, "did:webvh:QmTest:example.org", nil, nil)
+	if !v.Allowed() || v.ActionID == "" {
+		t.Fatal(v.Reason)
+	}
+	e := g.Follow("r1", v.ActionID, PhaseEffect, a, "did:webvh:QmTest:example.org", v.Verdict, "effect performed", map[string]any{"ok": true, "url": "https://github.com/x/y/pull/9"})
+	r := g.Follow("r1", v.ActionID, PhaseResult, a, "did:webvh:QmTest:example.org", v.Verdict, "result returned", map[string]any{"verdict": "ALLOW"})
+	if e.Step != 1 || r.Step != 2 {
+		t.Fatalf("steps %d %d", e.Step, r.Step)
+	}
+	records, _ := store.Records(g.cfg.Agent)
+	for i, phase := range []string{PhaseRequest, PhaseEffect, PhaseResult} {
+		c := records[i].Claims()
+		if c["control_action"] != v.ActionID || c["control_phase"] != phase || c["control_run"] != "r1" {
+			t.Fatalf("record %d: %v", i, c)
+		}
+	}
+	if records[1].Claims()["interception_point"] != "POST_CALL_TOOL_RESULT" {
+		t.Fatal("the effect record is a post-call record")
+	}
+	if res := evidence.VerifyChain(records, g.PublicKey(), g.Measurement()); !res.OK {
+		t.Fatal(res.Reason)
+	}
+	var outcome map[string]any
+	if found, _ := store.Attachment(g.cfg.Agent, 1, "outcome", &outcome); !found || outcome["url"] != "https://github.com/x/y/pull/9" {
+		t.Fatal("the outcome is written beside the effect record")
+	}
+	// A second pull.open in the same run is refused; its effect record says so.
+	d := g.SubmitIn("r1", a, "did:webvh:QmTest:example.org", nil, nil)
+	de := g.Follow("r1", d.ActionID, PhaseEffect, a, "did:webvh:QmTest:example.org", d.Verdict, "not performed: the request was refused", map[string]any{"performed": false})
+	if d.Allowed() || de.Verdict != "DENY" || de.Step != 4 {
+		t.Fatalf("%v %v", d, de)
+	}
+}

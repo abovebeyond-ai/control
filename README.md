@@ -63,7 +63,7 @@ for a first deployment beside an existing hand.
 
 | method | what |
 | --- | --- |
-| `POST /v1/submit` | `{run, agent, principal, action:{kind,resource,params}, extension, premises}` → verdict, reason, step, token, effect. Path limits count per `run`; a hand that names none has one run for life. |
+| `POST /v1/submit` | `{run, agent, principal, action:{kind,resource,params}, extension, premises}` → verdict, reason, step, action, token, effect, steps. Path limits count per `run`; a hand that names none has one run for life. One action is three records under one `control_action`: the request as judged, the effect as performed, the result as returned (row 7.1.2). |
 | `GET /v1/checkpoint?agent=` | the signed tree head an anchorer or witness picks up |
 | `GET /v1/records?agent=&from=` | the records, for a verifier |
 | `GET /v1/proof?agent=&step=` | an inclusion proof against the current tree |

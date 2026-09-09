@@ -87,8 +87,14 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 		t.Errorf("GitHub saw %v", calls)
 	}
 	records, _ := store.Records(agent)
-	if len(records) != 3 {
+	if len(records) != 9 { // three actions, three records each
 		t.Errorf("%d records", len(records))
+	}
+	if records[1].Claims()["control_phase"] != "effect" || records[1].Claims()["reason"] != "effect performed" || records[2].Claims()["control_phase"] != "result" {
+		t.Errorf("effect and result records: %v %v", records[1].Claims()["reason"], records[2].Claims()["control_phase"])
+	}
+	if records[7].Claims()["reason"] != "not performed: the request was refused" {
+		t.Errorf("a refusal's effect record: %v", records[7].Claims()["reason"])
 	}
 	// Dry: judge and record, perform nothing. A restart in between: the first
 	// run's dispatch is remembered from the log, so this one names a new run.

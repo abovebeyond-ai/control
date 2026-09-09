@@ -269,21 +269,57 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
 	v := g.SubmitIn(req.Run, req.Action, req.Principal, req.Extension, req.Premises)
-	out := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token}
-	if v.Allowed() && !s.cfg.Dry {
-		adapter, ok := s.effects[req.Action.Kind]
-		if !ok {
-			out["effect"] = effects.Outcome{Error: effects.ErrNoAdapter.Error()}
-		} else {
-			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-			defer cancel()
-			out["effect"] = adapter.Perform(ctx, req.Action)
-		}
-	}
 	if v.Verdict == "FAIL_CLOSED" {
-		writeJSON(w, 503, out)
+		writeJSON(w, 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token})
 		return
 	}
+	principal := req.Principal
+	if principal == "" {
+		principal = s.cfg.Agents[req.Agent].Grant.Principal
+	}
+	// The effect, as performed, is the second record of the action; a refusal or a dry
+	// run records that nothing was performed and why, so every action has all three.
+	var outcome any
+	var effectReason string
+	switch {
+	case !v.Allowed():
+		outcome, effectReason = map[string]any{"performed": false, "why": "refused"}, "not performed: the request was refused"
+	case s.cfg.Dry:
+		outcome, effectReason = map[string]any{"performed": false, "why": "dry"}, "not performed: dry"
+	default:
+		adapter, ok := s.effects[req.Action.Kind]
+		if !ok {
+			o := effects.Outcome{Error: effects.ErrNoAdapter.Error()}
+			outcome, effectReason = o, "not performed: "+o.Error
+		} else {
+			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+			o := adapter.Perform(ctx, req.Action)
+			cancel()
+			outcome = o
+			if o.OK {
+				effectReason = "effect performed"
+			} else {
+				effectReason = "effect failed: " + o.Error
+			}
+		}
+	}
+	e := g.Follow(req.Run, v.ActionID, gateway.PhaseEffect, req.Action, principal, v.Verdict, effectReason, outcome)
+	if e.Verdict == "FAIL_CLOSED" {
+		writeJSON(w, 503, map[string]any{"verdict": e.Verdict, "reason": "the effect record could not be written: " + e.Reason, "action": v.ActionID})
+		return
+	}
+	out := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "action": v.ActionID, "token": v.Token, "effect": nil, "steps": []int{v.Step, e.Step}}
+	if v.Allowed() && !s.cfg.Dry {
+		out["effect"] = outcome
+	}
+	// The result, as handed back, is the third: its digest covers the answer above.
+	answer := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "action": v.ActionID, "effect": outcome}
+	rr := g.Follow(req.Run, v.ActionID, gateway.PhaseResult, req.Action, principal, v.Verdict, "result returned", answer)
+	if rr.Verdict == "FAIL_CLOSED" {
+		writeJSON(w, 503, map[string]any{"verdict": rr.Verdict, "reason": "the result record could not be written: " + rr.Reason, "action": v.ActionID})
+		return
+	}
+	out["steps"] = []int{v.Step, e.Step, rr.Step}
 	writeJSON(w, 200, out)
 }
 

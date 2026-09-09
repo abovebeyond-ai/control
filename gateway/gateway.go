@@ -34,11 +34,21 @@ func engineForTest(name string) { Engine = name }
 
 // Verdict is the gateway's answer with the evidence that answers for it.
 type Verdict struct {
-	Verdict string
-	Reason  string
-	Token   evidence.Token // nil for FAIL_CLOSED: nothing could be written
-	Step    int
+	Verdict  string
+	Reason   string
+	Token    evidence.Token // nil for FAIL_CLOSED: nothing could be written
+	Step     int
+	ActionID string // shared by the three records of one action: request, effect, result
 }
+
+// Phases of one intercepted action (row 7.1.2): the request judged before anything
+// happens, the effect as performed, and the result as handed back. Each is its own
+// signed record on the chain; all three carry the same control_action.
+const (
+	PhaseRequest = "request"
+	PhaseEffect  = "effect"
+	PhaseResult  = "result"
+)
 
 // Allowed says whether the effect may proceed.
 func (v Verdict) Allowed() bool { return v.Verdict == "ALLOW" }
@@ -199,13 +209,17 @@ func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, e
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	phi := g.summary(run)
+	idRaw := make([]byte, 16)
+	_, _ = rand.Read(idRaw)
+	actionID := hex.EncodeToString(idRaw)
+	merged := map[string]any{"control_action": actionID, "control_phase": PhaseRequest}
 	if run != "" {
-		merged := map[string]any{"control_run": run}
-		for k, v := range extension {
-			merged[k] = v
-		}
-		extension = merged
+		merged["control_run"] = run
 	}
+	for k, v := range extension {
+		merged[k] = v
+	}
+	extension = merged
 
 	if prem != nil {
 		premises.Check(prem)
@@ -290,7 +304,68 @@ func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, e
 			_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "step": step, "error": "premises not attached: " + err.Error()})
 		}
 	}
-	return Verdict{Verdict: verdict, Reason: reason, Token: token, Step: step}
+	return Verdict{Verdict: verdict, Reason: reason, Token: token, Step: step, ActionID: actionID}
+}
+
+// Follow writes the effect or result record of an action already judged: the same
+// action id, the phase, and a digest of what happened, signed and chained like the
+// request. The verdict repeats the binding decision; the reason says what the phase
+// did. It folds nothing into the run's path: the request already counted.
+func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, principal, verdict, reason string, outcome any) Verdict {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if phase != PhaseEffect && phase != PhaseResult {
+		return Verdict{Verdict: "FAIL_CLOSED", Reason: "unknown phase " + phase}
+	}
+	phi := g.summary(run)
+	outcomeDigest, err := canonical.Digest(outcome)
+	if err != nil {
+		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the outcome cannot be canonicalised: " + err.Error()}
+	}
+	snapshot := map[string]any{"agent_id": g.cfg.Agent, "action": action.ToMap(), "phase": phase, "outcome": canonical.Tag(outcomeDigest), "step_index": g.step}
+	snapshotDigest, err := canonical.Digest(snapshot)
+	if err != nil {
+		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the snapshot cannot be canonicalised: " + err.Error()}
+	}
+	link := evidence.Link(g.head, snapshotDigest, verdict)
+	leaf, _ := evidence.Leaf(snapshotDigest, verdict)
+	treeAfter := cloneTree(g.tree)
+	treeAfter.Append(leaf)
+	nonce := make([]byte, 8)
+	_, _ = rand.Read(nonce)
+	claims := map[string]any{
+		"agent_id": g.cfg.Agent, "initiating_user": principal,
+		"agbom_digest": canonical.Tag(g.cfg.AgbomDigest), "interception_point": "POST_CALL_TOOL_RESULT",
+		"step_index": g.step, "chain_head": canonical.Tag(link),
+		"merkle_root": canonical.Tag(hex.EncodeToString(treeAfter.Root())), "tree_size": treeAfter.Size(),
+		"policy_bundle_hash": canonical.Tag(g.cfg.Policy.BundleHash()), "target_resource": action.Resource,
+		"canonical_snapshot_hash": canonical.Tag(snapshotDigest), "path_summary_hash": canonical.Tag(phi.Digest()),
+		"verdict": verdict, "reason": reason, "alg": "EdDSA",
+		"control_action": actionID, "control_phase": phase, "control_outcome": canonical.Tag(outcomeDigest),
+	}
+	if run != "" {
+		claims["control_run"] = run
+	}
+	token := evidence.Token{
+		"iss": g.cfg.Issuer, "iat": g.cfg.Clock().Unix(), "nonce": "n-" + hex.EncodeToString(nonce),
+		"eat_profile": evidence.Profile, "poc_claims": claims,
+		"submods": map[string]any{"attestation": map[string]any{"platform": g.cfg.Platform, "measurement": g.alg + ":" + g.measurement}},
+	}
+	if err := evidence.Sign(token, g.cfg.Key); err != nil {
+		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the token cannot be signed: " + err.Error()}
+	}
+	if err := g.cfg.Store.Append(g.cfg.Agent, token); err != nil {
+		_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "nonce": token["nonce"], "action": actionID, "phase": phase, "error": err.Error()})
+		return Verdict{Verdict: "FAIL_CLOSED", Reason: err.Error()}
+	}
+	step := g.step
+	g.head = link
+	g.tree = treeAfter
+	g.step++
+	if err := g.cfg.Store.Attach(g.cfg.Agent, step, "outcome", outcome); err != nil {
+		_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "step": step, "error": "outcome not attached: " + err.Error()})
+	}
+	return Verdict{Verdict: verdict, Reason: reason, Token: token, Step: step, ActionID: actionID}
 }
 
 // Checkpoint is the signed tree head an anchorer or a witness picks up.
