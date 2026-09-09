@@ -115,3 +115,35 @@ create to the first quote. Anything the startup script had to do that this page 
 mention. Those go into the worked example and into the /trust/keys page, which then says
 Tier 3 for the rehearsal gateway and still Tier 2 for the one in production, until the
 move.
+
+## From rehearsal to production shape (9 September 2026, afternoon)
+
+The rehearsal became the production layout the same day, still dry:
+
+- **No public port anywhere.** The gateway listens on the VM's interface, the VM has no
+  external address, and the firewall admits only Google's IAP range on the port. Elixir on
+  Hetzner reaches it through `gcloud compute start-iap-tunnel` with a service account
+  (`control-client`, roles `iap.tunnelResourceAccessor` and `compute.viewer`) whose key
+  sits in Elixir's secrets. The tunnel ends on the same local address Elixir always used,
+  so nothing in the hands changes. Elixir's supervisor keeps the tunnel alive in remote
+  mode (`ELIXIR_CONTROL_REMOTE=true`, elixir PR 121) instead of a local binary.
+- **A client token guards acting.** control v0.3.0: `client_token` in the configuration,
+  placed in the VM's secrets by the operator and beside Elixir's secrets, never in instance
+  metadata. Reading stays open.
+- **The policy is carried, not pulled.** `rehearse.sh config FILE` takes the config.json
+  the hands generate on the box (two agents, nineteen repositories each) and puts it on
+  the VM with the VM's own listen, store, secrets, attestation and token; the boot script
+  leaves a carried configuration alone. A Tier 3 gateway's policy changes by a deliberate
+  act of the operator, and every record names the bundle that judged it.
+- **Verification without the store.** `verify --gateway URL` reads agents, records,
+  attachments, attestation and the live checkpoint over HTTP; Elixir's daily verify uses
+  it in remote mode, so the attestation is checked against Intel's collateral every day.
+
+Proven by hand from the box: the key comes back through the tunnel, a submission without
+the token is refused, one with it reaches the gateway. Third boot of the VM: same MRTD.
+
+What remains before the records are Tier 3 in production: flip Elixir to remote (shadow
+first, against the attested gateway), let the daily comparison run, then service mode with
+the GitHub tokens in the VM's secrets and `dry` off, and publish the VM's key in the
+did:webvh log under the agent fragments so a stranger resolves the signer from the DID.
+
