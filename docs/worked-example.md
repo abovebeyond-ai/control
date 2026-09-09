@@ -91,7 +91,7 @@ independent monitors (7.2.2, 7.3.3, 7.3.5, 8.1.6, 8.1.7) describe.
 | 7.1.4 effect channel mediated inside the boundary | Yes in service mode (adapters hold the credential); not yet live. |
 | 7.2.1 contemporaneous records | Yes. |
 | 7.2.2 timestamps anchored outside the operator | Yes, two backends, daily. Testnet on Hedera; mainnet before external use. |
-| 7.2.3, 7.2.4 hardware attestation binding the key | **Not yet in production.** Platform SOFTWARE; the standard's validator says "Tier 2 at most" on every token. The binding is built (`attest`: Intel TDX quote, key digest in REPORTDATA as the reference does it, MRTD as the measurement, verifier side included) and tested on Intel's sample quote; it waits for a confidential VM. |
+| 7.2.3, 7.2.4 hardware attestation binding the key | **Demonstrated, not yet in production.** The production gateway is platform SOFTWARE and the standard's validator says "Tier 2 at most" on its tokens. The same binary ran attested on Intel TDX on 9 September 2026 (Google Cloud, c3, key generated inside, quote binding the key via REPORTDATA as the reference does it, MRTD `sha-384:c1ee9c16…8270a5` as the measurement); the verifier checked the quote against Intel's collateral from another machine, and the validator gave the record no notes. `docs/tier-3-rehearsal.md` has the findings. |
 | 7.3.1 chain replayed on a schedule with results recorded | Yes, 07:20 UTC daily, reported to Portal, alert on a break. |
 | 7.3.2 keys the operator cannot access | **No.** The key is a file the operator can read. |
 | 7.3.3 equivocation resistance | Two independent anchors; no witness on the identity log yet. |
@@ -102,11 +102,14 @@ independent monitors (7.2.2, 7.3.3, 7.3.5, 8.1.6, 8.1.7) describe.
 | 7.7.1 to 7.7.5 schema, canonical form, tagged digests, vectors, duplicate keys | Yes; tested against the published vectors. |
 | C10.2 trust-assumption disclosure | Published. |
 
-So: Tier 2, disclosed. Tier 3 is the same service in a confidential VM with the key
-generated inside and bound in the attestation. The code for that is in the repository
-(`"attestation": "tdx"` in the gateway's configuration, `--attestation` on the verifier)
-and changes the `platform` claim and the measurement's width and nothing else in the
-design; what it needs is a machine.
+So: Tier 2 in production, disclosed; Tier 3 demonstrated with the same binary on a
+confidential VM, the key generated inside and bound in the attestation. The move changed
+the `platform` claim and the measurement's width and nothing else in the design, which
+was the claim to test. What the rehearsal did change is how the quote is taken: on a
+current kernel it needs root, so the service acquires it in a privileged pre-step and
+then drops to its own user, which accepts only a record binding its own key. The
+production gateway moves to that machine after real traffic has gone through its shadow,
+not before.
 
 ## What running it taught
 
