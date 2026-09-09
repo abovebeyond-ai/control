@@ -65,6 +65,47 @@ holds  did_webvh_..._agent-rehearsal: checkpoint at size 1 matches the chain
 and the standard's validator on the record, run with `tools/crosscheck.py`, must give no
 note where it used to say "Tier 2 at most".
 
+## What the first rehearsal found (9 September 2026)
+
+Project `elixir-508105`, VM `control-gateway`, europe-west4-a, c3-standard-4, Ubuntu 24.04
+(kernel 7.0.0-1011-gcp), control v0.2.2. From create to the first quote: about an hour,
+most of it the three findings below.
+
+1. **A VM without a public address needs a NAT and an IAP firewall rule.** The startup
+   script fetches the binary from GitHub; the Mac reaches the VM through IAP on port 22.
+   Cloud Router `control-router`, NAT `control-nat`, firewall rule `allow-iap-ssh` from
+   35.235.240.0/20 only. The script does not create these; do it once per project.
+2. **The quote needs root.** The kernel exposes configfs-tsm, but every report entry it
+   creates is root-only, and the older `/dev/tdx_guest` device produces reports, not
+   quotes, on this kernel. So the unit runs `control-gateway --attest` as root in
+   ExecStartPre, hands key and record to the `control` user, and the unprivileged
+   gateway accepts only a record that binds its own key. The gateway refused to start
+   twice before this, exactly as designed: no quote, no judging.
+3. **The `#` in the agent id.** In a query string it must be `%23`, or curl reads it as a
+   fragment. Third time this bit us (the anchorer, then this script).
+
+What held. `verify --attestation` on the Mac, with collateral fetched from Intel:
+
+```
+holds  attestation: INTEL_TDX quote binds the key, MRTD c1ee9c16…8270a5
+holds  …agent-rehearsal: chain verified: 1 records
+holds  …agent-rehearsal: checkpoint at size 1 matches the chain
+```
+
+The standard's validator on the record: no notes. On the production gateway's records it
+still says "Tier 2 at most".
+
+After a full stop and start: the key survived (it is on the disk), the log survived, the
+MRTD is identical, and a fresh quote was taken at boot. RTMR0 and RTMR2 were identical
+too; **RTMR1 changed** between the two boots. The MRTD measures the initial trust domain
+and is what the tokens carry, so the chain's measurement is stable across reboots; the
+RTMRs extend at boot time with firmware, boot loader and kernel events, and RTMR1 evidently
+includes something that varies. Anyone wanting to pin the operating system, not only the
+domain, would need reference values for the RTMRs and a policy on which may drift; that is
+a later chapter, and it is why the token carries the MRTD and not the RTMRs.
+
+Quote provider named in the record: `configfs-tsm`. Quote size: 7.7 kB raw.
+
 ## What to write down afterwards
 
 The MRTD, and whether it is the same after a stop and start (it should be: it measures

@@ -14,6 +14,7 @@ ZONE="${CONTROL_GCP_ZONE:-europe-west4-a}"
 NAME="${CONTROL_GCP_NAME:-control-gateway}"
 OUT="${CONTROL_REHEARSAL_OUT:-$HOME/.config/proveml/rehearsal}"
 AGENT="did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal"
+AGENT_Q="${AGENT//#/%23}" # in a query string the fragment sign must be escaped
 G="gcloud --project=$PROJECT compute"
 here=$(cd "$(dirname "$0")" && pwd)
 
@@ -37,11 +38,11 @@ fetch)
   $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- \
     "sudo cat /var/lib/control/store/attestation.json" > "$OUT/store/attestation.json"
   $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- \
-    "sudo ls /var/lib/control/store/*.jsonl | xargs -n1 basename" | while read -r f; do
+    "sudo sh -c 'ls /var/lib/control/store/*.jsonl' | xargs -n1 basename" | while read -r f; do
     $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo cat /var/lib/control/store/$f" > "$OUT/store/$f"
   done
   $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "curl -fsS http://127.0.0.1:8471/v1/key" > "$OUT/key.json"
-  $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "curl -fsS 'http://127.0.0.1:8471/v1/checkpoint?agent=$AGENT'" > "$OUT/checkpoint.json"
+  $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "curl -fsS 'http://127.0.0.1:8471/v1/checkpoint?agent=$AGENT_Q'" > "$OUT/checkpoint.json"
   echo "brought home to $OUT"; ls -la "$OUT" "$OUT/store"
   ;;
 verify)
