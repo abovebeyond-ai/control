@@ -9,8 +9,8 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.2.0}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-40736227bb4a382822cb65db2c5731328815e706a679adbf0755c4453c5af46b}"
+RELEASE="${CONTROL_RELEASE:-v0.2.1}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-1fb2f976992778d33ea147ff90d19b892eac6fd768f6a6ffe29c128828d11a26}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
 AGENT="${CONTROL_AGENT:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal}"
 PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai}"
@@ -53,11 +53,14 @@ cat > /var/lib/control/config.json <<JSON
 JSON
 chown control:control /var/lib/control/config.json
 
-# The quote provider: configfs-tsm needs the tsm module and a mount the gateway
-# user can write to; /dev/tdx_guest is the older path go-tdx-guest falls back to.
-modprobe tsm_reports 2>/dev/null || true
-modprobe tdx_guest 2>/dev/null || true
-mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
+# The quote door. configfs-tsm exists on this kernel but every report entry
+# it creates is root-only, so an unprivileged gateway cannot use it; the older
+# /dev/tdx_guest device takes a group and a mode, and a udev rule keeps them
+# across reboots. The gateway tries configfs first and falls back to the device.
+cat > /etc/udev/rules.d/80-tdx-guest.rules <<'RULE'
+KERNEL=="tdx_guest", GROUP="control", MODE="0660"
+RULE
+udevadm control --reload-rules && udevadm trigger --name-match=tdx_guest || true
 [ -e /dev/tdx_guest ] && chgrp control /dev/tdx_guest && chmod 660 /dev/tdx_guest || true
 
 cat > /etc/systemd/system/control-gateway.service <<'UNIT'

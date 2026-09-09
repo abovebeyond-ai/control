@@ -88,16 +88,34 @@ func BindsKey(quote *pb.QuoteV4, pub ed25519.PublicKey) bool {
 
 // Acquire asks the hardware for a quote bound to the key. Only inside a TDX
 // trust domain with a quote provider; elsewhere ErrUnavailable.
+//
+// Two doors, tried in order. configfs-tsm is the current one, but the kernel
+// creates each report entry root-only, so a gateway running as its own user
+// cannot use it (found on the first rehearsal, 9 September 2026). The older
+// /dev/tdx_guest device takes a group and a mode, so that is what an
+// unprivileged gateway ends up using; the record says which door it was.
 func Acquire(pub ed25519.PublicKey) (*Record, error) {
-	provider, err := client.GetQuoteProvider()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	rd := ReportDataForKey(pub)
+	var first error
+	if provider, err := client.GetQuoteProvider(); err == nil {
+		raw, err := client.GetRawQuote(provider, rd)
+		if err == nil {
+			return record(raw, "configfs-tsm", pub)
+		}
+		first = err
+	} else {
+		first = err
 	}
-	raw, err := client.GetRawQuote(provider, ReportDataForKey(pub))
+	device, err := client.OpenDevice()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: configfs-tsm: %v; device: %v", ErrUnavailable, first, err)
 	}
-	return record(raw, "configfs-tsm", pub)
+	defer device.Close()
+	raw, err := client.GetRawQuote(device, rd)
+	if err != nil {
+		return nil, fmt.Errorf("%w: configfs-tsm: %v; device: %v", ErrUnavailable, first, err)
+	}
+	return record(raw, "tdx_guest", pub)
 }
 
 // FromRaw builds the record for a quote obtained elsewhere (a test, another provider).
