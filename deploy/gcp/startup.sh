@@ -94,7 +94,31 @@ PrivateTmp=true
 WantedBy=multi-user.target
 UNIT
 
+# The attestation refresh interval (row 7.2.3): the quote is retaken every day, and the
+# gateway restarts on it, so no record rests on a measurement older than a day. A retake
+# that fails leaves the gateway stopped: it does not continue on a stale measurement.
+cat > /etc/systemd/system/control-attest.service <<'UNIT'
+[Unit]
+Description=control gateway: retake the hardware quote and restart on it
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/local/bin/control-gateway --config /var/lib/control/config.json --attest && systemctl restart control-gateway || systemctl stop control-gateway'
+UNIT
+cat > /etc/systemd/system/control-attest.timer <<'UNIT'
+[Unit]
+Description=daily attestation refresh of the control gateway
+
+[Timer]
+OnCalendar=*-*-* 05:50:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
+systemctl enable --now control-attest.timer
 systemctl enable --now control-gateway
 sleep 3
 systemctl --no-pager status control-gateway | head -5
