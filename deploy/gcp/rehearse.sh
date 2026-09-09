@@ -4,7 +4,7 @@
 # attestation, the key and the record home, and verify them here with
 # collateral from Intel. Stop the VM at the end; you pay for the disk only.
 #
-#   deploy/gcp/rehearse.sh create | submit | fetch | verify | stop | start | delete
+#   deploy/gcp/rehearse.sh create | submit | fetch | verify | stop | start | delete | config FILE
 #
 # Needs: gcloud (brew install --cask gcloud-cli), `gcloud auth login`, and
 # PROJECT set below or in the environment.
@@ -49,6 +49,23 @@ verify)
   key=$(python3 -c "import json;print(json.load(open('$OUT/key.json'))['public_key'])")
   (cd "$here/../.." && go run ./cmd/verify --store "$OUT/store" --key "$key" \
      --attestation "$OUT/store/attestation.json" --checkpoint "$OUT/checkpoint.json")
+  ;;
+config)
+  # Carry a configuration the hands generated (the box's control/config.json: the agents
+  # and their grants) to the VM, with what belongs to the VM overriding: where it listens,
+  # where its store and secrets are, that it attests, the client token from its secrets.
+  # Dry stays as the file says; flipping it to act is a separate, deliberate edit.
+  [ -f "${2:-}" ] || { echo "config FILE: the generated config.json"; exit 2; }
+  python3 - "$2" > /tmp/control-config.json <<'PYCFG'
+import json,sys
+c=json.load(open(sys.argv[1]))
+c.update({"listen":"0.0.0.0:8471","store":"/var/lib/control/store","secrets":"/var/lib/control/secrets","attestation":"tdx","client_token":"","carried_over":True})
+print(json.dumps(c, indent=2))
+PYCFG
+  $G scp /tmp/control-config.json "$NAME":/tmp/control-config.json --zone "$ZONE" --tunnel-through-iap
+  rm -f /tmp/control-config.json
+  $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo python3 -c \"import json; c=json.load(open('/tmp/control-config.json')); c['client_token']=open('/var/lib/control/secrets/client-token').read().strip(); json.dump(c, open('/var/lib/control/config.json','w'), indent=2)\"; sudo chown control:control /var/lib/control/config.json; sudo chmod 640 /var/lib/control/config.json; rm /tmp/control-config.json; sudo systemctl restart control-gateway; sleep 3; curl -fsS http://127.0.0.1:8471/v1/agents"
+  echo
   ;;
 stop)   $G instances stop "$NAME" --zone "$ZONE" ;;
 start)  $G instances start "$NAME" --zone "$ZONE" ;;
