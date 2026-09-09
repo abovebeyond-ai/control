@@ -147,6 +147,16 @@ run through both gateways at once, taught three more, in one afternoon:
    because two implementations encode an action map and a path summary differently. A
    comparison that expected equal hashes would have found two disagreeing gateways where
    there was one disagreeing design decision.
+7. **The judgement must be the replayable one.** The next security run put js-yaml twice in
+   one certificate, versions 3 and 4 from one lockfile, both as `package:js-yaml`. The
+   hand's store kept the second's facts, the hand checked each line against its own facts
+   and said verified, and the service, replaying the whole certificate against the whole
+   store as any stranger would, said "%[from]{4.3.1} in package:js-yaml: should be
+   3.15.1". The service was right and the hand had claimed something its own material
+   could not reproduce. Repeated packages are now counted entities, and the hand judges
+   with the same procedure the replayer uses. This is the profile's whole argument in one
+   line: a certificate is evidence only if the material beside it gives the same verdict
+   to anyone.
 
 ## What is offered
 
