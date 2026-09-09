@@ -3,6 +3,12 @@
 // against the material beside it, and the checkpoint against the head.
 //
 //	verify --store DIR --key HEX [--measurement HEX] [--checkpoint checkpoint.json] [--attestation attestation.json]
+//	verify --gateway URL [--key HEX] [--offline]
+//
+// With --gateway everything is read from the running gateway over HTTP: its
+// agents, records, attachments, attestation and live checkpoints, so a stranger
+// verifies without the store directory. The key defaults to the one the
+// gateway publishes; pass --key to hold it to a key you obtained elsewhere.
 //
 // Exit 0 when everything holds. Without --measurement the first record of each
 // chain says which policy judged and the rest must agree with it. With
@@ -16,9 +22,14 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/abovebeyond-ai/control/anchor"
@@ -38,10 +49,26 @@ func main() {
 	anchors := flag.String("anchors", "", "a receipts directory written by cmd/anchor: the latest receipt per agent is checked and the chain must extend it")
 	offline := flag.Bool("offline", false, "check anchor receipts and the attestation without the network")
 	attestation := flag.String("attestation", "", "the gateway's attestation record (attestation.json beside the store)")
+	gatewayURL := flag.String("gateway", "", "read everything from a running gateway at this URL instead of a store directory")
 	flag.Parse()
-	if *dir == "" || *keyHex == "" {
-		fmt.Fprintln(os.Stderr, "usage: verify --store DIR --key HEX [--measurement HEX] [--checkpoint FILE]")
-		os.Exit(2)
+	var src source
+	var live *remote
+	if *gatewayURL != "" {
+		live = &remote{base: strings.TrimRight(*gatewayURL, "/")}
+		src = live
+		if *keyHex == "" {
+			var k struct {
+				PublicKey string `json:"public_key"`
+			}
+			fail(live.get("/v1/key", nil, &k))
+			*keyHex = k.PublicKey
+			fmt.Printf("note   the key is the one the gateway publishes, %s; hold it to a published one with --key\n", *keyHex)
+		}
+	} else {
+		if *dir == "" || *keyHex == "" {
+			fmt.Fprintln(os.Stderr, "usage: verify --store DIR --key HEX [--measurement HEX] [--checkpoint FILE] | verify --gateway URL")
+			os.Exit(2)
+		}
 	}
 	pubRaw, err := hex.DecodeString(*keyHex)
 	if err != nil || len(pubRaw) != ed25519.PublicKeySize {
@@ -49,16 +76,30 @@ func main() {
 		os.Exit(2)
 	}
 	pub := ed25519.PublicKey(pubRaw)
-	store, err := log.Open(*dir)
-	fail(err)
-	agents, err := store.Agents()
+	if src == nil {
+		store, err := log.Open(*dir)
+		fail(err)
+		src = store
+	}
+	agents, err := src.Agents()
 	fail(err)
 	broken := 0
+	var rec attest.Record
+	haveAttestation := false
 	if *attestation != "" {
 		raw, err := os.ReadFile(*attestation)
 		fail(err)
-		var rec attest.Record
 		fail(json.Unmarshal(raw, &rec))
+		haveAttestation = true
+	} else if live != nil {
+		// The running gateway says what attests it; a software gateway answers 404.
+		if err := live.get("/v1/attestation", nil, &rec); err == nil {
+			haveAttestation = true
+		} else {
+			fmt.Printf("note   the gateway attests in software: the operator vouches for its measurement\n")
+		}
+	}
+	if haveAttestation {
 		if rec.PublicKey != *keyHex {
 			fmt.Printf("BROKEN attestation: it binds key %s, not %s\n", rec.PublicKey, *keyHex)
 			os.Exit(1)
@@ -74,7 +115,7 @@ func main() {
 		fmt.Printf("holds  attestation: %s quote binds the key, MRTD %s\n", rec.Platform, rec.MRTD)
 	}
 	for _, agent := range agents {
-		records, err := store.Records(agent)
+		records, err := src.Records(agent)
 		if err != nil {
 			fmt.Printf("BROKEN %s: %v\n", agent, err)
 			broken++
@@ -102,7 +143,7 @@ func main() {
 				continue
 			}
 			var material premises.Material
-			found, err := store.Attachment(agent, i, "premises", &material)
+			found, err := src.Attachment(agent, i, "premises", &material)
 			if err != nil || !found {
 				fmt.Printf("BROKEN %s record %d: no premises material beside the record\n", agent, i)
 				broken++
@@ -140,14 +181,20 @@ func main() {
 				}
 			}
 		}
+		var cp gateway.Checkpoint
+		haveCheckpoint := false
 		if *checkpoint != "" {
 			raw, err := os.ReadFile(*checkpoint)
 			fail(err)
-			var cp gateway.Checkpoint
 			fail(json.Unmarshal(raw, &cp))
-			if log.Safe(cp.Agent) != agent {
-				continue
-			}
+			haveCheckpoint = log.Safe(cp.Agent) == log.Safe(agent)
+		} else if live != nil {
+			// The live checkpoint: what the gateway signs right now must fold from
+			// the records it just handed over.
+			fail(live.get("/v1/checkpoint", map[string]string{"agent": agent}, &cp))
+			haveCheckpoint = true
+		}
+		if haveCheckpoint {
 			last := records[len(records)-1].Claims()
 			switch {
 			case !gateway.VerifyCheckpoint(cp, pub):
@@ -167,6 +214,63 @@ func main() {
 	if broken > 0 {
 		os.Exit(1)
 	}
+}
+
+// source is where the evidence comes from: the store directory, or a running
+// gateway over HTTP, which serves the same things a stranger needs.
+type source interface {
+	Agents() ([]string, error)
+	Records(agent string) ([]evidence.Token, error)
+	Attachment(agent string, step int, name string, into any) (bool, error)
+}
+
+type remote struct{ base string }
+
+func (r *remote) get(path string, query map[string]string, into any) error {
+	u := r.base + path
+	if len(query) > 0 {
+		q := url.Values{}
+		for k, v := range query {
+			q.Set(k, v)
+		}
+		u += "?" + q.Encode()
+	}
+	resp, err := http.Get(u)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return errNotFound
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("the gateway answered %d for %s", resp.StatusCode, path)
+	}
+	return json.NewDecoder(resp.Body).Decode(into)
+}
+
+var errNotFound = errors.New("not found")
+
+func (r *remote) Agents() ([]string, error) {
+	var out struct {
+		Agents []string `json:"agents"`
+	}
+	return out.Agents, r.get("/v1/agents", nil, &out)
+}
+
+func (r *remote) Records(agent string) ([]evidence.Token, error) {
+	var out struct {
+		Records []evidence.Token `json:"records"`
+	}
+	return out.Records, r.get("/v1/records", map[string]string{"agent": agent}, &out)
+}
+
+func (r *remote) Attachment(agent string, step int, name string, into any) (bool, error) {
+	err := r.get("/v1/attachment", map[string]string{"agent": agent, "step": strconv.Itoa(step), "name": name}, into)
+	if errors.Is(err, errNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func fail(err error) {

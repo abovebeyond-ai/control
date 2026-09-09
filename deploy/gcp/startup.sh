@@ -9,11 +9,16 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.2.3}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-c9c5afa7f7dccf44949bc678adcf925e3ee1c3345a12f90e99a3835641caccae}"
+RELEASE="${CONTROL_RELEASE:-v0.3.0}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-da12ac0bdd43f43978363189f177bc7d2c547f2c0969bb52fc0090727817d321}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
 AGENT="${CONTROL_AGENT:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal}"
 PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai}"
+# Where to listen. 127.0.0.1 for a rehearsal reached over ssh; 0.0.0.0 when a hand on
+# another machine reaches it through Google's IAP tunnel (the firewall admits only
+# 35.235.240.0/20 on the port, and the token below guards the submission).
+LISTEN="${CONTROL_LISTEN:-127.0.0.1:8471}"
+CLIENT_TOKEN="${CONTROL_CLIENT_TOKEN:-}"
 
 if [ -x /usr/local/bin/control-gateway ] && systemctl is-active --quiet control-gateway; then
   echo "control gateway already installed and running"; exit 0
@@ -33,7 +38,8 @@ rm -f "$tmp"
 # the chain, it has no business touching a repository.
 cat > /var/lib/control/config.json <<JSON
 {
-  "listen": "127.0.0.1:8471",
+  "listen": "${LISTEN}",
+  "client_token": "${CLIENT_TOKEN}",
   "issuer": "${ISSUER}",
   "store": "/var/lib/control/store",
   "secrets": "/var/lib/control/secrets",

@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -33,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +59,11 @@ type config struct {
 	// Dry means: judge and record, perform nothing. For a first deployment
 	// beside an existing hand, so the evidence starts before the credentials move.
 	Dry bool `json:"dry"`
+	// ClientToken, when set, is what a hand must present as a bearer token to
+	// submit. A gateway that is reached from another machine holds credentials
+	// and judges within grants; without this, anyone who can reach the port can
+	// make it act. The reading endpoints stay open: evidence is for strangers.
+	ClientToken string `json:"client_token"`
 	// Attestation is "software" (the default: the operator vouches) or "tdx":
 	// the gateway asks the hardware for a quote binding its key at start and
 	// refuses to run without one. A gateway configured to prove and unable to
@@ -101,7 +108,9 @@ func main() {
 	fail(err)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/submit", s.submit)
+	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
+	mux.HandleFunc("GET /v1/agents", s.agents)
+	mux.HandleFunc("GET /v1/attachment", s.attachment)
 	mux.HandleFunc("GET /v1/checkpoint", s.checkpoint)
 	mux.HandleFunc("GET /v1/records", s.records)
 	mux.HandleFunc("GET /v1/proof", s.proof)
@@ -276,6 +285,58 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, out)
+}
+
+// authed refuses a submission without the client token when one is configured.
+func (s *service) authed(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.ClientToken != "" {
+			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.ClientToken)) != 1 {
+				writeJSON(w, 401, map[string]any{"error": "a client token is required to submit"})
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
+// agents lists the agents this gateway judges for, so a verifier that reaches
+// it over the network knows which chains to ask for.
+func (s *service) agents(w http.ResponseWriter, r *http.Request) {
+	ids := make([]string, 0, len(s.cfg.Agents))
+	for id := range s.cfg.Agents {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	writeJSON(w, 200, map[string]any{"agents": ids, "platform": s.platform(), "dry": s.cfg.Dry})
+}
+
+// attachment serves what was written beside a record: the premises material,
+// the action. A verifier replays the premises from it.
+func (s *service) attachment(w http.ResponseWriter, r *http.Request) {
+	agent := r.URL.Query().Get("agent")
+	if _, ok := s.cfg.Agents[agent]; !ok {
+		writeJSON(w, 404, map[string]any{"error": "unknown agent"})
+		return
+	}
+	step, err := strconv.Atoi(r.URL.Query().Get("step"))
+	name := r.URL.Query().Get("name")
+	if err != nil || (name != "premises" && name != "action") {
+		writeJSON(w, 400, map[string]any{"error": "step must be a number and name premises or action"})
+		return
+	}
+	var data any
+	found, err := s.store.Attachment(agent, step, name, &data)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, 404, map[string]any{"error": "no such attachment"})
+		return
+	}
+	writeJSON(w, 200, data)
 }
 
 func (s *service) checkpoint(w http.ResponseWriter, r *http.Request) {

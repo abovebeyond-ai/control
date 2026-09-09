@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-tdx-guest/testing/testdata"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,5 +136,40 @@ func TestAStoredAttestationIsUsedOnlyWhenItBindsTheKey(t *testing.T) {
 	other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{10}, 32))
 	if _, err := attestation(config{Attestation: "tdx", Store: dir}, other); err == nil {
 		t.Fatal("a record binding another key must not be used, and this machine cannot acquire one")
+	}
+}
+
+// A gateway with a client token refuses a submission without it and serves its
+// agents and attachments to anyone: acting is guarded, reading is open.
+func TestAClientTokenGuardsSubmitAndReadingStaysOpen(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{4}, 32))
+	agent := "did:webvh:QmTest:example.org#agent-fix"
+	s := &service{key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}, cfg: config{Issuer: "x", Store: filepath.Join(dir, "store"), Dry: true, ClientToken: "s3cret", Agents: map[string]struct {
+		Grant policy.Grant `json:"grant"`
+	}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"pull.open"}, Resources: []string{"x/y"}, MaxPerKind: 1}}}}}
+	body, _ := json.Marshal(submitRequest{Run: "r", Agent: agent, Action: policy.Action{Kind: "pull.open", Resource: "x/y"}})
+	rec := httptest.NewRecorder()
+	s.authed(s.submit)(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(body)))
+	if rec.Code != 401 {
+		t.Fatalf("without the token: %d", rec.Code)
+	}
+	req := httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer s3cret")
+	rec = httptest.NewRecorder()
+	s.authed(s.submit)(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("with the token: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.agents(rec, httptest.NewRequest("GET", "/v1/agents", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), agent) {
+		t.Fatalf("agents: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.attachment(rec, httptest.NewRequest("GET", "/v1/attachment?agent="+url.QueryEscape(agent)+"&step=0&name=action", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "\"run\":\"r\"") {
+		t.Fatalf("attachment: %d %s", rec.Code, rec.Body.String())
 	}
 }

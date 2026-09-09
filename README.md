@@ -67,9 +67,19 @@ for a first deployment beside an existing hand.
 | `GET /v1/checkpoint?agent=` | the signed tree head an anchorer or witness picks up |
 | `GET /v1/records?agent=&from=` | the records, for a verifier |
 | `GET /v1/proof?agent=&step=` | an inclusion proof against the current tree |
+| `GET /v1/agents` | the agents this gateway judges for, the platform, and whether it is dry |
+| `GET /v1/attachment?agent=&step=&name=` | what was written beside a record: `premises` or `action` |
 | `GET /v1/key` | the public key, issuer and platform |
 | `GET /v1/attestation` | the hardware's record binding the key, or 404 when software attests |
 
+`client_token` in the configuration, when set, is what a hand must present as a bearer
+token to submit: a gateway reached from another machine holds credentials and judges within
+grants, and without it anyone who can reach the port could make it act. Reading stays open;
+evidence is for strangers.
+
+`verify --gateway URL` reads everything from a running gateway over HTTP, agents, records,
+attachments, attestation and the live checkpoint, so a stranger verifies without the store
+directory; `--key` holds it to a key obtained elsewhere, such as the DID document.
 `verify --store DIR --key HEX [--checkpoint FILE] [--anchors DIR]` replays everything with
 nothing but the store, the public key and the measurement, and, given the receipts, that
 the chain extends every anchored head.
