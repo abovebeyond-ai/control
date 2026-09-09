@@ -47,6 +47,26 @@ still dry, so the hands perform, and the claim above stays at Tier 2 until servi
 The words "Proof-of-Control" are used for this system only as the standard it is built
 against, not as a claim reached. (8.1.4)
 
+## Authorization and identity rows (C4, C5), as they stand
+
+Met: the grant is written beside every request record and its hash is a claim (4.1.1);
+the record names the permission matched or the denial reason (4.1.2); out-of-scope actions
+are refused with a record carrying the attempted action and parameters (4.1.3);
+parameters are validated against a registered schema per kind, out-of-schema calls are
+refused, and the validated parameter digest is a claim (4.1.4); evaluation is path-aware
+per run (4.1.7); no tool output can raise the authorization state, the grant is standing
+configuration (4.1.8); every record carries the agent and the principal (5.1.1).
+
+Met at service mode: the agent holds no standing credential, the gateway does (4.1.5); the
+agent's key is bound to the attested environment (5.1.4).
+
+Open: a signed, per-task authorization token from the principal, validated by the gateway
+before execution and recorded (4.2.1, 5.1.3, with 4.2.2 and 4.2.3 as the one-hop chain);
+the hand authenticating with its own key rather than a bearer token (5.1.2).
+
+Not applicable: human approval records (4.1.6: merging is a person's act in GitHub,
+outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.2).
+
 ## Trust-assumption disclosure (7.4.1, C10.2)
 
 | mechanism | what must be trusted |

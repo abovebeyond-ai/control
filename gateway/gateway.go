@@ -260,6 +260,15 @@ func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, e
 
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
+	params := action.Params
+	if params == nil {
+		params = map[string]any{}
+	}
+	paramsDigest, _ := canonical.Digest(params)
+	if verdict == "ALLOW" {
+		extension["control_matched"] = policy.Matched(action, phi, g.cfg.Policy.Grant)
+	}
+	extension["control_params"] = canonical.Tag(paramsDigest)
 	claims := map[string]any{
 		"agent_id": g.cfg.Agent, "initiating_user": principal,
 		"agbom_digest": canonical.Tag(g.cfg.AgbomDigest), "interception_point": evidence.InterceptionPoint,
@@ -298,6 +307,11 @@ func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, e
 
 	if err := g.cfg.Store.Attach(g.cfg.Agent, step, "action", stepAction{Run: run, Action: action}); err != nil {
 		_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "step": step, "error": "action not attached: " + err.Error()})
+	}
+	// The authority the action was judged under, beside the record (row 4.1.1): the
+	// bundle whose hash the claims carry, readable without the configuration.
+	if err := g.cfg.Store.Attach(g.cfg.Agent, step, "grant", g.cfg.Policy.Bundle()); err != nil {
+		_ = g.cfg.Store.RecordFailure(map[string]any{"agent": g.cfg.Agent, "step": step, "error": "grant not attached: " + err.Error()})
 	}
 	if prem != nil {
 		if err := g.cfg.Store.Attach(g.cfg.Agent, step, "premises", prem); err != nil {

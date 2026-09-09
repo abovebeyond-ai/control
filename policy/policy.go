@@ -110,18 +110,35 @@ func (p Policy) BundleHash() string {
 	sort.Strings(kinds)
 	sort.Strings(resources)
 	sort.Strings(premises)
-	d, _ := canonical.Digest(map[string]any{
+	d, _ := canonical.Digest(p.Bundle())
+	return d
+}
+
+// Bundle is the policy as a document: the grant, the parameter schemas, the rule
+// and the version. It is what the hash names and what is written beside the first
+// record judged under it (row 4.1.1).
+func (p Policy) Bundle() map[string]any {
+	kinds := append([]string{}, p.Grant.Kinds...)
+	resources := append([]string{}, p.Grant.Resources...)
+	premises := append([]string{}, p.Grant.PremisesFor...)
+	sort.Strings(kinds)
+	sort.Strings(resources)
+	sort.Strings(premises)
+	return map[string]any{
 		"principal": p.Grant.Principal, "kinds": kinds, "resources": resources,
 		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises,
-		"path_aware": p.PathAware, "version": Version,
-	})
-	return d
+		"path_aware": p.PathAware, "version": Version, "schemas": schemaDocument(),
+		"expiry": "none: a standing grant, replaced by a new bundle when it changes",
+	}
 }
 
 // Evaluate returns verdict and reason.
 func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 	if !contains(p.Grant.Kinds, a.Kind) {
 		return "DENY", "kind not in grant"
+	}
+	if err := Validate(a); err != nil {
+		return "DENY", "out of schema: " + err.Error()
 	}
 	if !contains(p.Grant.Resources, a.Resource) {
 		return "DENY", "resource not in grant"

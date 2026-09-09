@@ -80,7 +80,7 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 	if code != 200 || out["verdict"] != "DENY" || out["effect"] != nil {
 		t.Fatalf("a second proposal: %d %v", code, out)
 	}
-	if code, out := post(submitRequest{Agent: "did:webvh:QmTest:example.org#agent-nobody", Action: policy.Action{Kind: "pull.open", Resource: "x/y"}}); code != 403 {
+	if code, out := post(submitRequest{Agent: "did:webvh:QmTest:example.org#agent-nobody", Action: policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}}); code != 403 {
 		t.Fatalf("unknown agent: %d %v", code, out)
 	}
 	if len(calls) != 2 || !strings.Contains(calls[0], "/repos/x/y/actions/workflows/elixir-fix.yml/dispatches Bearer tok-x") || !strings.Contains(calls[1], "/repos/x/y/pulls Bearer tok-x") {
@@ -155,7 +155,7 @@ func TestAClientTokenGuardsSubmitAndReadingStaysOpen(t *testing.T) {
 	s := &service{key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}, cfg: config{Issuer: "x", Store: filepath.Join(dir, "store"), Dry: true, ClientToken: "s3cret", Agents: map[string]struct {
 		Grant policy.Grant `json:"grant"`
 	}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"pull.open"}, Resources: []string{"x/y"}, MaxPerKind: 1}}}}}
-	body, _ := json.Marshal(submitRequest{Run: "r", Agent: agent, Action: policy.Action{Kind: "pull.open", Resource: "x/y"}})
+	body, _ := json.Marshal(submitRequest{Run: "r", Agent: agent, Action: policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}})
 	rec := httptest.NewRecorder()
 	s.authed(s.submit)(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(body)))
 	if rec.Code != 401 {

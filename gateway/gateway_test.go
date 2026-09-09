@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"github.com/abovebeyond-ai/control/attest"
+	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/google/go-tdx-guest/testing/testdata"
 	"os"
 	"path/filepath"
@@ -48,7 +49,7 @@ func goodPremises() *premises.Material {
 
 func TestAnAllowedActionIsEvidencedBeforeRelease(t *testing.T) {
 	g, store := fixture(t)
-	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "elixir-fix.yml"}}, "did:webvh:QmTest:example.org", map[string]any{"project": "demo"}, nil)
+	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "elixir-fix.yml", "ref": "main"}}, "did:webvh:QmTest:example.org", map[string]any{"project": "demo"}, nil)
 	if !v.Allowed() || v.Reason != "within grant" {
 		t.Fatalf("%s: %s", v.Verdict, v.Reason)
 	}
@@ -78,8 +79,8 @@ func TestRefusalsAreRecordedAndThePathCounts(t *testing.T) {
 	if v := g.Submit(policy.Action{Kind: "pull.merge", Resource: "x/y"}, "p", nil, nil); v.Verdict != "DENY" || v.Reason != "kind not in grant" {
 		t.Errorf("%+v", v)
 	}
-	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", nil, nil)
-	if v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", nil, nil); v.Verdict != "DENY" || !strings.Contains(v.Reason, "second workflow.dispatch") {
+	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
+	if v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil); v.Verdict != "DENY" || !strings.Contains(v.Reason, "second workflow.dispatch") {
 		t.Errorf("%+v", v)
 	}
 	records, _ := store.Records(g.cfg.Agent)
@@ -93,12 +94,12 @@ func TestRefusalsAreRecordedAndThePathCounts(t *testing.T) {
 
 func TestTheChainPersistsAndABrokenLogRefusesToOpen(t *testing.T) {
 	g, store := fixture(t)
-	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", nil, nil)
+	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
 	again, err := Open(g.cfg)
 	if err != nil || again.Step() != 1 {
 		t.Fatalf("reopen: %v, step %d", err, again.Step())
 	}
-	v := again.Submit(policy.Action{Kind: "pull.open", Resource: "x/y"}, "p", nil, nil)
+	v := again.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil)
 	if !v.Allowed() || v.Token.Claims()["step_index"] != 1 {
 		t.Errorf("%+v", v)
 	}
@@ -112,30 +113,30 @@ func TestTheChainPersistsAndABrokenLogRefusesToOpen(t *testing.T) {
 
 func TestAnUnwritableStoreFailsClosed(t *testing.T) {
 	g, store := fixture(t)
-	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", nil, nil)
+	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
 	store.Available = false
-	v := g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y"}, "p", nil, nil)
+	v := g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil)
 	if v.Verdict != "FAIL_CLOSED" || v.Token != nil || g.Step() != 1 {
 		t.Errorf("%+v step %d", v, g.Step())
 	}
 	store.Available = true
-	if v := g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y"}, "p", nil, nil); !v.Allowed() || g.Step() != 2 {
+	if v := g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil); !v.Allowed() || g.Step() != 2 {
 		t.Errorf("%+v", v)
 	}
 }
 
 func TestPremisesDecideBeforeTheGrant(t *testing.T) {
 	g, store := fixture(t, "workflow.dispatch")
-	if v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", nil, nil); v.Verdict != "DENY" || v.Reason != "no certificate of premises for workflow.dispatch" {
+	if v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil); v.Verdict != "DENY" || v.Reason != "no certificate of premises for workflow.dispatch" {
 		t.Errorf("%+v", v)
 	}
 	bad := goodPremises()
 	bad.Store["package:tar.semverSafe"] = 0
-	if v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", nil, bad); v.Verdict != "DENY" || !strings.Contains(v.Reason, "does not verify") || v.Token.Claims()["proveml_verified"] != false {
+	if v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, bad); v.Verdict != "DENY" || !strings.Contains(v.Reason, "does not verify") || v.Token.Claims()["proveml_verified"] != false {
 		t.Errorf("%+v", v)
 	}
 	good := goodPremises()
-	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y"}, "p", map[string]any{"project": "t"}, good)
+	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", map[string]any{"project": "t"}, good)
 	if !v.Allowed() {
 		t.Fatalf("%+v", v)
 	}
@@ -201,7 +202,7 @@ func TestAnAttestedGatewayNamesThePlatformAndTheMRTD(t *testing.T) {
 	if g.Platform() != attest.PlatformTDX || len(g.Measurement()) != 96 || g.Measurement() != own.MRTD {
 		t.Fatalf("platform %s measurement %s", g.Platform(), g.Measurement())
 	}
-	v := g.Submit(policy.Action{Kind: "pull.open", Resource: "o/r"}, "did:example:principal", nil, nil)
+	v := g.Submit(policy.Action{Kind: "pull.open", Resource: "o/r", Params: map[string]any{"branch": "b", "base": "main"}}, "did:example:principal", nil, nil)
 	if !v.Allowed() {
 		t.Fatal(v.Reason)
 	}
@@ -235,7 +236,7 @@ func TestPathLimitsArePerRunAndSurviveARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	dispatch := func(run, res string) Verdict {
-		return g.SubmitIn(run, policy.Action{Kind: "workflow.dispatch", Resource: res}, "did:example:p", nil, nil)
+		return g.SubmitIn(run, policy.Action{Kind: "workflow.dispatch", Resource: res, Params: map[string]any{"workflow": "w", "ref": "main"}}, "did:example:p", nil, nil)
 	}
 	if v := dispatch("run-1", "o/r"); !v.Allowed() {
 		t.Fatal(v.Reason)
@@ -277,7 +278,7 @@ func TestPathLimitsArePerRunAndSurviveARestart(t *testing.T) {
 // effect record, saying nothing was performed, so the count per action never varies.
 func TestOneActionIsThreeLinkedRecords(t *testing.T) {
 	g, store := fixture(t)
-	a := policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b"}}
+	a := policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}
 	v := g.SubmitIn("r1", a, "did:webvh:QmTest:example.org", nil, nil)
 	if !v.Allowed() || v.ActionID == "" {
 		t.Fatal(v.Reason)
@@ -309,5 +310,33 @@ func TestOneActionIsThreeLinkedRecords(t *testing.T) {
 	de := g.Follow("r1", d.ActionID, PhaseEffect, a, "did:webvh:QmTest:example.org", d.Verdict, "not performed: the request was refused", map[string]any{"performed": false})
 	if d.Allowed() || de.Verdict != "DENY" || de.Step != 4 {
 		t.Fatalf("%v %v", d, de)
+	}
+}
+
+// The record names what it matched and the digest of the parameters it validated,
+// and the grant it was judged under sits beside it (rows 4.1.1, 4.1.2, 4.1.4).
+func TestTheRecordNamesTheMatchAndTheParametersAndCarriesTheGrant(t *testing.T) {
+	g, store := fixture(t)
+	a := policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}
+	v := g.SubmitIn("r", a, "did:webvh:QmTest:example.org", nil, nil)
+	c := v.Token.Claims()
+	if c["control_matched"] != "pull.open on x/y, 1 of 1 this run" {
+		t.Fatalf("matched: %v", c["control_matched"])
+	}
+	d, _ := canonical.Digest(map[string]any{"branch": "b", "base": "main"})
+	if c["control_params"] != canonical.Tag(d) {
+		t.Fatalf("params: %v", c["control_params"])
+	}
+	var bundle map[string]any
+	if found, _ := store.Attachment(g.cfg.Agent, 0, "grant", &bundle); !found {
+		t.Fatal("the grant must sit beside the record")
+	}
+	bd, _ := canonical.Digest(bundle)
+	if c["policy_bundle_hash"] != canonical.Tag(bd) {
+		t.Fatal("the grant beside the record must be the bundle the claims name")
+	}
+	bad := g.SubmitIn("r2", policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main", "force": true}}, "did:webvh:QmTest:example.org", nil, nil)
+	if bad.Allowed() || !strings.Contains(bad.Reason, "out of schema") {
+		t.Fatalf("%v", bad)
 	}
 }
