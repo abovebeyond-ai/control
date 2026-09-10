@@ -41,7 +41,8 @@ func TestTheFarEndHoldsARecordAndItsCapability(t *testing.T) {
 	if !v.Allowed() {
 		t.Fatal(v.Reason)
 	}
-	keys := Keys{Gateway: pub, Principal: principal.Public().(ed25519.PublicKey), DID: did}
+	// The derived did:web document names the did:webvh form as an alias; agents are under it.
+	keys := Keys{Gateway: pub, Principal: principal.Public().(ed25519.PublicKey), DID: "did:web:example", Aliases: []string{did}}
 	tok, err := DecodeToken(EncodeToken(v.Token))
 	if err != nil {
 		t.Fatal(err)

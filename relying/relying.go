@@ -29,7 +29,18 @@ import (
 type Keys struct {
 	Gateway   ed25519.PublicKey // #control-gateway: signs the records
 	Principal ed25519.PublicKey // #portal: signs the capabilities
-	DID       string
+	DID       string            // the document's id
+	Aliases   []string          // its alsoKnownAs: the did:webvh form of a did:web document, and back
+}
+
+// Under says whether an agent id is a fragment of the DID or one of its aliases.
+func (k Keys) Under(agent string) bool {
+	for _, d := range append([]string{k.DID}, k.Aliases...) {
+		if d != "" && strings.HasPrefix(agent, d+"#") {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveKeys reads a did.json (the derived document of a did:webvh log) and
@@ -46,7 +57,8 @@ func ResolveKeys(ctx context.Context, url, gatewayFragment, principalFragment st
 		return k, fmt.Errorf("the DID document answered %d", res.StatusCode)
 	}
 	var doc struct {
-		ID                 string `json:"id"`
+		ID                 string   `json:"id"`
+		AlsoKnownAs        []string `json:"alsoKnownAs"`
 		VerificationMethod []struct {
 			ID           string `json:"id"`
 			PublicKeyJwk struct {
@@ -58,6 +70,7 @@ func ResolveKeys(ctx context.Context, url, gatewayFragment, principalFragment st
 		return k, err
 	}
 	k.DID = doc.ID
+	k.Aliases = doc.AlsoKnownAs
 	for _, m := range doc.VerificationMethod {
 		raw, err := base64.RawURLEncoding.DecodeString(m.PublicKeyJwk.X)
 		if err != nil || len(raw) != ed25519.PublicKeySize {
@@ -146,8 +159,8 @@ func Check(tok evidence.Token, capTok string, keys Keys, o Options) Result {
 	if m := str("control_matched"); o.Kind != "" && !strings.HasPrefix(m, o.Kind+" on ") {
 		fail("the record matched %q, not %s", m, o.Kind)
 	}
-	if !strings.HasPrefix(str("agent_id"), keys.DID+"#") {
-		fail("the record's agent %s is not under the DID %s", str("agent_id"), keys.DID)
+	if !keys.Under(str("agent_id")) {
+		fail("the record's agent %s is not under the DID %s or its aliases", str("agent_id"), keys.DID)
 	}
 	if o.MaxAge > 0 {
 		if iat, ok := tok["iat"].(float64); !ok || o.Now.Sub(time.Unix(int64(iat), 0)) > o.MaxAge {
