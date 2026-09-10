@@ -167,7 +167,10 @@ published, `elixir:control-reconcile` counts what GitHub saw, dispatches of the 
 and pull requests from the hands' branches, per repository, against the effect records the
 gateway wrote as performed, over a window of seven days bounded by the start of service
 mode, and writes `reconciliation.json` beside the mirror. Zero unexplained difference is the
-claim; any difference is an alert in Portal. The validator of every record is
+claim; any difference is an alert in Portal. The first run, on 10 September 2026 at
+20:50 UTC over the day of service mode, agreed on the one repository with activity, five
+dispatches and one pull request on both sides, and named five repositories without the fix
+workflow as unreadable, which the next version counts as zero. The validator of every record is
 `elixir:control-verify`, daily at 07:20 UTC, a window of 24 hours; its results are the job's
 runs in Portal, which is the log the row asks for. Alerts go to Portal's calm layer and by
 mail on a transition; the acknowledgment time is not tracked yet.
