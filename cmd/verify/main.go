@@ -201,6 +201,9 @@ func main() {
 				case size > len(records):
 					fmt.Printf("BROKEN %s: truncation detected: the anchor covers %d records, only %d presented\n", agent, size, len(records))
 					broken++
+				case size == 0:
+					// An empty chain was anchored (its genesis head); anything written since extends it.
+					fmt.Printf("holds  %s: anchored empty on %s at %s, and the chain extends it\n", agent, r.Backend, r.AnchoredAt)
 				case records[size-1].Claims()["chain_head"] != r.Checkpoint.ChainHead:
 					fmt.Printf("BROKEN %s: history rewritten: the chain presented at size %d does not fold to the anchored head\n", agent, size)
 					broken++
