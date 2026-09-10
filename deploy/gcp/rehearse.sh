@@ -6,6 +6,7 @@
 #
 #   deploy/gcp/rehearse.sh create | submit | fetch | verify | stop | start | delete | config FILE
 #   deploy/gcp/rehearse.sh tokens | live | dry        (the service-mode switch, and its reverse)
+#   deploy/gcp/rehearse.sh lockdown | breakglass | reboot | serial   (custody: no login, ever, except on purpose)
 #
 # Needs: gcloud (brew install --cask gcloud-cli), `gcloud auth login`, and
 # PROJECT set below or in the environment.
@@ -53,37 +54,67 @@ verify)
   ;;
 config)
   # Carry a configuration the hands generated (the box's control/config.json: the agents
-  # and their grants) to the VM, with what belongs to the VM overriding: where it listens,
-  # where its store and secrets are, that it attests, the client token from its secrets.
-  # Dry stays as the file says; flipping it to act is a separate, deliberate edit.
+  # and their grants) to the VM as the instance attribute control-config; the boot script
+  # applies it with what belongs to the VM (listen, store, secrets, attestation, the token
+  # from Secret Manager). A reboot applies it; nobody is inside.
   [ -f "${2:-}" ] || { echo "config FILE: the generated config.json"; exit 2; }
   python3 - "$2" > /tmp/control-config.json <<'PYCFG'
 import json,sys
 c=json.load(open(sys.argv[1]))
-c.update({"listen":"0.0.0.0:8471","store":"/var/lib/control/store","secrets":"/var/lib/control/secrets","attestation":"tdx","client_token":"","carried_over":True})
-print(json.dumps(c, indent=2))
+for k in ('listen','store','secrets','attestation','client_token','carried_over'): c.pop(k, None)
+print(json.dumps(c, separators=(',',':')))
 PYCFG
-  $G scp /tmp/control-config.json "$NAME":/tmp/control-config.json --zone "$ZONE" --tunnel-through-iap
+  $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config=/tmp/control-config.json
   rm -f /tmp/control-config.json
-  $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo python3 -c \"import json; c=json.load(open('/tmp/control-config.json')); c['client_token']=open('/var/lib/control/secrets/client-token').read().strip(); json.dump(c, open('/var/lib/control/config.json','w'), indent=2)\"; sudo chown control:control /var/lib/control/config.json; sudo chmod 640 /var/lib/control/config.json; rm /tmp/control-config.json; sudo systemctl restart control-gateway; sleep 3; curl -fsS http://127.0.0.1:8471/v1/agents"
-  echo
+  echo "carried; reboot to apply: $0 reboot"
   ;;
 tokens)
-  # The GitHub tokens move inside the boundary: read from the box's secrets, written into
-  # the VM's secrets for the gateway's user, never stored on this machine. Service mode
-  # is what makes the hands' own copies unnecessary; they are removed there by hand.
+  # The GitHub tokens go into Secret Manager, one secret each, readable by the VM's own
+  # service account and nothing else; the boot script fetches them. Read from the box's
+  # secrets, never stored on this machine.
   BOX="${CONTROL_BOX:-elixir@167.233.221.164}"
-  for f in $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep ^github-token-'); do
-    val=$(ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f")
-    $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "printf '%s' '$val' | sudo tee /var/lib/control/secrets/$f >/dev/null; sudo chown control:control /var/lib/control/secrets/$f; sudo chmod 600 /var/lib/control/secrets/$f" >/dev/null 2>&1
-    echo "placed $f"
+  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep ^github-token-'); do
+    n="control-$f"
+    if gcloud --project="$PROJECT" secrets describe "$n" >/dev/null 2>&1; then
+      ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | tr -d '\n' | gcloud --project="$PROJECT" secrets versions add "$n" --data-file=- >/dev/null && echo "updated $n"
+    else
+      ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | tr -d '\n' | gcloud --project="$PROJECT" secrets create "$n" --data-file=- --replication-policy=user-managed --locations="${ZONE%-*}" >/dev/null && echo "created $n"
+      gcloud --project="$PROJECT" secrets add-iam-policy-binding "$n" --member "serviceAccount:control-gateway-vm@$PROJECT.iam.gserviceaccount.com" --role roles/secretmanager.secretAccessor >/dev/null
+    fi
   done
+  echo "reboot to apply: $0 reboot"
   ;;
 live|dry)
-  # Flip dry in the carried configuration and restart: live performs, dry records only.
-  want=$([ "$1" = live ] && echo False || echo True)  # a Python literal
-  $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo python3 -c \"import json; p='/var/lib/control/config.json'; c=json.load(open(p)); c['dry']=$want; json.dump(c, open(p,'w'), indent=2)\"; sudo systemctl restart control-gateway; sleep 3; curl -fsS http://127.0.0.1:8471/v1/agents" 2>&1 | grep -v "^WARNING\|NumPy\|please see"
-  echo
+  # Flip dry in the carried configuration (the instance attribute) and reboot to apply:
+  # live performs, dry records only. No login needed.
+  want=$([ "$1" = live ] && echo false || echo true)
+  $G instances describe "$NAME" --zone "$ZONE" --format="value(metadata.items.control-config)" > /tmp/control-config.json
+  [ -s /tmp/control-config.json ] || { echo "no carried configuration on the instance; run config first"; exit 2; }
+  python3 - "$want" <<'PYDRY'
+import json,sys
+c=json.load(open('/tmp/control-config.json')); c['dry']=(sys.argv[1]=='true')
+json.dump(c, open('/tmp/control-config.json','w'), separators=(',',':'))
+PYDRY
+  $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config=/tmp/control-config.json
+  rm -f /tmp/control-config.json
+  "$0" reboot
+  ;;
+reboot)
+  # A reset boots the pinned release from the boot script; the disk and the key persist.
+  $G instances reset "$NAME" --zone "$ZONE"
+  echo "reset; the gateway is back within a minute (attestation, then serve)"
+  ;;
+lockdown)
+  # No path to a login: the SSH firewall rule goes; only Google's tunnel range reaches the
+  # gateway port. Re-adding the rule is the break-glass, and Google's audit log records it.
+  gcloud --project="$PROJECT" compute firewall-rules delete allow-iap-ssh --quiet && echo "ssh rule removed: no login path to the VM"
+  ;;
+breakglass)
+  gcloud --project="$PROJECT" compute firewall-rules create allow-iap-ssh --network default --direction INGRESS --source-ranges 35.235.240.0/20 --allow tcp:22 --quiet && echo "ssh rule back: this is in the audit log; rotate the key after use"
+  ;;
+serial)
+  # The boot log without a login: what the boot script and the gateway printed.
+  $G instances get-serial-port-output "$NAME" --zone "$ZONE" 2>/dev/null | grep -i "startup-script\|control gateway\|attested\|secrets\|configuration" | tail -20
   ;;
 stop)   $G instances stop "$NAME" --zone "$ZONE" ;;
 start)  $G instances start "$NAME" --zone "$ZONE" ;;

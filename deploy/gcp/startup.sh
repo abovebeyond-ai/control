@@ -21,29 +21,61 @@ PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN
 # from a file the operator placed in the secrets directory, never from metadata, which
 # anyone with compute.viewer on the project can read.
 meta() { curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1" 2>/dev/null || true; }
+# The secrets come from Secret Manager, read with the VM's own service account, and land
+# in the gateway user's directory at every boot: nobody copies a file in, and nobody needs
+# a login to do so. A secret that is not there is simply absent (a token for an owner the
+# grants do not name), except the client token, without which the gateway does not act.
+fetch_secrets() {
+  local project token
+  project=$(curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id)
+  token=$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+  local names
+  names=$(curl -fsS -H "Authorization: Bearer $token" "https://secretmanager.googleapis.com/v1/projects/$project/secrets?filter=name:control-" | python3 -c 'import sys,json; print("\n".join(s["name"].split("/")[-1] for s in json.load(sys.stdin).get("secrets",[])))')
+  for n in $names; do
+    local f="${n#control-}"
+    curl -fsS -H "Authorization: Bearer $token" "https://secretmanager.googleapis.com/v1/projects/$project/secrets/$n/versions/latest:access" \
+      | python3 -c 'import sys,json,base64; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["payload"]["data"]).decode())' > "/var/lib/control/secrets/$f.tmp" \
+      && mv "/var/lib/control/secrets/$f.tmp" "/var/lib/control/secrets/$f" && chmod 600 "/var/lib/control/secrets/$f" && chown control:control "/var/lib/control/secrets/$f" \
+      || rm -f "/var/lib/control/secrets/$f.tmp"
+  done
+}
 LISTEN="${CONTROL_LISTEN:-$(meta control-listen)}"; LISTEN="${LISTEN:-127.0.0.1:8471}"
 CLIENT_TOKEN="${CONTROL_CLIENT_TOKEN:-}"
-[ -z "$CLIENT_TOKEN" ] && [ -f /var/lib/control/secrets/client-token ] && CLIENT_TOKEN="$(cat /var/lib/control/secrets/client-token)"
 
-if [ -x /usr/local/bin/control-gateway ] && systemctl is-active --quiet control-gateway; then
-  echo "control gateway already installed and running"; exit 0
-fi
+# Every boot runs all of this: it is idempotent, and a boot is how a carried
+# configuration, a new secret or a new release takes effect without a login.
 
 id control >/dev/null 2>&1 || useradd --system --home /var/lib/control --shell /usr/sbin/nologin control
 install -d -o control -g control -m 750 /var/lib/control /var/lib/control/store
 install -d -o control -g control -m 700 /var/lib/control/secrets
+fetch_secrets || echo "secrets could not be fetched; whatever is on disk stays"
+[ -z "$CLIENT_TOKEN" ] && [ -f /var/lib/control/secrets/client-token ] && CLIENT_TOKEN="$(cat /var/lib/control/secrets/client-token)"
 
-tmp=$(mktemp)
-curl -fsSL -o "$tmp" "https://github.com/abovebeyond-ai/control/releases/download/${RELEASE}/control-gateway-linux-amd64"
-echo "${GATEWAY_SHA}  ${tmp}" | sha256sum -c - >/dev/null
-install -m 755 "$tmp" /usr/local/bin/control-gateway
-rm -f "$tmp"
+if ! echo "${GATEWAY_SHA}  /usr/local/bin/control-gateway" | sha256sum -c - >/dev/null 2>&1; then
+  tmp=$(mktemp)
+  curl -fsSL -o "$tmp" "https://github.com/abovebeyond-ai/control/releases/download/${RELEASE}/control-gateway-linux-amd64"
+  echo "${GATEWAY_SHA}  ${tmp}" | sha256sum -c - >/dev/null
+  install -m 755 "$tmp" /usr/local/bin/control-gateway
+  rm -f "$tmp"
+  echo "installed control gateway ${RELEASE}"
+fi
 
 # Dry: judge, record, attest; perform nothing. A rehearsal proves the quote and
 # the chain, it has no business touching a repository.
-# A configuration the operator carried over (rehearse.sh config) is left alone: the
-# policy of this gateway is set by a deliberate act, not rewritten at boot.
-if [ -f /var/lib/control/config.json ] && grep -q '"carried_over": true' /var/lib/control/config.json; then
+# The policy the operator carried (rehearse.sh config) lives in the instance attribute
+# control-config and is applied at every boot, with what belongs to this machine set here:
+# nobody needs to be inside to change what the gateway may judge. Without it, the
+# rehearsal configuration below.
+CARRIED="$(meta control-config)"
+if [ -n "$CARRIED" ]; then
+  printf '%s' "$CARRIED" | python3 -c "
+import json,sys
+c=json.load(sys.stdin)
+c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','carried_over':True})
+json.dump(c, open('/var/lib/control/config.json','w'), indent=2)
+"
+  echo "configuration taken from the instance attribute control-config"
+elif [ -f /var/lib/control/config.json ] && grep -q '"carried_over": true' /var/lib/control/config.json; then
   echo "configuration carried over by the operator, left as is"
 else
 cat > /var/lib/control/config.json <<JSON
@@ -125,7 +157,8 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now control-attest.timer
-systemctl enable --now control-gateway
+systemctl enable control-gateway
+systemctl restart control-gateway
 sleep 3
 systemctl --no-pager status control-gateway | head -5
 curl -fsS http://127.0.0.1:8471/v1/key || true
