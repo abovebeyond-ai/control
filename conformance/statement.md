@@ -9,8 +9,9 @@
 
 Elixir's repair hands at Above Beyond: `security-fix` and `maintenance`, version the
 deployed commit of `abovebeyond-ai/elixir` on the Hetzner box (167.233.221.164), and the
-control gateway `abovebeyond-ai/control` v0.4.0, in shadow on an Intel TDX confidential VM
-on Google Cloud (europe-west4) and in process inside Elixir.
+control gateway `abovebeyond-ai/control` v0.7.0, in service on an Intel TDX confidential VM
+on Google Cloud (europe-west4) since 10 September 2026; the in-process gateway inside Elixir
+is kept for comparison and writes no production records.
 
 **Boundary.** Inside: the gateway process (policy, premises verifier, chain and tree,
 signing key, evidence log, effect adapters), its configuration and its secrets. Outside:
