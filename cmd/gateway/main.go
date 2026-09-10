@@ -44,10 +44,12 @@ import (
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/effects"
+	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/premises"
+	"github.com/abovebeyond-ai/control/relying"
 )
 
 type config struct {
@@ -347,7 +349,12 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 			outcome, effectReason = o, "not performed: "+o.Error
 		} else {
 			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-			o := adapter.Perform(ctx, req.Action)
+			// The far end gets the evidence with the effect (row 8.3.5): a dispatch
+			// carries the signed record and the capability as inputs, a pull request
+			// carries them in its footer, so a runner or a merge check can refuse
+			// what nobody judged. The hand's parameters stay as recorded; this is
+			// the gateway's own addition, and the outcome names it.
+			o := adapter.Perform(ctx, withEvidence(req.Action, v.Token, req.Capability))
 			cancel()
 			outcome = o
 			if o.OK {
@@ -397,6 +404,32 @@ func (s *service) accessed(what string, next http.HandlerFunc) http.HandlerFunc 
 		}
 		next(w, r)
 	}
+}
+
+// withEvidence adds the signed request record and the capability to the effect
+// the far end receives: as workflow inputs for a dispatch, as a footer for a pull
+// request. Other kinds carry nothing extra.
+func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Action {
+	params := map[string]any{}
+	for k, v := range a.Params {
+		params[k] = v
+	}
+	switch a.Kind {
+	case "workflow.dispatch":
+		inputs := map[string]any{}
+		if in, ok := params["inputs"].(map[string]any); ok {
+			for k, v := range in {
+				inputs[k] = v
+			}
+		}
+		inputs["evidence"] = relying.EncodeToken(tok)
+		inputs["capability"] = capTok
+		params["inputs"] = inputs
+	case "pull.open":
+		body, _ := params["body"].(string)
+		params["body"] = body + relying.Footer(relying.EncodeToken(tok), capTok)
+	}
+	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification}
 }
 
 // authed refuses a submission without the client token when one is configured.

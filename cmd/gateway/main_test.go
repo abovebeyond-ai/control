@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
+	"github.com/abovebeyond-ai/control/relying"
 	"github.com/google/go-tdx-guest/testing/testdata"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,8 +32,11 @@ import (
 // refusal leaves the fake GitHub untouched.
 func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 	calls := []string{}
+	bodies := []string{}
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
 		if strings.HasSuffix(r.URL.Path, "/dispatches") {
 			w.WriteHeader(204)
 			return
@@ -87,6 +92,14 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 	}
 	if len(calls) != 2 || !strings.Contains(calls[0], "/repos/x/y/actions/workflows/elixir-fix.yml/dispatches Bearer tok-x") || !strings.Contains(calls[1], "/repos/x/y/pulls Bearer tok-x") {
 		t.Errorf("GitHub saw %v", calls)
+	}
+	// The far end got the evidence with the effect: the dispatch's inputs carry the
+	// signed record, the pull request's body carries the footer.
+	if !strings.Contains(bodies[0], `"evidence":"`) || !strings.Contains(bodies[0], `"capability":`) {
+		t.Errorf("the dispatch carried no evidence: %s", bodies[0])
+	}
+	if !strings.Contains(bodies[1], "proof-of-control") || !strings.Contains(bodies[1], "Evidence: ") {
+		t.Errorf("the pull request carried no footer: %s", bodies[1])
 	}
 	records, _ := store.Records(agent)
 	if len(records) != 9 { // three actions, three records each
