@@ -372,8 +372,8 @@ func (s *service) attachment(w http.ResponseWriter, r *http.Request) {
 	}
 	step, err := strconv.Atoi(r.URL.Query().Get("step"))
 	name := r.URL.Query().Get("name")
-	if err != nil || (name != "premises" && name != "action") {
-		writeJSON(w, 400, map[string]any{"error": "step must be a number and name premises or action"})
+	if err != nil || (name != "premises" && name != "action" && name != "outcome" && name != "grant") {
+		writeJSON(w, 400, map[string]any{"error": "step must be a number and name one of premises, action, outcome, grant"})
 		return
 	}
 	var data any

@@ -178,4 +178,13 @@ func TestAClientTokenGuardsSubmitAndReadingStaysOpen(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "\"run\":\"r\"") {
 		t.Fatalf("attachment: %d %s", rec.Code, rec.Body.String())
 	}
+	// Everything written beside a record is served: the grant beside the request, the
+	// outcome beside the effect. The mirror job stopped on a 400 here on 10 September 2026.
+	for _, q := range []string{"step=0&name=grant", "step=1&name=outcome"} {
+		rec = httptest.NewRecorder()
+		s.attachment(rec, httptest.NewRequest("GET", "/v1/attachment?agent="+url.QueryEscape(agent)+"&"+q, nil))
+		if rec.Code != 200 {
+			t.Fatalf("attachment %s: %d %s", q, rec.Code, rec.Body.String())
+		}
+	}
 }
