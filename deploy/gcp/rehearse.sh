@@ -5,6 +5,7 @@
 # collateral from Intel. Stop the VM at the end; you pay for the disk only.
 #
 #   deploy/gcp/rehearse.sh create | submit | fetch | verify | stop | start | delete | config FILE
+#   deploy/gcp/rehearse.sh tokens | live | dry        (the service-mode switch, and its reverse)
 #
 # Needs: gcloud (brew install --cask gcloud-cli), `gcloud auth login`, and
 # PROJECT set below or in the environment.
@@ -65,6 +66,23 @@ PYCFG
   $G scp /tmp/control-config.json "$NAME":/tmp/control-config.json --zone "$ZONE" --tunnel-through-iap
   rm -f /tmp/control-config.json
   $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo python3 -c \"import json; c=json.load(open('/tmp/control-config.json')); c['client_token']=open('/var/lib/control/secrets/client-token').read().strip(); json.dump(c, open('/var/lib/control/config.json','w'), indent=2)\"; sudo chown control:control /var/lib/control/config.json; sudo chmod 640 /var/lib/control/config.json; rm /tmp/control-config.json; sudo systemctl restart control-gateway; sleep 3; curl -fsS http://127.0.0.1:8471/v1/agents"
+  echo
+  ;;
+tokens)
+  # The GitHub tokens move inside the boundary: read from the box's secrets, written into
+  # the VM's secrets for the gateway's user, never stored on this machine. Service mode
+  # is what makes the hands' own copies unnecessary; they are removed there by hand.
+  BOX="${CONTROL_BOX:-elixir@167.233.221.164}"
+  for f in $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep ^github-token-'); do
+    val=$(ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f")
+    $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "printf '%s' '$val' | sudo tee /var/lib/control/secrets/$f >/dev/null; sudo chown control:control /var/lib/control/secrets/$f; sudo chmod 600 /var/lib/control/secrets/$f" >/dev/null 2>&1
+    echo "placed $f"
+  done
+  ;;
+live|dry)
+  # Flip dry in the carried configuration and restart: live performs, dry records only.
+  want=$([ "$1" = live ] && echo false || echo true)
+  $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo python3 -c \"import json; p='/var/lib/control/config.json'; c=json.load(open(p)); c['dry']=$want; json.dump(c, open(p,'w'), indent=2)\"; sudo systemctl restart control-gateway; sleep 3; curl -fsS http://127.0.0.1:8471/v1/agents" 2>&1 | grep -v "^WARNING\|NumPy\|please see"
   echo
   ;;
 stop)   $G instances stop "$NAME" --zone "$ZONE" ;;

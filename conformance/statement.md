@@ -89,6 +89,16 @@ gateway.
 Records are kept for as long as this claim is made and at least one year. The store is
 readable by the gateway's user and the operator; reads are not yet individually logged.
 
+## Coverage and the mirror (10.3.6, 8.1.5)
+
+The service's evidence is mirrored daily to the public repository named below, with the
+material beside each record, the attestation, the checkpoints, the anchor receipts and
+`coverage.json`: request records divided by request records plus evidence writes that
+failed closed, which are all the in-scope actions there were, because a hand cannot act
+except through the gateway. On 10 September 2026 a fresh clone verified with the README's
+command alone: attestation, chain, three records per action, the Hedera anchor. That run
+was ours; the recorded run by a party outside Above Beyond is still to come.
+
 ## Where to verify (8.1.8)
 
 Tooling: `github.com/abovebeyond-ai/control`, `cmd/verify`, `tools/crosscheck.py`, and the
