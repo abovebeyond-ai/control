@@ -29,8 +29,18 @@ fetch_secrets() {
   local project token
   project=$(curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id)
   token=$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
-  local names
-  names=$(curl -fsS -H "Authorization: Bearer $token" "https://secretmanager.googleapis.com/v1/projects/$project/secrets?filter=name:control-" | python3 -c 'import sys,json; print("\n".join(s["name"].split("/")[-1] for s in json.load(sys.stdin).get("secrets",[])))')
+  # No listing (that needs a project-wide right the VM does not have): the names follow
+  # from the policy, one token per repository owner the grants name, plus the client token.
+  local names="control-client-token"
+  for owner in $(printf '%s' "$(meta control-config)" | python3 -c 'import sys,json
+try:
+    c=json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+owners=sorted({r.split("/")[0].lower() for a in c.get("agents",{}).values() for r in a.get("grant",{}).get("resources",[])})
+print(" ".join(owners))' 2>/dev/null); do
+    names="$names control-github-token-$owner"
+  done
   for n in $names; do
     local f="${n#control-}"
     curl -fsS -H "Authorization: Bearer $token" "https://secretmanager.googleapis.com/v1/projects/$project/secrets/$n/versions/latest:access" \
