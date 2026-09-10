@@ -144,3 +144,19 @@ ours. The recorded run by a party outside Above Beyond is still to come.
 Tooling: `github.com/abovebeyond-ai/control`, `cmd/verify`, `tools/crosscheck.py`, and the
 standard's own validator. Evidence: mirrored daily to `github.com/abovebeyond-ai/control-evidence`.
 The key: the did:webvh log at `https://abovebeyond.ai/.well-known/did.jsonl`.
+
+## Towards Tier 4: the far end (8.3.5, 8.3.2, 8.3.3)
+
+Since 10 September 2026 20:07 UTC the gateway hands every dispatch its signed request
+record and the principal's capability, and the fix workflow every repository under Elixir
+calls runs the far-end check before any package moves: the record must be signed by the
+gateway's key from the DID log, ALLOW for that repository and that verb, written on Intel
+TDX under the measurement the public mirror attests, and named by the capability. The check
+is the public action `abovebeyond-ai/control-verify-action`, built from `cmd/relying` at a
+pinned release, and it runs in the repository's own workflow, where neither Elixir nor the
+gateway can switch it off. Its first real run refused (the agent's DID form against the
+document's alias) and the job stopped with nothing done, which is the halt the row asks for,
+observed before it was rehearsed; the second run held and the work proceeded. The merge
+check on pull requests, and the branch protection that requires it, are the next step; the
+drills, the availability analysis and the inventory follow.
+
