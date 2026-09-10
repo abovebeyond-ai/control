@@ -81,7 +81,7 @@ tokens)
   ;;
 live|dry)
   # Flip dry in the carried configuration and restart: live performs, dry records only.
-  want=$([ "$1" = live ] && echo false || echo true)
+  want=$([ "$1" = live ] && echo False || echo True)  # a Python literal
   $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- "sudo python3 -c \"import json; p='/var/lib/control/config.json'; c=json.load(open(p)); c['dry']=$want; json.dump(c, open(p,'w'), indent=2)\"; sudo systemctl restart control-gateway; sleep 3; curl -fsS http://127.0.0.1:8471/v1/agents" 2>&1 | grep -v "^WARNING\|NumPy\|please see"
   echo
   ;;
