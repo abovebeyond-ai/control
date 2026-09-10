@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/abovebeyond-ai/control/attest"
+	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/effects"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
@@ -119,6 +120,7 @@ func main() {
 		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform()})
 	})
 	mux.HandleFunc("GET /v1/attestation", s.accessed("attestation", s.attestation))
+	mux.HandleFunc("GET /v1/attestations", s.accessed("attestations", s.attestations))
 	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s, %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, s.platform(), map[bool]string{true: ", dry", false: ""}[cfg.Dry])
 	fail(http.ListenAndServe(cfg.Listen, mux))
 }
@@ -181,6 +183,15 @@ func acquire(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 	if err := os.WriteFile(filepath.Join(cfg.Store, "attestation.json"), append(raw, '\n'), 0o644); err != nil {
 		return nil, err
 	}
+	// Every quote is kept, named by its digest: a checkpoint anchored under an earlier
+	// quote (the daily retake, a reboot) must remain resolvable, or the anchor could not
+	// be checked against the attestation it committed to (found on 10 September 2026:
+	// two reboots after an anchor, and the anchored quote was gone).
+	if quote, err := base64.StdEncoding.DecodeString(r.QuoteB64); err == nil {
+		dir := filepath.Join(cfg.Store, "attestations")
+		_ = os.MkdirAll(dir, 0o755)
+		_ = os.WriteFile(filepath.Join(dir, canonical.SHA256(quote)+".json"), append(raw, '\n'), 0o644)
+	}
 	return r, nil
 }
 
@@ -192,11 +203,39 @@ func (s *service) platform() string {
 }
 
 func (s *service) attestation(w http.ResponseWriter, r *http.Request) {
+	if d := r.URL.Query().Get("digest"); d != "" {
+		// An earlier quote by its digest, for an anchor that committed to it.
+		_, hexDigest, err := canonical.UntagAny(d)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": "digest must be a tagged sha-256"})
+			return
+		}
+		raw, err := os.ReadFile(filepath.Join(s.cfg.Store, "attestations", hexDigest+".json"))
+		if err != nil {
+			writeJSON(w, 404, map[string]any{"error": "no attestation with that digest is kept here"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(raw)
+		return
+	}
 	if s.attested == nil {
 		writeJSON(w, 404, map[string]any{"platform": attest.PlatformSoftware, "error": "this gateway attests in software: the operator vouches for the measurement"})
 		return
 	}
 	writeJSON(w, 200, s.attested)
+}
+
+// attestations lists the digests of every quote kept, oldest file first.
+func (s *service) attestations(w http.ResponseWriter, r *http.Request) {
+	entries, _ := os.ReadDir(filepath.Join(s.cfg.Store, "attestations"))
+	out := []string{}
+	for _, e := range entries {
+		if n := strings.TrimSuffix(e.Name(), ".json"); n != e.Name() {
+			out = append(out, canonical.Tag(n))
+		}
+	}
+	writeJSON(w, 200, map[string]any{"attestations": out})
 }
 
 // loadKey reads the Ed25519 seed from the secrets directory, making it on first

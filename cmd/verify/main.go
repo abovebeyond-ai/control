@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -80,7 +81,7 @@ func main() {
 	if src == nil {
 		store, err := log.Open(*dir)
 		fail(err)
-		src = store
+		src = localStore{store}
 	}
 	agents, err := src.Agents()
 	fail(err)
@@ -219,8 +220,28 @@ func main() {
 					case r.Checkpoint.Attestation == "":
 						fmt.Printf("note   %s: the anchored checkpoint carries no attestation digest\n", agent)
 					case quoteDigest != "" && r.Checkpoint.Attestation != quoteDigest:
-						fmt.Printf("BROKEN %s: the anchored checkpoint commits to another attestation than the one presented\n", agent)
-						broken++
+						// An earlier quote: the daily retake or a reboot since the anchor. It
+						// holds when that quote is kept, verifies, and binds the same key to
+						// the same measurement.
+						earlier, found, err := src.Attestation(r.Checkpoint.Attestation)
+						switch {
+						case err != nil || !found:
+							fmt.Printf("BROKEN %s: the anchored checkpoint commits to attestation %s, which is not kept\n", agent, r.Checkpoint.Attestation[:20])
+							broken++
+						case earlier.PublicKey != rec.PublicKey || earlier.MRTD != rec.MRTD:
+							fmt.Printf("BROKEN %s: the anchored attestation binds another key or measurement than the one presented\n", agent)
+							broken++
+						default:
+							ctx2, cancel2 := context.WithTimeout(context.Background(), time.Minute)
+							err := attest.Verify(ctx2, &earlier, attest.Options{Collateral: !*offline})
+							cancel2()
+							if err != nil {
+								fmt.Printf("BROKEN %s: the anchored attestation does not verify: %v\n", agent, err)
+								broken++
+							} else {
+								fmt.Printf("holds  %s: anchored under an earlier quote of the same key and measurement, kept and verified\n", agent)
+							}
+						}
 					case quoteDigest != "":
 						fmt.Printf("holds  %s: the attestation presented is the one anchored on %s\n", agent, r.Backend)
 					}
@@ -268,6 +289,26 @@ type source interface {
 	Agents() ([]string, error)
 	Records(agent string) ([]evidence.Token, error)
 	Attachment(agent string, step int, name string, into any) (bool, error)
+	Attestation(digest string) (attest.Record, bool, error)
+}
+
+// localStore reads a store directory, with the kept attestations beside it.
+type localStore struct{ *log.Store }
+
+func (l localStore) Attestation(digest string) (attest.Record, bool, error) {
+	var r attest.Record
+	_, hexDigest, err := canonical.UntagAny(digest)
+	if err != nil {
+		return r, false, err
+	}
+	raw, err := os.ReadFile(filepath.Join(l.Dir, "attestations", hexDigest+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return r, false, nil
+	}
+	if err != nil {
+		return r, false, err
+	}
+	return r, true, json.Unmarshal(raw, &r)
 }
 
 type remote struct{ base string }
@@ -309,6 +350,15 @@ func (r *remote) Records(agent string) ([]evidence.Token, error) {
 		Records []evidence.Token `json:"records"`
 	}
 	return out.Records, r.get("/v1/records", map[string]string{"agent": agent}, &out)
+}
+
+func (r *remote) Attestation(digest string) (attest.Record, bool, error) {
+	var rec attest.Record
+	err := r.get("/v1/attestation", map[string]string{"digest": digest}, &rec)
+	if errors.Is(err, errNotFound) {
+		return rec, false, nil
+	}
+	return rec, err == nil, err
 }
 
 func (r *remote) Attachment(agent string, step int, name string, into any) (bool, error) {

@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"github.com/abovebeyond-ai/control/attest"
+	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/google/go-tdx-guest/testing/testdata"
 	"net/http"
 	"net/http/httptest"
@@ -192,5 +194,34 @@ func TestAClientTokenGuardsSubmitAndReadingStaysOpen(t *testing.T) {
 		if rec.Code != 200 {
 			t.Fatalf("attachment %s: %d %s", q, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// Every quote is kept by digest and served by it, so an anchor that committed to an
+// earlier quote can still be checked after a retake.
+func TestEarlierQuotesAreKeptAndServedByDigest(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, 32))
+	rec, _ := attest.FromRaw(testdata.RawQuote, "sample", seed.Public().(ed25519.PublicKey))
+	raw, _ := json.Marshal(rec)
+	quote, _ := base64.StdEncoding.DecodeString(rec.QuoteB64)
+	os.MkdirAll(filepath.Join(dir, "store", "attestations"), 0o755)
+	os.WriteFile(filepath.Join(dir, "store", "attestations", canonical.SHA256(quote)+".json"), raw, 0o644)
+	s := &service{store: store, cfg: config{Store: filepath.Join(dir, "store")}}
+	rr := httptest.NewRecorder()
+	s.attestation(rr, httptest.NewRequest("GET", "/v1/attestation?digest="+url.QueryEscape(canonical.Tag(canonical.SHA256(quote))), nil))
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), rec.MRTD) {
+		t.Fatalf("by digest: %d", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	s.attestation(rr, httptest.NewRequest("GET", "/v1/attestation?digest=sha-256:"+strings.Repeat("0", 64), nil))
+	if rr.Code != 404 {
+		t.Fatalf("unknown digest: %d", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	s.attestations(rr, httptest.NewRequest("GET", "/v1/attestations", nil))
+	if !strings.Contains(rr.Body.String(), canonical.SHA256(quote)) {
+		t.Fatalf("list: %s", rr.Body.String())
 	}
 }
