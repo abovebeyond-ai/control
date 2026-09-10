@@ -173,7 +173,12 @@ dispatches and one pull request on both sides, and named five repositories witho
 workflow as unreadable, which the next version counts as zero. The validator of every record is
 `elixir:control-verify`, daily at 07:20 UTC, a window of 24 hours; its results are the job's
 runs in Portal, which is the log the row asks for. Alerts go to Portal's calm layer and by
-mail on a transition; the acknowledgment time is not tracked yet.
+mail on a transition. Portal keeps one episode per alert, opened by the run that turned
+it on and closed by the run that cleared it, with the moment a person marked it seen and
+by whom; the episodes with their seconds to acknowledgement are readable on the owner's
+token (`GET ingest/acknowledgements`), which is the record of acknowledgment times. The
+episodes begin at the deployment of that change (Portal pull request 245, evening of
+10 September 2026); alerts before it have no acknowledgment record.
 
 ## Halt drills (7.6.3, 8.3.3) and the secondary log (7.6.1)
 
