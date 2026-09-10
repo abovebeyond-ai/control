@@ -132,11 +132,34 @@ func (s *Store) RecordAccess(info map[string]any) error {
 	return err
 }
 
+// FailuresPath is the secondary durable log (row 7.6.1): beside the store
+// directory, not in it, so an evidence store that cannot be written still gets
+// its failure recorded. The halt drill of 10 September 2026 found it inside.
+func (s *Store) FailuresPath() string {
+	return filepath.Join(filepath.Dir(filepath.Clean(s.Dir)), filepath.Base(filepath.Clean(s.Dir))+"-failures.jsonl")
+}
+
+// Failures counts the entries of the secondary log.
+func (s *Store) Failures() int {
+	raw, err := os.ReadFile(s.FailuresPath())
+	if err != nil {
+		return 0
+	}
+	return len(strings.Split(strings.TrimSpace(string(raw)), "\n")) - boolToInt(strings.TrimSpace(string(raw)) == "")
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // RecordFailure writes to the secondary log; if that fails too, the error says so.
 func (s *Store) RecordFailure(info map[string]any) error {
 	info["at"] = time.Now().UTC().Format(time.RFC3339)
 	line, _ := json.Marshal(info)
-	f, err := os.OpenFile(filepath.Join(s.Dir, "failures.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	f, err := os.OpenFile(s.FailuresPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return errors.New("neither the evidence log nor the failure log could be written")
 	}

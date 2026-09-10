@@ -454,7 +454,7 @@ func (s *service) agents(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	writeJSON(w, 200, map[string]any{"agents": ids, "platform": s.platform(), "dry": s.cfg.Dry})
+	writeJSON(w, 200, map[string]any{"agents": ids, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()})
 }
 
 // attachment serves what was written beside a record: the premises material,
