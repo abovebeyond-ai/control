@@ -20,6 +20,7 @@ import (
 
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
+	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/log"
 	"github.com/abovebeyond-ai/control/merkle"
@@ -205,6 +206,15 @@ func (g *Gateway) Submit(action policy.Action, principal string, extension map[s
 // is refused and the refusal recorded; when it names none, the signature is noted
 // if present. The record carries control_submitter: verified, unsigned or invalid.
 func (g *Gateway) SubmitSigned(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, body, signature []byte) Verdict {
+	return g.SubmitWith(run, action, principal, extension, prem, body, signature, "")
+}
+
+// SubmitWith is SubmitSigned with the principal's capability for the task (rows
+// 4.2.1, 5.1.3). When the grant names a principal key, the token must verify
+// under it, be meant for this gateway and this agent, be in date, and cover the
+// kind and the resource; otherwise the request is refused and the refusal
+// recorded. The record carries the token's digest and the task it names.
+func (g *Gateway) SubmitWith(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, body, signature []byte, token string) Verdict {
 	state := "unsigned"
 	if len(signature) > 0 {
 		state = "invalid"
@@ -218,7 +228,32 @@ func (g *Gateway) SubmitSigned(run string, action policy.Action, principal strin
 	for k, v := range extension {
 		merged[k] = v
 	}
-	return g.submit(run, action, principal, merged, prem, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified")
+	var capReason string
+	if key := g.cfg.Policy.Grant.PrincipalKey; key != "" {
+		switch {
+		case token == "":
+			capReason = "no capability from the principal for this task"
+		default:
+			pub, err := hex.DecodeString(key)
+			if err != nil || len(pub) != ed25519.PublicKeySize {
+				capReason = "the grant's principal key is not a valid key"
+				break
+			}
+			p, err := capability.Verify(token, ed25519.PublicKey(pub), g.cfg.Issuer, g.cfg.Agent, g.cfg.Clock())
+			if err != nil {
+				capReason = err.Error()
+				break
+			}
+			merged["control_capability"] = capability.Digest(token)
+			merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires}
+			if !p.Covers(action.Kind, action.Resource) {
+				capReason = "the capability does not cover " + action.Kind + " on " + action.Resource
+			}
+		}
+	} else if token != "" {
+		merged["control_capability"] = capability.Digest(token)
+	}
+	return g.submit(run, action, principal, merged, prem, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified", capReason)
 }
 
 // SubmitIn is one intercepted step within a run. The path summary the policy
@@ -228,10 +263,14 @@ func (g *Gateway) SubmitSigned(run string, action policy.Action, principal strin
 // moves only after the durable write, so a store failure leaves the chain
 // exactly as it was.
 func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material) Verdict {
-	return g.submit(run, action, principal, extension, prem, g.cfg.Policy.Grant.SubmitterKey != "")
+	capReason := ""
+	if g.cfg.Policy.Grant.PrincipalKey != "" {
+		capReason = "no capability from the principal for this task"
+	}
+	return g.submit(run, action, principal, extension, prem, g.cfg.Policy.Grant.SubmitterKey != "", capReason)
 }
 
-func (g *Gateway) submit(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, unsigned bool) Verdict {
+func (g *Gateway) submit(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, unsigned bool, capReason string) Verdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	phi := g.summary(run)
@@ -273,6 +312,8 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 	switch {
 	case unsigned:
 		verdict, reason = "DENY", "the submission is not signed by the agent's key"
+	case capReason != "":
+		verdict, reason = "DENY", capReason
 	case g.cfg.Policy.RequiresPremises(action.Kind) && prem == nil:
 		verdict, reason = "DENY", "no certificate of premises for "+action.Kind
 	case prem != nil && !prem.Verified:

@@ -78,6 +78,12 @@ hex, and the record says `control_submitter: verified`; an unsigned or wrongly s
 submission is refused and the refusal recorded (row 5.1.2). Parameters are held to a schema
 per kind (row 4.1.4).
 
+A grant may name the principal's public key as `principal_key`: every submission must then
+carry `capability`, a token the principal signed for the task (`capability` package: who,
+for which agent and gateway, which kinds on which resources, until when), and the gateway
+takes the intersection of grant and capability, so a capability narrows and never widens
+(rows 4.2.1, 4.2.3, 5.1.3). The record carries the token's digest and the task it names.
+
 `client_token` in the configuration, when set, is what a hand must present as a bearer
 token to submit: a gateway reached from another machine holds credentials and judges within
 grants, and without it anyone who can reach the port could make it act. Reading stays open;

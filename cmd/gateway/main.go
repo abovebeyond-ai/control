@@ -247,12 +247,13 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 }
 
 type submitRequest struct {
-	Run       string             `json:"run"` // the hand's run; path limits are per run
-	Agent     string             `json:"agent"`
-	Principal string             `json:"principal"`
-	Action    policy.Action      `json:"action"`
-	Extension map[string]any     `json:"extension"`
-	Premises  *premises.Material `json:"premises"`
+	Run        string             `json:"run"`        // the hand's run; path limits are per run
+	Capability string             `json:"capability"` // the principal's token for this task, when the grant asks for one
+	Agent      string             `json:"agent"`
+	Principal  string             `json:"principal"`
+	Action     policy.Action      `json:"action"`
+	Extension  map[string]any     `json:"extension"`
+	Premises   *premises.Material `json:"premises"`
 }
 
 func (s *service) submit(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +283,7 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
-	v := g.SubmitSigned(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature)
+	v := g.SubmitWith(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature, req.Capability)
 	if v.Verdict == "FAIL_CLOSED" {
 		writeJSON(w, 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token})
 		return

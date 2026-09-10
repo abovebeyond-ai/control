@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
+	"github.com/abovebeyond-ai/control/capability"
 	"github.com/google/go-tdx-guest/testing/testdata"
 	"os"
 	"path/filepath"
@@ -377,5 +378,50 @@ func TestASignedSubmissionIsVerifiedAgainstTheAgentsKey(t *testing.T) {
 	}
 	if plain := g.SubmitIn("r", a, "p", nil, nil); plain.Allowed() {
 		t.Fatal("with a submitter key in the grant, an unsigned submission must be refused")
+	}
+}
+
+// With a principal key in the grant, a submission needs the principal's capability
+// for the task, and the capability narrows the grant: what it does not cover is
+// refused even though the grant allows it (rows 4.2.1, 4.2.3, 5.1.3).
+func TestACapabilityFromThePrincipalIsRequiredAndNarrows(t *testing.T) {
+	principal := ed25519.NewKeyFromSeed([]byte("principal-seed-principal-seed-32"))
+	store, _ := log.Open(t.TempDir())
+	seed, _ := hex.DecodeString(strings.Repeat("11", 32))
+	now := time.Unix(1_800_000_000, 0)
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:ab#agent-fix",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:example:ab", Kinds: []string{"workflow.dispatch", "pull.open"}, Resources: []string{"o/r", "o/s"}, MaxPerKind: 5, PrincipalKey: hex.EncodeToString(principal.Public().(ed25519.PublicKey))}, PathAware: true},
+		Store:  store, Key: ed25519.NewKeyFromSeed(seed), Clock: func() time.Time { return now }}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := policy.Action{Kind: "pull.open", Resource: "o/r", Params: map[string]any{"branch": "b", "base": "main"}}
+	if v := g.SubmitWith("r", a, "did:example:ab", nil, nil, nil, nil, ""); v.Allowed() || !strings.Contains(v.Reason, "no capability") {
+		t.Fatalf("without: %v", v)
+	}
+	tok, _ := capability.Issue(capability.Payload{Issuer: "did:example:ab#portal", Subject: cfg.Agent, Audience: cfg.Issuer,
+		Task: capability.Task{Playbook: "elixir-fix", Project: "demo"}, Kinds: []string{"pull.open"}, Resources: []string{"o/r"},
+		IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix(), ID: "01J"}, principal)
+	v := g.SubmitWith("r", a, "did:example:ab", nil, nil, nil, nil, tok)
+	if !v.Allowed() {
+		t.Fatalf("with: %v", v.Reason)
+	}
+	c := v.Token.Claims()
+	if c["control_capability"] != capability.Digest(tok) || c["control_task"].(map[string]any)["project"] != "demo" {
+		t.Fatalf("claims: %v", c)
+	}
+	// The grant allows o/s and workflow.dispatch; the capability names neither.
+	if v := g.SubmitWith("r", policy.Action{Kind: "pull.open", Resource: "o/s", Params: map[string]any{"branch": "b", "base": "main"}}, "did:example:ab", nil, nil, nil, nil, tok); v.Allowed() || !strings.Contains(v.Reason, "does not cover") {
+		t.Fatalf("narrowing: %v", v)
+	}
+	// A capability for another gateway, and an expired one, are refused and recorded.
+	other, _ := capability.Issue(capability.Payload{Issuer: "x", Subject: cfg.Agent, Audience: "https://elsewhere", Kinds: []string{"pull.open"}, Resources: []string{"o/r"}, IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix()}, principal)
+	if v := g.SubmitWith("r", a, "did:example:ab", nil, nil, nil, nil, other); v.Allowed() || v.Token == nil {
+		t.Fatalf("other audience: %v", v)
+	}
+	records, _ := store.Records(cfg.Agent)
+	if len(records) != 4 {
+		t.Fatalf("%d records: every refusal is recorded", len(records))
 	}
 }

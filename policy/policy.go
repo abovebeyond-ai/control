@@ -47,6 +47,12 @@ type Grant struct {
 	// submission must be signed by it, and the record says so (row 5.1.2). The key
 	// is the one the DID log publishes for the agent, so a stranger can check it.
 	SubmitterKey string `json:"submitter_key,omitempty"`
+	// PrincipalKey, when set, is the principal's Ed25519 public key (hex): every
+	// submission must then carry a capability the principal signed for this task,
+	// naming the agent, this gateway, the kinds and the resources, with an expiry
+	// (rows 4.2.1, 5.1.3). The gateway takes the intersection of grant and
+	// capability, so a capability narrows and never widens (row 4.2.3).
+	PrincipalKey string `json:"principal_key,omitempty"`
 }
 
 // PathSummary is bounded path state: counts per kind and the resources
@@ -132,8 +138,8 @@ func (p Policy) Bundle() map[string]any {
 		"principal": p.Grant.Principal, "kinds": kinds, "resources": resources,
 		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises,
 		"path_aware": p.PathAware, "version": Version, "schemas": schemaDocument(),
-		"submitter_key": p.Grant.SubmitterKey,
-		"expiry":        "none: a standing grant, replaced by a new bundle when it changes",
+		"submitter_key": p.Grant.SubmitterKey, "principal_key": p.Grant.PrincipalKey,
+		"expiry": "none: a standing grant, replaced by a new bundle when it changes",
 	}
 }
 
