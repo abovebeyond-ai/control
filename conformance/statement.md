@@ -170,7 +170,9 @@ mode, and writes `reconciliation.json` beside the mirror. Zero unexplained diffe
 claim; any difference is an alert in Portal. The first run, on 10 September 2026 at
 20:50 UTC over the day of service mode, agreed on the one repository with activity, five
 dispatches and one pull request on both sides, and named five repositories without the fix
-workflow as unreadable, which the next version counts as zero. The validator of every record is
+workflow as unreadable; the rerun the same evening, after the fix that counts an absent
+workflow as zero, reported zero unexplained, and that is the figure the daily job carries
+from here. The validator of every record is
 `elixir:control-verify`, daily at 07:20 UTC, a window of 24 hours; its results are the job's
 runs in Portal, which is the log the row asks for. Alerts go to Portal's calm layer and by
 mail on a transition. Portal keeps one episode per alert, opened by the run that turned
