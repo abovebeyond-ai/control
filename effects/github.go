@@ -102,10 +102,27 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if err != nil {
 			return Outcome{Error: err.Error()}
 		}
+		carried := true
+		if status == 422 && strings.Contains(fmt.Sprint(body["message"]), "Unexpected inputs") {
+			// The workflow declares no evidence inputs yet: dispatch without them, and
+			// say so. The far end cannot refuse what it was never handed; the outcome
+			// names the gap so the rollout is visible per repository.
+			trimmed := map[string]any{}
+			for k, v := range inputs {
+				if k != "evidence" && k != "capability" {
+					trimmed[k] = v
+				}
+			}
+			carried = false
+			status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches", owner, repo, workflow), map[string]any{"ref": ref, "inputs": trimmed})
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+		}
 		if status != 204 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"status": status}}
+		return Outcome{OK: true, Detail: map[string]any{"status": status, "evidence_carried": carried}}
 	case "pull.open":
 		head, _ := a.Params["branch"].(string)
 		basis, _ := a.Params["base"].(string)

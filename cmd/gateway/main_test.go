@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
-	"github.com/abovebeyond-ai/control/relying"
 	"github.com/google/go-tdx-guest/testing/testdata"
 	"io"
 	"net/http"
@@ -38,6 +37,12 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(raw))
 		if strings.HasSuffix(r.URL.Path, "/dispatches") {
+			// A workflow that declares no evidence inputs refuses them, as GitHub does.
+			if strings.Contains(string(raw), `"evidence":`) && strings.Contains(r.URL.Path, "/undeclared.yml/") {
+				w.WriteHeader(422)
+				_, _ = w.Write([]byte(`{"message":"Unexpected inputs provided: [\"evidence\", \"capability\"]"}`))
+				return
+			}
 			w.WriteHeader(204)
 			return
 		}
@@ -111,12 +116,22 @@ func TestTheServiceJudgesRecordsAndPerforms(t *testing.T) {
 	if records[7].Claims()["reason"] != "not performed: the request was refused" {
 		t.Errorf("a refusal's effect record: %v", records[7].Claims()["reason"])
 	}
+	// A repository whose workflow declares no evidence inputs still gets its dispatch,
+	// without them, and the outcome says the evidence was not carried.
+	code, out = post(submitRequest{Run: "run-u", Agent: agent, Action: policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "undeclared.yml", "ref": "main"}}, Premises: &material})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true || out["effect"].(map[string]any)["detail"].(map[string]any)["evidence_carried"] != false {
+		t.Fatalf("undeclared inputs: %d %v", code, out)
+	}
+	if len(calls) != 4 || len(records) != 9 {
+		t.Fatalf("the retry is one more call: %d calls", len(calls))
+	}
+
 	// Dry: judge and record, perform nothing. A restart in between: the first
 	// run's dispatch is remembered from the log, so this one names a new run.
 	s.cfg.Dry = true
 	s.gateways = map[string]*gateway.Gateway{}
 	code, out = post(submitRequest{Run: "run-2", Agent: agent, Action: policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, Premises: &material})
-	if code != 200 || out["verdict"] != "ALLOW" || out["effect"] != nil || len(calls) != 2 {
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"] != nil || len(calls) != 4 {
 		t.Errorf("dry: %d %v, calls %d", code, out, len(calls))
 	}
 }

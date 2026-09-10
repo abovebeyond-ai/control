@@ -9,8 +9,8 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.9.0}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-353df3f2c97c1350c5e64dfb2cca65d1664e7dff7b6dece1ecffdc38d3c1f1ba}"
+RELEASE="${CONTROL_RELEASE:-v0.9.1}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-db3072fdf49d4d8cc6ecea32930c11b6be94a775471ed0156db1b976e3160169}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
 AGENT="${CONTROL_AGENT:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal}"
 PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai}"
