@@ -75,8 +75,14 @@ effects the gateway performs, the gateway does (4.1.5); the record signer's key 
 the attested environment (5.1.4); the hand signs every submission with its own key, named
 in the DID log, and the gateway refuses what it does not verify (5.1.2).
 
-Open: a signed, per-task authorization token from the principal, validated by the gateway
-before execution and recorded (4.2.1, 5.1.3, with 4.2.2 and 4.2.3 as the one-hop chain).
+Met since 10 September 2026 evening: every submission carries a capability the principal
+signed for the task, Portal signing on the principal's behalf behind the same gates as the
+button (which hand, for which gateway, which verbs on which repository, valid two hours);
+the gateway validates signature, audience, subject and time before execution, records the
+token's digest and the task on the record, and takes the intersection with the standing
+grant, so a capability narrows and never widens (4.2.1, 5.1.3, 4.2.3; the delegation is
+one hop, principal to hand, 4.2.2). The principal's key is published in the DID log as
+`#portal`.
 
 Not applicable: human approval records (4.1.6: merging is a person's act in GitHub,
 outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.2).
@@ -129,7 +135,9 @@ material beside each record, the attestation, the checkpoints, the anchor receip
 failed closed, which are all the in-scope actions there were, because a hand cannot act
 except through the gateway. On 10 September 2026 a fresh clone verified with the README's
 command alone: attestation, chain, three records per action, the Hedera anchor. That run
-was ours; the recorded run by a party outside Above Beyond is still to come.
+was ours. `docs/verify-yourself.md` is the recipe for anyone else: the mirror, the
+verifier from source, the key resolved from the DID log, one command, no credential of
+ours. The recorded run by a party outside Above Beyond is still to come.
 
 ## Where to verify (8.1.8)
 
