@@ -35,7 +35,7 @@ today:
 
 | claim | evidence | tier | why not higher |
 | --- | --- | --- | --- |
-| every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release; since 10 September 2026 14:20 UTC written and performed by the attested gateway on Google (service mode) | 2 | the gateway's key is on a disk the operator can log in to (7.3.2); the branch push is still performed by the hand (7.1.4, see below) |
+| every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release; since 10 September 2026 14:20 UTC written and performed by the attested gateway on Google (service mode), with no login path to it since 14:45 UTC | 2 | the rows of the other chapters still open below (an outsider's recorded verification, 8.1.5, first among them); the branch push is still performed by the hand (7.1.4, see below) |
 | the action carried a verified reason | ProveML certificate with its material beside the record; replayable by three independent verifiers | 2 | same boundary as above |
 | the chain has not been rewritten below the anchored size | RFC 3161 timestamp and Hedera consensus time on the signed checkpoint, daily | 3 | Hedera testnet; mainnet before external use |
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it | 2 | no witness on the log yet |
@@ -49,8 +49,11 @@ carry the fix workflow do not push from the hand at all (the runner pushes under
 GitHub issues for that run), and projects without it cannot push (read-only tokens), so the
 exception is disclosed and bounded rather than silent. The in-process gateway in Elixir no
 longer writes production records. Platform INTEL_TDX, the key generated inside the trust
-domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3). What keeps the
-claim at Tier 2 is row 7.3.2: the operator can still log in to the VM.
+domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3). Since 14:45 UTC the
+same day there is no login path to the VM: its secrets come from Secret Manager under its
+own service account, its policy from an instance attribute, and both apply at boot; the
+custody configuration in `key-custody.md` names the one path left, a disk snapshot by the
+project's owner, which the audit log records (7.3.2).
 
 The words "Proof-of-Control" are used for this system only as the standard it is built
 against, not as a claim reached. (8.1.4)
@@ -81,7 +84,7 @@ outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.
 | mechanism | what must be trusted |
 | --- | --- |
 | Ed25519 signatures, SHA-256, RFC 6962 tree, RFC 8785 canonical form | the mathematics |
-| the gateway's key | Intel's attestation chain, Google's hypervisor and disk encryption, and that nobody with operator login to the VM copied the key (the custody configuration in `key-custody.md` closes that path at the next step) |
+| the gateway's key | Intel's attestation chain, Google's hypervisor and disk encryption, and that no project owner snapshotted the disk (the one path left; audit-logged; `key-custody.md`) |
 | the anchors | DigiCert as a timestamp authority; Hedera's consensus and its mirror nodes |
 | the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry |
 | the premises | the OSV advisory data the hands read, graded as inferred or gateway in the provenance |
