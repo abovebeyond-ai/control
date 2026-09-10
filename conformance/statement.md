@@ -3,6 +3,7 @@
 **Stage:** Self-Declared. No third party has assessed this system. (10.1.1)
 **Standard:** Advanced AI Society, Proof-of-Control, draft v0.1. **Date of claim:** 9 September 2026. (10.1.5)
 **Machine-readable form:** `statement.json` beside this file, same content. (10.1.7)
+**Claims review:** `claims-review.md`, signed off by the operator. (7.5.2)
 
 ## System (10.1.4, 10.1.6)
 
@@ -98,8 +99,26 @@ gateway.
 
 ## Retention and access (7.6.5, 7.6.4)
 
-Records are kept for as long as this claim is made and at least one year. The store is
-readable by the gateway's user and the operator; reads are not yet individually logged.
+Records are kept for as long as this claim is made and at least one year. The store on the
+VM is readable by the gateway's user alone; every read through the gateway's endpoints
+(records, attachments, checkpoints, proofs, attestation) writes an access record with what
+was read, from where and when, to `access.jsonl` beside the chains (control v0.7.0). The
+public mirror is a copy anyone may clone; clones of it are not individually recorded, and
+the mirror's README says so.
+
+## Inventory (10.1.8)
+
+The declared inventory is Portal's project register; discovery is Elixir's repository
+sync, which clones what the register names and measures nothing else. A project the
+register does not switch on appears in the report as a blind spot rather than as silence,
+and a repository that grants itself policy in its declaration is refused and recorded.
+
+## The attestation, anchored (8.1.7)
+
+The hardware attestation rests on Intel's root, a vendor. Since control v0.7.0 the signed
+checkpoint carries the digest of the quote, so the daily anchors on DigiCert and Hedera
+commit to the attestation as well, and the verifier holds the anchored digest to the
+attestation presented.
 
 ## Coverage and the mirror (10.3.6, 8.1.5)
 
