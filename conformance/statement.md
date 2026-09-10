@@ -160,6 +160,18 @@ observed before it was rehearsed; the second run held and the work proceeded. Th
 check on pull requests, and the branch protection that requires it, are the next step; the
 drills, the availability analysis and the inventory follow.
 
+## Coverage reconciled, the validator and its window (10.3.2, 10.3.3, 10.3.4)
+
+Coverage that counts records against records proves nothing. Daily, after the mirror is
+published, `elixir:control-reconcile` counts what GitHub saw, dispatches of the fix workflow
+and pull requests from the hands' branches, per repository, against the effect records the
+gateway wrote as performed, over a window of seven days bounded by the start of service
+mode, and writes `reconciliation.json` beside the mirror. Zero unexplained difference is the
+claim; any difference is an alert in Portal. The validator of every record is
+`elixir:control-verify`, daily at 07:20 UTC, a window of 24 hours; its results are the job's
+runs in Portal, which is the log the row asks for. Alerts go to Portal's calm layer and by
+mail on a transition; the acknowledgment time is not tracked yet.
+
 ## Halt drills (7.6.3, 8.3.3) and the secondary log (7.6.1)
 
 `tools/drills.sh` runs three drills against the gateway binary this checkout builds, the
