@@ -89,7 +89,8 @@ token to submit: a gateway reached from another machine holds credentials and ju
 grants, and without it anyone who can reach the port could make it act. Reading stays open;
 evidence is for strangers.
 
-`verify --gateway URL` reads everything from a running gateway over HTTP, agents, records,
+`docs/verify-yourself.md` is the recipe for a stranger: the mirror, this verifier, and the
+key from the DID log, no credentials. `verify --gateway URL` reads everything from a running gateway over HTTP, agents, records,
 attachments, attestation and the live checkpoint, so a stranger verifies without the store
 directory; `--key` holds it to a key obtained elsewhere, such as the DID document.
 `verify --store DIR --key HEX [--checkpoint FILE] [--anchors DIR]` replays everything with
