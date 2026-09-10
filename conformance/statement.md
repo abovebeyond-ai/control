@@ -160,3 +160,14 @@ observed before it was rehearsed; the second run held and the work proceeded. Th
 check on pull requests, and the branch protection that requires it, are the next step; the
 drills, the availability analysis and the inventory follow.
 
+## Halt drills (7.6.3, 8.3.3) and the secondary log (7.6.1)
+
+`tools/drills.sh` runs three drills against the gateway binary this checkout builds, the
+same code as in production, and writes the record under `conformance/drills/`. The record
+of 10 September 2026: an unwritable evidence store yields FAIL_CLOSED and nothing leaves,
+and the failure is itself on record; a rewritten record makes the gateway refuse to act on
+that chain; a gateway that must attest and cannot does not serve. The first run of the
+first drill found that the failure log lived inside the store, so an unwritable store lost
+its own failure record; since control v0.9.3 it lives beside the store. Three halts were
+also observed in production before they were drilled, and the record names them.
+
