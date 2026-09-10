@@ -117,6 +117,21 @@ func (s *Store) Agents() ([]string, error) {
 	return out, nil
 }
 
+// RecordAccess writes who read what and when (row 7.6.4) to access.jsonl beside
+// the chains; a read that cannot be recorded is still served, and the failure log
+// says the access record is missing.
+func (s *Store) RecordAccess(info map[string]any) error {
+	info["at"] = time.Now().UTC().Format(time.RFC3339)
+	line, _ := json.Marshal(info)
+	f, err := os.OpenFile(filepath.Join(s.Dir, "access.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(line, '\n'))
+	return err
+}
+
 // RecordFailure writes to the secondary log; if that fails too, the error says so.
 func (s *Store) RecordFailure(info map[string]any) error {
 	info["at"] = time.Now().UTC().Format(time.RFC3339)

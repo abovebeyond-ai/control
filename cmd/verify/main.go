@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -99,7 +100,11 @@ func main() {
 			fmt.Printf("note   the gateway attests in software: the operator vouches for its measurement\n")
 		}
 	}
+	var quoteDigest string
 	if haveAttestation {
+		if raw, err := base64.StdEncoding.DecodeString(rec.QuoteB64); err == nil {
+			quoteDigest = canonical.Tag(canonical.SHA256(raw))
+		}
 		if rec.PublicKey != *keyHex {
 			fmt.Printf("BROKEN attestation: it binds key %s, not %s\n", rec.PublicKey, *keyHex)
 			os.Exit(1)
@@ -209,6 +214,16 @@ func main() {
 					broken++
 				default:
 					fmt.Printf("holds  %s: anchored at size %d on %s at %s, and the chain extends it\n", agent, size, r.Backend, r.AnchoredAt)
+					// Row 8.1.7: the vendor-rooted attestation, committed to the anchor too.
+					switch {
+					case r.Checkpoint.Attestation == "":
+						fmt.Printf("note   %s: the anchored checkpoint carries no attestation digest\n", agent)
+					case quoteDigest != "" && r.Checkpoint.Attestation != quoteDigest:
+						fmt.Printf("BROKEN %s: the anchored checkpoint commits to another attestation than the one presented\n", agent)
+						broken++
+					case quoteDigest != "":
+						fmt.Printf("holds  %s: the attestation presented is the one anchored on %s\n", agent, r.Backend)
+					}
 				}
 			}
 		}

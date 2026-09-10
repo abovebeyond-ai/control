@@ -206,6 +206,15 @@ func TestAnAttestedGatewayNamesThePlatformAndTheMRTD(t *testing.T) {
 	if !v.Allowed() {
 		t.Fatal(v.Reason)
 	}
+	// The checkpoint commits to the quote as well (row 8.1.7), and still verifies.
+	cp, _ := g.Checkpoint()
+	if cp.Attestation != canonical.Tag(canonical.SHA256(raw)) || !VerifyCheckpoint(cp, pub) {
+		t.Fatalf("checkpoint attestation %q, verifies %v", cp.Attestation, VerifyCheckpoint(cp, pub))
+	}
+	cp.Attestation = ""
+	if VerifyCheckpoint(cp, pub) {
+		t.Fatal("dropping the attestation digest must break the checkpoint's signature")
+	}
 	att := v.Token["submods"].(map[string]any)["attestation"].(map[string]any)
 	if att["platform"] != "INTEL_TDX" || att["measurement"] != "sha-384:"+own.MRTD {
 		t.Fatalf("attestation submodule: %v", att)

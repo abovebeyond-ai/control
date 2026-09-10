@@ -39,7 +39,7 @@ import (
 
 // CheckpointBytesUnsigned is what the gateway signs: the checkpoint without its signature.
 func CheckpointBytesUnsigned(cp gateway.Checkpoint) ([]byte, error) {
-	return canonical.Encode(map[string]any{"agent": cp.Agent, "tree_size": cp.TreeSize, "root": cp.Root, "chain_head": cp.ChainHead})
+	return gateway.CheckpointInput(cp)
 }
 
 func sha(b []byte) string { return canonical.SHA256(b) }
@@ -48,7 +48,11 @@ func sha(b []byte) string { return canonical.SHA256(b) }
 // in canonical form. Small enough for a consensus message, exact enough that
 // two anchorers of the same checkpoint commit to the same bytes.
 func CheckpointBytes(cp gateway.Checkpoint) ([]byte, error) {
-	return canonical.Encode(map[string]any{"agent": cp.Agent, "tree_size": cp.TreeSize, "root": cp.Root, "chain_head": cp.ChainHead, "signature": cp.Signature})
+	m := map[string]any{"agent": cp.Agent, "tree_size": cp.TreeSize, "root": cp.Root, "chain_head": cp.ChainHead, "signature": cp.Signature}
+	if cp.Attestation != "" {
+		m["attestation"] = cp.Attestation
+	}
+	return canonical.Encode(m)
 }
 
 // Receipt is what is kept: the checkpoint, which backend, and what the

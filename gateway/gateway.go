@@ -416,7 +416,22 @@ type Checkpoint struct {
 	TreeSize  int    `json:"tree_size"`
 	Root      string `json:"root"`
 	ChainHead string `json:"chain_head"`
-	Signature string `json:"signature"`
+	// Attestation is the digest of the hardware quote the gateway runs under, when it
+	// does: anchoring the checkpoint then anchors the attestation with it (row 8.1.7), so
+	// the vendor-rooted report is committed to two independent clocks as well.
+	Attestation string `json:"attestation,omitempty"`
+	Signature   string `json:"signature"`
+}
+
+// CheckpointInput is what the checkpoint's signature covers: everything but the
+// signature, the attestation digest only when there is one, so checkpoints from
+// before it still verify.
+func CheckpointInput(cp Checkpoint) ([]byte, error) {
+	m := map[string]any{"agent": cp.Agent, "tree_size": cp.TreeSize, "root": cp.Root, "chain_head": cp.ChainHead}
+	if cp.Attestation != "" {
+		m["attestation"] = cp.Attestation
+	}
+	return canonical.Encode(m)
 }
 
 // Checkpoint of the current tree, signed by the evidence key.
@@ -424,7 +439,10 @@ func (g *Gateway) Checkpoint() (Checkpoint, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	cp := Checkpoint{Agent: g.cfg.Agent, TreeSize: g.tree.Size(), Root: canonical.Tag(hex.EncodeToString(g.tree.Root())), ChainHead: canonical.Tag(g.head)}
-	in, err := canonical.Encode(map[string]any{"agent": cp.Agent, "tree_size": cp.TreeSize, "root": cp.Root, "chain_head": cp.ChainHead})
+	if g.cfg.Attestation != nil {
+		cp.Attestation = canonical.Tag(canonical.SHA256(mustDecodeB64(g.cfg.Attestation.QuoteB64)))
+	}
+	in, err := CheckpointInput(cp)
 	if err != nil {
 		return cp, err
 	}
@@ -434,7 +452,7 @@ func (g *Gateway) Checkpoint() (Checkpoint, error) {
 
 // VerifyCheckpoint checks a checkpoint's signature under a public key.
 func VerifyCheckpoint(cp Checkpoint, pub ed25519.PublicKey) bool {
-	in, err := canonical.Encode(map[string]any{"agent": cp.Agent, "tree_size": cp.TreeSize, "root": cp.Root, "chain_head": cp.ChainHead})
+	in, err := CheckpointInput(cp)
 	if err != nil {
 		return false
 	}

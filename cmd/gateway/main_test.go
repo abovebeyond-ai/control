@@ -168,6 +168,12 @@ func TestAClientTokenGuardsSubmitAndReadingStaysOpen(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("with the token: %d %s", rec.Code, rec.Body.String())
 	}
+	// A read writes an access record (row 7.6.4).
+	rec = httptest.NewRecorder()
+	s.accessed("records", s.records)(rec, httptest.NewRequest("GET", "/v1/records?agent="+url.QueryEscape(agent), nil))
+	if access, err := os.ReadFile(filepath.Join(dir, "store", "access.jsonl")); err != nil || !strings.Contains(string(access), `"read":"records"`) {
+		t.Fatalf("access record: %v %s", err, access)
+	}
 	rec = httptest.NewRecorder()
 	s.agents(rec, httptest.NewRequest("GET", "/v1/agents", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), agent) {

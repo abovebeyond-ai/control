@@ -110,15 +110,15 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
-	mux.HandleFunc("GET /v1/agents", s.agents)
-	mux.HandleFunc("GET /v1/attachment", s.attachment)
-	mux.HandleFunc("GET /v1/checkpoint", s.checkpoint)
-	mux.HandleFunc("GET /v1/records", s.records)
-	mux.HandleFunc("GET /v1/proof", s.proof)
+	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
+	mux.HandleFunc("GET /v1/attachment", s.accessed("attachment", s.attachment))
+	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
+	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
+	mux.HandleFunc("GET /v1/proof", s.accessed("proof", s.proof))
 	mux.HandleFunc("GET /v1/key", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform()})
 	})
-	mux.HandleFunc("GET /v1/attestation", s.attestation)
+	mux.HandleFunc("GET /v1/attestation", s.accessed("attestation", s.attestation))
 	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s, %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, s.platform(), map[bool]string{true: ", dry", false: ""}[cfg.Dry])
 	fail(http.ListenAndServe(cfg.Listen, mux))
 }
@@ -335,6 +335,28 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	out["steps"] = []int{v.Step, e.Step, rr.Step}
 	writeJSON(w, 200, out)
+}
+
+// accessed writes an access record for every read of evidence (row 7.6.4): what
+// was asked, by which address, when. Reading stays open; it is no longer silent.
+func (s *service) accessed(what string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		info := map[string]any{"read": what, "from": r.RemoteAddr, "agent": q.Get("agent")}
+		if v := q.Get("step"); v != "" {
+			info["step"] = v
+		}
+		if v := q.Get("name"); v != "" {
+			info["name"] = v
+		}
+		if v := q.Get("from"); v != "" {
+			info["records_from"] = v
+		}
+		if err := s.store.RecordAccess(info); err != nil {
+			_ = s.store.RecordFailure(map[string]any{"error": "access not recorded: " + err.Error(), "read": what})
+		}
+		next(w, r)
+	}
 }
 
 // authed refuses a submission without the client token when one is configured.
