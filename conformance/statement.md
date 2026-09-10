@@ -35,14 +35,22 @@ today:
 
 | claim | evidence | tier | why not higher |
 | --- | --- | --- | --- |
-| every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release | 2 | the hands still hold their own credentials (7.1.1, 7.1.4); the key is a file the operator can read (7.3.2) |
+| every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release; since 10 September 2026 14:20 UTC written and performed by the attested gateway on Google (service mode) | 2 | the gateway's key is on a disk the operator can log in to (7.3.2); the branch push is still performed by the hand (7.1.4, see below) |
 | the action carried a verified reason | ProveML certificate with its material beside the record; replayable by three independent verifiers | 2 | same boundary as above |
 | the chain has not been rewritten below the anchored size | RFC 3161 timestamp and Hedera consensus time on the signed checkpoint, daily | 3 | Hedera testnet; mainnet before external use |
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it | 2 | no witness on the log yet |
 
-For the shadow records the attested gateway writes: platform INTEL_TDX, the key generated
-inside the trust domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3);
-still dry, so the hands perform, and the claim above stays at Tier 2 until service mode.
+Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
+propose through the tunnel with a signed submission and a client token, the gateway judges,
+records and performs the workflow dispatch and the pull request with tokens that live only
+inside the trust domain (7.1.1, 7.1.4 option a). One effect is not yet mediated inside the
+boundary: a branch push, which is a git operation from the hand's checkout; projects that
+carry the fix workflow do not push from the hand at all (the runner pushes under the token
+GitHub issues for that run), and projects without it cannot push (read-only tokens), so the
+exception is disclosed and bounded rather than silent. The in-process gateway in Elixir no
+longer writes production records. Platform INTEL_TDX, the key generated inside the trust
+domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3). What keeps the
+claim at Tier 2 is row 7.3.2: the operator can still log in to the VM.
 
 The words "Proof-of-Control" are used for this system only as the standard it is built
 against, not as a claim reached. (8.1.4)
@@ -57,12 +65,13 @@ refused, and the validated parameter digest is a claim (4.1.4); evaluation is pa
 per run (4.1.7); no tool output can raise the authorization state, the grant is standing
 configuration (4.1.8); every record carries the agent and the principal (5.1.1).
 
-Met at service mode: the agent holds no standing credential, the gateway does (4.1.5); the
-agent's key is bound to the attested environment (5.1.4).
+Met since service mode (10 September 2026): the agent holds no standing token for the
+effects the gateway performs, the gateway does (4.1.5); the record signer's key is bound to
+the attested environment (5.1.4); the hand signs every submission with its own key, named
+in the DID log, and the gateway refuses what it does not verify (5.1.2).
 
 Open: a signed, per-task authorization token from the principal, validated by the gateway
-before execution and recorded (4.2.1, 5.1.3, with 4.2.2 and 4.2.3 as the one-hop chain);
-the hand authenticating with its own key rather than a bearer token (5.1.2).
+before execution and recorded (4.2.1, 5.1.3, with 4.2.2 and 4.2.3 as the one-hop chain).
 
 Not applicable: human approval records (4.1.6: merging is a person's act in GitHub,
 outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.2).
@@ -72,7 +81,7 @@ outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.
 | mechanism | what must be trusted |
 | --- | --- |
 | Ed25519 signatures, SHA-256, RFC 6962 tree, RFC 8785 canonical form | the mathematics |
-| the gateway's key | in production: the operator (a file on the box). On the VM: Intel's attestation chain, Google's hypervisor and disk encryption, and that nobody with operator login copied the key |
+| the gateway's key | Intel's attestation chain, Google's hypervisor and disk encryption, and that nobody with operator login to the VM copied the key (the custody configuration in `key-custody.md` closes that path at the next step) |
 | the anchors | DigiCert as a timestamp authority; Hedera's consensus and its mirror nodes |
 | the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry |
 | the premises | the OSV advisory data the hands read, graded as inferred or gateway in the provenance |
