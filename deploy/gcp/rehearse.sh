@@ -7,6 +7,7 @@
 #   deploy/gcp/rehearse.sh create | submit | fetch | verify | stop | start | delete | config FILE
 #   deploy/gcp/rehearse.sh tokens | live | dry        (the service-mode switch, and its reverse)
 #   deploy/gcp/rehearse.sh lockdown | breakglass | reboot | serial   (custody: no login, ever, except on purpose)
+#   deploy/gcp/rehearse.sh principal <hex>                           (the principal's ticket key changed; applies with a reboot)
 #
 # Needs: gcloud (brew install --cask gcloud-cli), `gcloud auth login`, and
 # PROJECT set below or in the environment.
@@ -95,6 +96,24 @@ import json,sys
 c=json.load(open('/tmp/control-config.json')); c['dry']=(sys.argv[1]=='true')
 json.dump(c, open('/tmp/control-config.json','w'), separators=(',',':'))
 PYDRY
+  $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config=/tmp/control-config.json
+  rm -f /tmp/control-config.json
+  "$0" reboot
+  ;;
+principal)
+  # The principal's key changed (Portal's ticket key, 11 September 2026 into Cloud KMS):
+  # set principal_key in every grant of the carried configuration and reboot to apply.
+  # Tickets signed with the old key are refused from the reboot on, with a record.
+  [ -n "$2" ] && [ "${#2}" -eq 64 ] || { echo "usage: $0 principal <ed25519 public key, 64 hex>"; exit 2; }
+  $G instances describe "$NAME" --zone "$ZONE" --format="value(metadata.items.control-config)" > /tmp/control-config.json
+  [ -s /tmp/control-config.json ] || { echo "no carried configuration on the instance; run config first"; exit 2; }
+  python3 - "$2" <<'PYPRIN'
+import json,sys
+c=json.load(open('/tmp/control-config.json'))
+for a,g in c.get('agents',{}).items():
+    (g.get('grant') or g)['principal_key']=sys.argv[1]
+json.dump(c, open('/tmp/control-config.json','w'), separators=(',',':'))
+PYPRIN
   $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config=/tmp/control-config.json
   rm -f /tmp/control-config.json
   "$0" reboot
