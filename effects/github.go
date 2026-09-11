@@ -43,7 +43,9 @@ type GitHub struct {
 	Base       string // https://api.github.com
 }
 
-func (g GitHub) Kinds() []string { return []string{"workflow.dispatch", "branch.push", "pull.open"} }
+func (g GitHub) Kinds() []string {
+	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open"}
+}
 
 // FileChange is one file of a branch.push: the path and the full new content. The runner
 // in the project's CI computes the change and hands it back instead of pushing; the
@@ -232,6 +234,20 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
 		}
 		return Outcome{OK: true, Detail: map[string]any{"branch": branch, "commit": commit, "base": baseSHA, "files": len(files)}}
+	case "branch.delete":
+		branch, _ := a.Params["branch"].(string)
+		if branch == "" || !strings.HasPrefix(branch, "elixir/") {
+			// Only branches of the agent's own naming: the gateway deletes what it pushed, never a person's branch.
+			return Outcome{Error: "branch.delete needs params.branch under elixir/"}
+		}
+		status, body, err := call("DELETE", fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, branch), nil)
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 204 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
+		}
+		return Outcome{OK: true, Detail: map[string]any{"branch": branch, "deleted": true}}
 	case "pull.open":
 		head, _ := a.Params["branch"].(string)
 		basis, _ := a.Params["base"].(string)

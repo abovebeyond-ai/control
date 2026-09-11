@@ -31,6 +31,12 @@ var Schemas = map[string]Schema{
 		Required: map[string]string{"branch": "string"},
 		Optional: map[string]string{"packages": "int", "base_sha": "string", "message": "string", "files_sha256": "hex64"},
 	},
+	"branch.delete": {
+		// A branch the gateway pushed and whose tests never went green: removed, on the
+		// record, so nothing half-done stays behind in a client's repository.
+		Required: map[string]string{"branch": "string"},
+		Optional: map[string]string{"reason": "string"},
+	},
 	"pull.open": {
 		Required: map[string]string{"branch": "string", "base": "string"},
 		Optional: map[string]string{"title": "string", "body": "string", "packages": "int"},
