@@ -9,7 +9,7 @@
 
 Elixir's repair hands at Above Beyond: `security-fix` and `maintenance`, version the
 deployed commit of `abovebeyond-ai/elixir` on the Hetzner box (167.233.221.164), and the
-control gateway `abovebeyond-ai/control` v0.7.0, in service on an Intel TDX confidential VM
+control gateway `abovebeyond-ai/control` v0.9.3 (courier and verifier v0.10.0), in service on an Intel TDX confidential VM
 on Google Cloud (europe-west4) since 10 September 2026; the in-process gateway inside Elixir
 is kept for comparison and writes no production records.
 
@@ -40,7 +40,9 @@ today:
 | every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release; since 10 September 2026 14:20 UTC written and performed by the attested gateway on Google (service mode), with no login path to it since 14:45 UTC | 2 | the rows of the other chapters still open below (an outsider's recorded verification, 8.1.5, first among them); the branch push is still performed by the hand (7.1.4, see below) |
 | the action carried a verified reason | ProveML certificate with its material beside the record; replayable by three independent verifiers | 2 | same boundary as above |
 | the chain has not been rewritten below the anchored size | RFC 3161 timestamp and Hedera consensus time on the signed checkpoint, daily | 3 | Hedera testnet; mainnet before external use |
-| the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it | 2 | no witness on the log yet |
+| the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it; the update key on a hardware token since 11 September 2026; every version of the log pinned at DigiCert and on Hedera, and the ledger's first posting per version compared with the log (control v0.10.0, `anchor identity check`) | 2 | Hedera testnet; the same outsider's recorded run (8.1.5) as the rows above. The witness of the did:webvh format was not added: a named witness is a single trusted party (8.1.2); the public ledger answers the same question, one history, with no party to trust |
+| the gateway's key was made inside the sealed machine | TDX quote binding the key (REPORTDATA = SHA-512 of the key), MRTD as the record's measurement, refreshed daily; the quote's digest anchored with every checkpoint | 2 | 8.1.5; the measurement is not yet matched to a published build of the machine image |
+| every action was performed on a ticket the principal signed for that task | Ed25519 capability (issuer #portal, subject the hand, audience the gateway, task, kinds, resources, expiry), verified by the gateway, intersected with the grant; digest and task on the record | 2 | 8.1.5; Portal's ticket key is a file on the Portal server |
 
 Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
 propose through the tunnel with a signed submission and a client token, the gateway judges,
