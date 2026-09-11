@@ -425,3 +425,62 @@ func TestACapabilityFromThePrincipalIsRequiredAndNarrows(t *testing.T) {
 		t.Fatalf("%d records: every refusal is recorded", len(records))
 	}
 }
+
+// A working is only as good as the rule it argues. A grant that names no judgement
+// accepts FIX_WITHIN_SEMVER and nothing else; a grant that names MAJOR_UNDER_TESTS accepts
+// a working that argues tests before and after crossing a major version. The certificate
+// verifies either way: what changes is whether this permit takes that reason.
+func TestTheGrantNamesTheJudgementsAWorkingMayArgue(t *testing.T) {
+	major := func() *premises.Material {
+		return &premises.Material{
+			Certificate:      "@[package:uuid]{uuid} moves from %[from]{9.0.1} to %[to]{11.1.0}, a major; tests before %[testsBefore]{1}, tests after %[testsAfter]{1}, coverage %[coverage]{82}, ?[under: MAJOR_UNDER_TESTS]{green on both sides}.",
+			Store:            map[string]any{"package:uuid.name": "uuid", "package:uuid.from": "9.0.1", "package:uuid.to": "11.1.0", "package:uuid.testsBefore": 1, "package:uuid.testsAfter": 1, "package:uuid.coverage": 82, "package:uuid.underTests": 1},
+			Registry:         proveml.Registry{"MAJOR_UNDER_TESTS": {Field: "underTests", Op: "eq", Value: 1, Label: "the tests were green before and after the change"}},
+			Provenance:       map[string]string{"package:uuid.name": "inferred", "package:uuid.from": "inferred", "package:uuid.to": "inferred", "package:uuid.testsBefore": "gateway", "package:uuid.testsAfter": "gateway", "package:uuid.coverage": "inferred", "package:uuid.underTests": "gateway"},
+			RequiredControls: []string{"MAJOR_UNDER_TESTS"}, RequiredGrades: map[string]string{"underTests": "gateway"},
+		}
+	}
+	action := policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}
+
+	// The fleet's grant, naming nothing: a major's working is refused, and the reason says why.
+	g, _ := fixture(t, "workflow.dispatch")
+	if v := g.Submit(action, "p", nil, major()); v.Verdict != "DENY" || !strings.Contains(v.Reason, "argues MAJOR_UNDER_TESTS, which this grant does not accept") {
+		t.Errorf("default grant: %+v", v)
+	}
+	if v := g.Submit(action, "p", nil, goodPremises()); !v.Allowed() {
+		t.Errorf("default grant, within semver: %+v", v)
+	}
+
+	// A grant for a project with tests, naming the major judgement: accepted; and a working
+	// that argues nothing is refused, since a certificate without a rule is a story.
+	store, _ := log.Open(filepath.Join(t.TempDir(), "s"))
+	seed, _ := hex.DecodeString(strings.Repeat("36", 32))
+	g2, err := Open(Config{
+		Issuer: "https://gateway.example/control", Agent: "did:webvh:QmTest:example.org#agent-major",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"workflow.dispatch"}, Resources: []string{"x/y"}, MaxPerKind: 1, PremisesFor: []string{"workflow.dispatch"}, Judgements: []string{"MAJOR_UNDER_TESTS"}}, PathAware: true},
+		Store:  store, Key: ed25519.NewKeyFromSeed(seed), AgbomDigest: strings.Repeat("a", 64), Clock: func() time.Time { return time.Unix(1754400000, 0) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := g2.Submit(action, "p", nil, major()); !v.Allowed() {
+		t.Errorf("major grant: %+v", v)
+	}
+	none := major()
+	none.RequiredControls = nil
+	g3, _ := Open(Config{
+		Issuer: "https://gateway.example/control", Agent: "did:webvh:QmTest:example.org#agent-major",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"workflow.dispatch"}, Resources: []string{"x/y"}, MaxPerKind: 1, PremisesFor: []string{"workflow.dispatch"}, Judgements: []string{"MAJOR_UNDER_TESTS"}}, PathAware: true},
+		Store:  store, Key: ed25519.NewKeyFromSeed(seed), AgbomDigest: strings.Repeat("a", 64), Clock: func() time.Time { return time.Unix(1754400000, 0) },
+	})
+	if v := g3.Submit(action, "p", nil, none); v.Verdict != "DENY" || !strings.Contains(v.Reason, "argues no judgement") {
+		t.Errorf("no judgement: %+v", v)
+	}
+	// The grant carried in the record names what it accepts, so a reader sees the rule.
+	v := g2.Submit(action, "p", nil, major())
+	if grant, _ := v.Token.Claims()["control_grant"].(map[string]any); grant != nil {
+		if j, _ := grant["judgements"].([]any); len(j) != 1 || j[0] != "MAJOR_UNDER_TESTS" {
+			t.Errorf("grant in the record: %v", grant)
+		}
+	}
+}

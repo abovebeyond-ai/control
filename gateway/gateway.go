@@ -322,6 +322,13 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 		verdict, reason = "DENY", "no certificate of premises for "+action.Kind
 	case prem != nil && !prem.Verified:
 		verdict, reason = "DENY", "the certificate of premises does not verify: "+first(prem.Errors)
+	case prem != nil && !acceptedJudgement(g.cfg.Policy, prem):
+		c, _ := g.cfg.Policy.Accepted(prem.RequiredControls)
+		if c == "" {
+			verdict, reason = "DENY", "the certificate of premises argues no judgement"
+		} else {
+			verdict, reason = "DENY", "the certificate argues "+c+", which this grant does not accept"
+		}
 	default:
 		verdict, reason = g.cfg.Policy.Evaluate(action, phi)
 	}
@@ -584,4 +591,10 @@ func mustDecodeB64(s string) []byte {
 		return nil
 	}
 	return raw
+}
+
+// acceptedJudgement: the working argues only judgements the grant accepts, and at least one.
+func acceptedJudgement(p policy.Policy, prem *premises.Material) bool {
+	_, ok := p.Accepted(prem.RequiredControls)
+	return ok
 }
