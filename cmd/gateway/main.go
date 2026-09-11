@@ -73,6 +73,9 @@ type config struct {
 	// refuses to run without one. A gateway configured to prove and unable to
 	// must not judge, because its evidence would claim what it cannot show.
 	Attestation string `json:"attestation"`
+	// Release names this gateway's own build, "v0.11.0 sha256:…", written by the boot
+	// script from what it installed; every record carries it as control_gateway.
+	Release string `json:"release"`
 }
 
 type service struct {
@@ -279,7 +282,7 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 	if !ok {
 		return nil, errors.New("unknown agent: no grant configured")
 	}
-	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested})
+	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release})
 	if err != nil {
 		return nil, err
 	}
@@ -299,6 +302,11 @@ type submitRequest struct {
 	// the judged parameters by params.files_sha256, checked before the judgement so a
 	// refusal names a mismatch, and kept beside the record as the material was.
 	Files []effects.FileChange `json:"files,omitempty"`
+	// Agbom is the hand's bill of materials in force for this step (C1.2 of the standard):
+	// what software, which commit, which runner, which model if any. Its canonical digest
+	// is the record's agbom_digest; the document is kept beside the record so the digest
+	// resolves to a manifest, as row 1.1.1 asks.
+	Agbom map[string]any `json:"agbom,omitempty"`
 }
 
 func (s *service) submit(w http.ResponseWriter, r *http.Request) {
@@ -341,10 +349,27 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Action.Attached["files"] = req.Files
 	}
+	if req.Agbom != nil {
+		digest, err := canonical.Digest(req.Agbom)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": "the bill of materials cannot be canonicalised: " + err.Error()})
+			return
+		}
+		if req.Extension == nil {
+			req.Extension = map[string]any{}
+		}
+		req.Extension["agbom_digest"] = canonical.Tag(digest)
+	}
 	v := g.SubmitWith(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature, req.Capability)
 	if v.Verdict == "FAIL_CLOSED" {
 		writeJSON(w, 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token})
 		return
+	}
+	if req.Agbom != nil {
+		if err := s.store.Attach(req.Agent, v.Step, "agbom", req.Agbom); err != nil {
+			writeJSON(w, 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the bill of materials could not be kept beside the record: " + err.Error(), "step": v.Step})
+			return
+		}
 	}
 	if len(req.Files) > 0 {
 		// What was pushed, beside the record that allowed it, as the working is.

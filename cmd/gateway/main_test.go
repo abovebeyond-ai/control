@@ -357,3 +357,52 @@ func TestABranchIsPushedByTheGatewayFromTheFilesHandedBack(t *testing.T) {
 		t.Errorf("attachment: %v %v %v", found, err, kept)
 	}
 }
+
+// The hand's bill of materials (C1.2, row 1.1.1): submitted with the request, its digest
+// is the record's agbom_digest on all three records of the action, the manifest is kept
+// beside the request record, and the verifier resolves the one to the other.
+func TestTheBillOfMaterialsIsNamedByEveryRecordAndKeptBesideIt(t *testing.T) {
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"html_url":"https://github.com/x/y/pull/1","number":1}`))
+	}))
+	defer github.Close()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-token-x"), []byte("tok-x\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("35", 32))
+	agent := "did:webvh:QmTest:example.org#agent-fix"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Release: "v0.12.0 sha256:abc", Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"pull.open"}, Resources: []string{"x/y"}, MaxPerKind: 1}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.GitHub{SecretsDir: filepath.Join(dir, "secrets"), Base: github.URL})
+	agbom := map[string]any{"agbom": "elixir", "agent": agent, "software": map[string]any{"repository": "abovebeyond-ai/elixir", "commit": "3ce51e3"}, "model": nil}
+	raw, _ := json.Marshal(submitRequest{Agent: agent, Action: policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main", "title": "t"}}, Agbom: agbom})
+	rec := httptest.NewRecorder()
+	s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	want, _ := canonical.Digest(agbom)
+	records, _ := store.Records(agent)
+	if len(records) != 3 {
+		t.Fatalf("%d records", len(records))
+	}
+	for i, tok := range records {
+		c := tok.Claims()
+		if c["agbom_digest"] != canonical.Tag(want) {
+			t.Errorf("record %d names %v, not the submitted bill of materials", i, c["agbom_digest"])
+		}
+		if c["control_gateway"] != "v0.12.0 sha256:abc" {
+			t.Errorf("record %d names the gateway as %v", i, c["control_gateway"])
+		}
+	}
+	var kept map[string]any
+	if found, err := store.Attachment(agent, 0, "agbom", &kept); err != nil || !found || kept["agbom"] != "elixir" {
+		t.Errorf("manifest beside the record: %v %v %v", found, err, kept)
+	}
+}

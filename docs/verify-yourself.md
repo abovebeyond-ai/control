@@ -40,6 +40,10 @@ them, every judgement replays from the material beside it, the key that signed l
 the measured environment the quote names, and the chain extends what was anchored. It does
 not mean any repair was correct. Whether a judgement was wise is a person's reading.
 
+A line `holds … record(s) name their bill of materials` means the digest in those records
+resolves to a manifest kept beside them (`agbom/<step>.json`): what software, which commit,
+which runner, which model if any. Records from before 11 September 2026 have none.
+
 If a line says BROKEN, tell us, and tell the Society: that is the point of publishing it.
 
 ## The did:webvh log itself

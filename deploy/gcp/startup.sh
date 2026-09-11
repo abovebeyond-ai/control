@@ -81,7 +81,7 @@ if [ -n "$CARRIED" ]; then
   printf '%s' "$CARRIED" | python3 -c "
 import json,sys
 c=json.load(sys.stdin)
-c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','carried_over':True})
+c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','carried_over':True,'release':'$RELEASE sha256:$GATEWAY_SHA'})
 json.dump(c, open('/var/lib/control/config.json','w'), indent=2)
 "
   echo "configuration taken from the instance attribute control-config"

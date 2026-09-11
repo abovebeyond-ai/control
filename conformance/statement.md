@@ -30,6 +30,19 @@ C4 Authorization, C5 Identity, C7 Evidence generation and properties, C8 Verifia
 tiers, C10 Conformance and disclosure. Not claimed: C1 Provenance, C2 Privacy, C3
 Portability, C6 Security, C9.
 
+C1 is not claimed, but one row of it is met and disclosed since control v0.12.0
+(11 September 2026): every record's `agbom_digest` resolves to a manifest (row 1.1.1).
+The hand submits its bill of materials with each request, the gateway keeps it beside the
+request record (`agbom/<step>.json`, in the public copy), all three records of the action
+name its digest, and `cmd/verify` checks the one against the other. The manifest names the
+software and its deployed commit, the runtime, the runner in the project's CI, the tools,
+and the model when one acts. No model touches code in the security repair as it runs today,
+so that entry is null; the weekly report's voice is not an in-scope action. When a model
+does act, the entry names the provider and the model identifier, a digest of its
+instructions and the number of attempts, and says that a hosted provider publishes no digest
+of weights, which is why row 1.1.1 is met for the software and only partly for the model.
+Every record also names the gateway's own release and checksum as `control_gateway`.
+
 ## Claims, tier reached, mechanism (10.1.3, 8.1.1 to 8.1.3)
 
 The claim register is `register.json`. In short, for the records Elixir writes in production
