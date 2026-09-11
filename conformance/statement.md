@@ -42,7 +42,7 @@ today:
 | the chain has not been rewritten below the anchored size | RFC 3161 timestamp and Hedera consensus time on the signed checkpoint, daily | 3 | Hedera testnet; mainnet before external use |
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it; the update key on a hardware token since 11 September 2026; every version of the log pinned at DigiCert and on Hedera, and the ledger's first posting per version compared with the log (control v0.10.0, `anchor identity check`) | 3 | Hedera testnet; mainnet before external use, as for the chain claim above. The witness of the did:webvh format was not added: a named witness is a single trusted party (8.1.2); the public ledger answers the same question, one history, with no party to trust |
 | the gateway's key was made inside the sealed machine | TDX quote binding the key (REPORTDATA = SHA-512 of the key), MRTD as the record's measurement, refreshed daily; the quote's digest anchored with every checkpoint | 2 | 8.1.5; the measurement is not yet matched to a published build of the machine image |
-| every action was performed on a ticket the principal signed for that task | Ed25519 capability (issuer #portal, subject the hand, audience the gateway, task, kinds, resources, expiry), verified by the gateway, intersected with the grant; digest and task on the record | 2 | 8.1.5; Portal's ticket key is a file on the Portal server |
+| every action was performed on a ticket the principal signed for that task | Ed25519 capability (issuer #portal, subject the hand, audience the gateway, task, kinds, resources, expiry), verified by the gateway, intersected with the grant; digest and task on the record | 2 | 8.1.5 (the ticket key is in Cloud KMS since 11 September 2026; Google is on the trust list) |
 
 Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
 propose through the tunnel with a signed submission and a client token, the gateway judges,
@@ -84,7 +84,12 @@ the gateway validates signature, audience, subject and time before execution, re
 token's digest and the task on the record, and takes the intersection with the standing
 grant, so a capability narrows and never widens (4.2.1, 5.1.3, 4.2.3; the delegation is
 one hop, principal to hand, 4.2.2). The principal's key is published in the DID log as
-`#portal`.
+`#portal`. Since 11 September 2026 evening (log version 7) that key lives in Google Cloud
+KMS (Ed25519, software protection level; the HSM level offers no Ed25519) and never
+leaves it: Portal holds a service account that may sign with that one key and read its
+public half, nothing else; every signature is in Google's audit log with the caller; a
+stolen account is revoked, a stolen file was for good. The seed file that signed before is
+deleted. What is still trusted: Google, and that the account is not misused while valid.
 
 Not applicable: human approval records (4.1.6: merging is a person's act in GitHub,
 outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.2).
