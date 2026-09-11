@@ -61,7 +61,8 @@ type Config struct {
 	Policy      policy.Policy
 	Store       *log.Store
 	Key         ed25519.PrivateKey
-	AgbomDigest string           // digest of the agent bill of materials; the deployed commit is honest for deterministic hands
+	AgbomDigest string           // digest of the agent bill of materials when the hand submits none; the deployed commit is honest for deterministic hands
+	Release     string           // the gateway's own release and checksum, named in every record as control_gateway
 	Platform    string           // SOFTWARE until an enclave attests
 	Clock       func() time.Time // injectable for reproducible records
 	// Attestation, when present, is the hardware's word: the platform becomes
@@ -82,6 +83,9 @@ type Gateway struct {
 	tree        *merkle.Tree
 	step        int
 	runs        map[string]policy.PathSummary // path summary per run; "" is the run of a hand that names none
+	// agboms remembers, per action, the digest of the bill of materials the hand
+	// submitted with the request, so the effect and result records name the same one.
+	agboms map[string]string
 }
 
 // Open rebuilds the chain from the store. A log whose last record does not
@@ -338,9 +342,24 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 		extension["control_matched"] = policy.Matched(action, phi, g.cfg.Policy.Grant)
 	}
 	extension["control_params"] = canonical.Tag(paramsDigest)
+	// The bill of materials in force: the one the hand submitted for this request (its
+	// digest arrives in the extension, the document is kept beside the record by the
+	// service), else the gateway's default for a hand that submits none.
+	agbom := canonical.Tag(g.cfg.AgbomDigest)
+	if v, ok := extension["agbom_digest"].(string); ok && v != "" {
+		agbom = v
+		delete(extension, "agbom_digest")
+	}
+	if g.agboms == nil {
+		g.agboms = map[string]string{}
+	}
+	g.agboms[actionID] = agbom
+	if g.cfg.Release != "" {
+		extension["control_gateway"] = g.cfg.Release
+	}
 	claims := map[string]any{
 		"agent_id": g.cfg.Agent, "initiating_user": principal,
-		"agbom_digest": canonical.Tag(g.cfg.AgbomDigest), "interception_point": evidence.InterceptionPoint,
+		"agbom_digest": agbom, "interception_point": evidence.InterceptionPoint,
 		"step_index": g.step, "chain_head": canonical.Tag(link),
 		"merkle_root": canonical.Tag(hex.EncodeToString(treeAfter.Root())), "tree_size": treeAfter.Size(),
 		"policy_bundle_hash": canonical.Tag(g.cfg.Policy.BundleHash()), "target_resource": action.Resource,
@@ -416,9 +435,13 @@ func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, prin
 	treeAfter.Append(leaf)
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
+	agbom := canonical.Tag(g.cfg.AgbomDigest)
+	if v, ok := g.agboms[actionID]; ok {
+		agbom = v
+	}
 	claims := map[string]any{
 		"agent_id": g.cfg.Agent, "initiating_user": principal,
-		"agbom_digest": canonical.Tag(g.cfg.AgbomDigest), "interception_point": "POST_CALL_TOOL_RESULT",
+		"agbom_digest": agbom, "interception_point": "POST_CALL_TOOL_RESULT",
 		"step_index": g.step, "chain_head": canonical.Tag(link),
 		"merkle_root": canonical.Tag(hex.EncodeToString(treeAfter.Root())), "tree_size": treeAfter.Size(),
 		"policy_bundle_hash": canonical.Tag(g.cfg.Policy.BundleHash()), "target_resource": action.Resource,
@@ -428,6 +451,9 @@ func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, prin
 	}
 	if run != "" {
 		claims["control_run"] = run
+	}
+	if g.cfg.Release != "" {
+		claims["control_gateway"] = g.cfg.Release
 	}
 	token := evidence.Token{
 		"iss": g.cfg.Issuer, "iat": g.cfg.Clock().Unix(), "nonce": "n-" + hex.EncodeToString(nonce),

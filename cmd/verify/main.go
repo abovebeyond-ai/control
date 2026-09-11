@@ -188,6 +188,32 @@ func main() {
 				broken++
 			}
 		}
+		// Row 1.1.1: the digest in the record resolves to a manifest. Where a bill of
+		// materials is kept beside a record, its canonical digest must be the record's.
+		named := map[string]int{}
+		for i, tok := range records {
+			c := tok.Claims()
+			want, _ := c["agbom_digest"].(string)
+			var manifest map[string]any
+			found, err := src.Attachment(agent, i, "agbom", &manifest)
+			if err != nil || !found {
+				continue
+			}
+			got, err := canonical.Digest(manifest)
+			if err != nil || canonical.Tag(got) != want {
+				fmt.Printf("BROKEN %s record %d: the bill of materials beside the record is not the one the record names\n", agent, i)
+				broken++
+				continue
+			}
+			what, _ := manifest["agbom"].(string)
+			if m, ok := manifest["model"].(map[string]any); ok && m != nil {
+				what += " with model " + fmt.Sprint(m["id"])
+			}
+			named[what]++
+		}
+		for what, n := range named {
+			fmt.Printf("holds  %s: %d record(s) name their bill of materials: %s\n", agent, n, what)
+		}
 		if *anchors != "" {
 			r, err := anchor.Latest(*anchors, agent)
 			fail(err)
