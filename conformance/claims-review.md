@@ -25,3 +25,13 @@ independent measurement, never by the hand.
 Any new public text about this system is added to this table before it is published.
 
 Sign-off: ______________________ (operator, Above Beyond), date ____________
+
+## Addendum, 11 September 2026
+
+The identity claim (agent-identified) moves from tier 2 to tier 3 by decision of the operator, on the
+ground already accepted for the chain claim: the log's versions are pinned on a public ledger that
+anyone reads back with published tooling and no credential (`anchor identity check`, control v0.10.0),
+the update key sits on a hardware token, and no named party is trusted for the history. What is
+still trusted is listed in the register: the domain, the token custody, DigiCert, Hedera's consensus
+and mirror nodes. Hedera is the test network until first external use, as for the chain claim. This
+is a grading of the evidence and says nothing about outputs; the rule above stands.
