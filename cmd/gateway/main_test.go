@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/google/go-tdx-guest/testing/testdata"
@@ -251,5 +252,108 @@ func TestEarlierQuotesAreKeptAndServedByDigest(t *testing.T) {
 	s.attestations(rr, httptest.NewRequest("GET", "/v1/attestations", nil))
 	if !strings.Contains(rr.Body.String(), canonical.SHA256(quote)) {
 		t.Fatalf("list: %s", rr.Body.String())
+	}
+}
+
+// A branch.push: the runner hands the change back as files, the gateway judges it with
+// its working, keeps the files beside the record, and creates the branch itself through
+// the Git Data API with its own credential; the commit message carries the evidence
+// footer. Files that do not match the judged digest never reach the judgement.
+func TestABranchIsPushedByTheGatewayFromTheFilesHandedBack(t *testing.T) {
+	calls := []string{}
+	var commitMessage string
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/git/commits/abc123"):
+			_, _ = w.Write([]byte(`{"sha":"abc123","tree":{"sha":"tree-base"}}`))
+		case strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"sha":"blob-1"}`))
+		case strings.HasSuffix(r.URL.Path, "/git/trees"):
+			if !strings.Contains(string(raw), `"base_tree":"tree-base"`) || !strings.Contains(string(raw), `"path":"package-lock.json"`) {
+				t.Errorf("tree request: %s", raw)
+			}
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"sha":"tree-new"}`))
+		case strings.HasSuffix(r.URL.Path, "/git/commits"):
+			var body map[string]any
+			_ = json.Unmarshal(raw, &body)
+			commitMessage, _ = body["message"].(string)
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"sha":"commit-new"}`))
+		case strings.HasSuffix(r.URL.Path, "/git/refs"):
+			if !strings.Contains(string(raw), `"ref":"refs/heads/elixir/security-1"`) || !strings.Contains(string(raw), `"sha":"commit-new"`) {
+				t.Errorf("ref request: %s", raw)
+			}
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"ref":"refs/heads/elixir/security-1"}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer github.Close()
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-token-x"), []byte("tok-x\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("34", 32))
+	agent := "did:webvh:QmTest:example.org#agent-fix"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"branch.push"}, Resources: []string{"x/y"}, MaxPerKind: 1, PremisesFor: []string{"branch.push"}}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.GitHub{SecretsDir: filepath.Join(dir, "secrets"), Base: github.URL})
+	post := func(body any) (int, map[string]any) {
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	material := premises.Material{
+		Certificate:      "@[package:tar]{tar} moves from %[from]{7.13.1} to %[to]{7.14.2}, ?[safe: FIX_WITHIN_SEMVER]{within semver}.",
+		Store:            map[string]any{"package:tar.name": "tar", "package:tar.from": "7.13.1", "package:tar.to": "7.14.2", "package:tar.semverSafe": 1},
+		Registry:         proveml.Registry{"FIX_WITHIN_SEMVER": {Field: "semverSafe", Op: "eq", Value: 1}},
+		Provenance:       map[string]string{"package:tar.name": "inferred", "package:tar.from": "inferred", "package:tar.to": "inferred", "package:tar.semverSafe": "gateway"},
+		RequiredControls: []string{"FIX_WITHIN_SEMVER"}, RequiredGrades: map[string]string{"semverSafe": "gateway"},
+	}
+	files := []effects.FileChange{{Path: "package-lock.json", Content: "eyJuYW1lIjoieSJ9"}}
+	digest, _ := effects.FilesDigest(files)
+	params := map[string]any{"branch": "elixir/security-1", "base_sha": "abc123", "message": "Security updates", "files_sha256": digest, "packages": 1}
+
+	// Files that do not match the digest are refused before any judgement.
+	tampered := []effects.FileChange{{Path: "package-lock.json", Content: "eyJuYW1lIjoiWiJ9"}}
+	if code, out := post(submitRequest{Agent: agent, Action: policy.Action{Kind: "branch.push", Resource: "x/y", Params: params}, Premises: &material, Files: tampered}); code != 400 || !strings.Contains(fmt.Sprint(out["error"]), "files_sha256") {
+		t.Fatalf("tampered files: %d %v", code, out)
+	}
+	if got := len(calls); got != 0 {
+		t.Fatalf("GitHub was reached before the judgement: %v", calls)
+	}
+
+	code, out := post(submitRequest{Agent: agent, Action: policy.Action{Kind: "branch.push", Resource: "x/y", Params: params}, Premises: &material, Files: files})
+	if code != 200 || out["verdict"] != "ALLOW" {
+		t.Fatalf("%d %v", code, out)
+	}
+	detail := out["effect"].(map[string]any)["detail"].(map[string]any)
+	if detail["commit"] != "commit-new" || detail["branch"] != "elixir/security-1" {
+		t.Errorf("effect: %v", detail)
+	}
+	if strings.Join(calls, " ") != "GET /repos/x/y/git/commits/abc123 POST /repos/x/y/git/blobs POST /repos/x/y/git/trees POST /repos/x/y/git/commits POST /repos/x/y/git/refs" {
+		t.Errorf("GitHub saw %v", calls)
+	}
+	if !strings.HasPrefix(commitMessage, "Security updates\n\n") || !strings.Contains(commitMessage, "Evidence: ") {
+		t.Errorf("commit message: %q", commitMessage)
+	}
+	// The files are kept beside the record, as the working is.
+	var kept []effects.FileChange
+	step := int(out["step"].(float64))
+	if found, err := store.Attachment(agent, step, "files", &kept); err != nil || !found || len(kept) != 1 || kept[0].Path != "package-lock.json" {
+		t.Errorf("attachment: %v %v %v", found, err, kept)
 	}
 }

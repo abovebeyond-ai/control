@@ -18,6 +18,10 @@ type Action struct {
 	Resource       string         `json:"resource"`
 	Params         map[string]any `json:"params"`
 	Classification string         `json:"classification"`
+	// Attached carries material that is too large for the judged parameters and is bound
+	// to them by digest (the files of a branch.push). Never part of the snapshot: ToMap
+	// leaves it out, and the record names it only through the digest in Params.
+	Attached map[string]any `json:"-"`
 }
 
 // ToMap is the action as the snapshot commits to it.

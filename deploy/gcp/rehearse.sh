@@ -8,6 +8,7 @@
 #   deploy/gcp/rehearse.sh tokens | live | dry        (the service-mode switch, and its reverse)
 #   deploy/gcp/rehearse.sh lockdown | breakglass | reboot | serial   (custody: no login, ever, except on purpose)
 #   deploy/gcp/rehearse.sh principal <hex>                           (the principal's ticket key changed; applies with a reboot)
+#   deploy/gcp/rehearse.sh upgrade                                   (carry startup.sh with its pinned release and reboot)
 #
 # Needs: gcloud (brew install --cask gcloud-cli), `gcloud auth login`, and
 # PROJECT set below or in the environment.
@@ -116,6 +117,13 @@ json.dump(c, open('/tmp/control-config.json','w'), separators=(',',':'))
 PYPRIN
   $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config=/tmp/control-config.json
   rm -f /tmp/control-config.json
+  "$0" reboot
+  ;;
+upgrade)
+  # A new release: startup.sh pins RELEASE and GATEWAY_SHA; carry the script to the
+  # instance and reboot, and the boot installs that release by checksum. No login.
+  $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file startup-script="$here/startup.sh"
+  echo "boot script carried: $(grep -o 'CONTROL_RELEASE:-v[0-9.]*' "$here/startup.sh")"
   "$0" reboot
   ;;
 reboot)

@@ -25,8 +25,11 @@ var Schemas = map[string]Schema{
 		Optional: map[string]string{"packages": "int", "plan_sha256": "hex64", "inputs": "strings"},
 	},
 	"branch.push": {
+		// The gateway creates the branch itself (since v0.11.0): from base_sha, with the
+		// files the hand attached, whose canonical digest is files_sha256, so the judged
+		// parameters bind what is pushed.
 		Required: map[string]string{"branch": "string"},
-		Optional: map[string]string{"packages": "int"},
+		Optional: map[string]string{"packages": "int", "base_sha": "string", "message": "string", "files_sha256": "hex64"},
 	},
 	"pull.open": {
 		Required: map[string]string{"branch": "string", "base": "string"},
