@@ -406,3 +406,49 @@ func TestTheBillOfMaterialsIsNamedByEveryRecordAndKeptBesideIt(t *testing.T) {
 		t.Errorf("manifest beside the record: %v %v %v", found, err, kept)
 	}
 }
+
+// A branch the gateway pushed and that never went green is removed on the record; only
+// the agent's own branches, never a person's.
+func TestABranchThatNeverWentGreenIsDeletedOnTheRecord(t *testing.T) {
+	calls := []string{}
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		w.WriteHeader(204)
+	}))
+	defer github.Close()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-token-x"), []byte("tok-x\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("37", 32))
+	agent := "did:webvh:QmTest:example.org#agent-major-upgrade"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"branch.delete"}, Resources: []string{"x/y"}, MaxPerKind: 1}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.GitHub{SecretsDir: filepath.Join(dir, "secrets"), Base: github.URL})
+	post := func(body any) (int, map[string]any) {
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	code, out := post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "branch.delete", Resource: "x/y", Params: map[string]any{"branch": "elixir/major-uuid-2026-09-12", "reason": "tests red after two attempts"}}})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	if strings.Join(calls, " ") != "DELETE /repos/x/y/git/refs/heads/elixir/major-uuid-2026-09-12" {
+		t.Errorf("GitHub saw %v", calls)
+	}
+	code, out = post(submitRequest{Run: "r2", Agent: agent, Action: policy.Action{Kind: "branch.delete", Resource: "x/y", Params: map[string]any{"branch": "main"}}})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != false || !strings.Contains(fmt.Sprint(out["effect"].(map[string]any)["error"]), "under elixir/") {
+		t.Fatalf("a person's branch: %d %v", code, out)
+	}
+	if len(calls) != 1 {
+		t.Errorf("GitHub was asked to delete a person's branch: %v", calls)
+	}
+}
