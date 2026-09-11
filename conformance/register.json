@@ -55,7 +55,7 @@
       "tier": 2,
       "trust_analysis": [
         "the domain and its DNS",
-        "the operator's update key custody (moving to a hardware token)"
+        "the operator's update key custody: a hardware token with PIN and touch since 11 September 2026, the next key on a second token kept apart"
       ],
       "rows_open_for_tier_3": [
         "witness on the log"
