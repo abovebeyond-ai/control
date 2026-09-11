@@ -10,7 +10,7 @@
       "trust_analysis": [
         "Intel's attestation chain",
         "Google's hypervisor and disk (a project owner can snapshot it; audit-logged)",
-        "Portal's capability key (published as #portal)",
+        "Portal's capability key, in Cloud KMS since 11 September 2026 (published as #portal)",
         "the mathematics"
       ],
       "rows_open_for_tier_3": [
@@ -82,7 +82,8 @@
       "fact_evidenced": "which signed task each action was performed under, and that the action lay within it",
       "tier": 2,
       "trust_analysis": [
-        "Portal's capability key custody (a file on the Portal server, published as #portal)",
+        "Portal's capability key custody: Google Cloud KMS since 11 September 2026, a sign-only service account on the Portal server, every use audit-logged (published as #portal, log version 7)",
+        "Google (KMS)",
         "the attested gateway"
       ],
       "rows_open_for_tier_3": [

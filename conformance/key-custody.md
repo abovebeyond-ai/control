@@ -63,6 +63,18 @@ gateway's grant names its public key, and every submission is signed with it. Cu
 the box's; a stolen key lets someone submit proposals within the grant, which the gateway
 still judges and records, and nothing more.
 
+## Portal's ticket key
+
+Signs the capability for one task (rows 4.2.1, 5.1.3), published as `#portal`. Until 11 September
+2026 a seed file in Portal's storage on the Forge box, readable by the `forge` user: whoever got
+into Portal could take it and sign for good, unseen. Since that evening (log version 7) the key is
+in Google Cloud KMS, `control/portal-capability` in europe-west4, Ed25519 at the software
+protection level (the HSM level offers no Ed25519), generated there and non-exportable. Portal
+holds the key file of a service account with two roles on that one key, `signerVerifier` and
+`publicKeyViewer`, at `/home/forge/.config/portal/kms-signer.json` (0600). Every signature is in
+Google's audit log with the caller. Residual: whoever holds that file signs while it is valid; the
+cure is revocation, and the log says what was signed meanwhile. The seed file is deleted.
+
 ## The client token and the tunnel account
 
 Bearer secrets, not signing keys: the client token guards the gateway's submit endpoint,
