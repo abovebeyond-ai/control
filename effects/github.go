@@ -7,6 +7,7 @@ package effects
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/policy"
 )
 
@@ -41,7 +43,45 @@ type GitHub struct {
 	Base       string // https://api.github.com
 }
 
-func (g GitHub) Kinds() []string { return []string{"workflow.dispatch", "pull.open"} }
+func (g GitHub) Kinds() []string { return []string{"workflow.dispatch", "branch.push", "pull.open"} }
+
+// FileChange is one file of a branch.push: the path and the full new content. The runner
+// in the project's CI computes the change and hands it back instead of pushing; the
+// gateway pushes with its own credential, so no write to a repository escapes judgement.
+type FileChange struct {
+	Path    string `json:"path"`
+	Content string `json:"content"` // base64
+}
+
+// FilesDigest is what params.files_sha256 must equal: the canonical digest of the files.
+func FilesDigest(files []FileChange) (string, error) {
+	items := make([]map[string]any, len(files))
+	for i, f := range files {
+		items[i] = map[string]any{"path": f.Path, "content": f.Content}
+	}
+	return canonical.Digest(items)
+}
+
+// DecodeFiles reads the attachment of a branch.push, whatever JSON shape it arrived in.
+func DecodeFiles(v any) ([]FileChange, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var files []FileChange
+	if err := json.Unmarshal(raw, &files); err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		if f.Path == "" || strings.HasPrefix(f.Path, "/") || strings.Contains(f.Path, "..") {
+			return nil, fmt.Errorf("file path %q is not a plain repository path", f.Path)
+		}
+		if _, err := base64.StdEncoding.DecodeString(f.Content); err != nil {
+			return nil, fmt.Errorf("file %s: content is not base64", f.Path)
+		}
+	}
+	return files, nil
+}
 
 func (g GitHub) token(owner string) (string, error) {
 	raw, err := os.ReadFile(filepath.Join(g.SecretsDir, "github-token-"+owner))
@@ -123,6 +163,75 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
 		}
 		return Outcome{OK: true, Detail: map[string]any{"status": status, "evidence_carried": carried}}
+	case "branch.push":
+		branch, _ := a.Params["branch"].(string)
+		baseSHA, _ := a.Params["base_sha"].(string)
+		message, _ := a.Params["message"].(string)
+		want, _ := a.Params["files_sha256"].(string)
+		if branch == "" || baseSHA == "" || want == "" {
+			return Outcome{Error: "branch.push needs params.branch, params.base_sha and params.files_sha256"}
+		}
+		files, err := DecodeFiles(a.Attached["files"])
+		if err != nil || len(files) == 0 {
+			return Outcome{Error: "branch.push needs the files attached: " + fmt.Sprint(err)}
+		}
+		if got, _ := FilesDigest(files); got != want {
+			return Outcome{Error: "the attached files do not match params.files_sha256"}
+		}
+		if message == "" {
+			message = "Security updates"
+		}
+		// The base commit's tree, so the new tree changes only the files given.
+		status, body, err := call("GET", fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, baseSHA), nil)
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 200 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the base commit: %v", status, body["message"])}
+		}
+		tree, _ := body["tree"].(map[string]any)
+		baseTree, _ := tree["sha"].(string)
+		if baseTree == "" {
+			return Outcome{Error: "the base commit has no tree"}
+		}
+		entries := make([]map[string]any, 0, len(files))
+		for _, f := range files {
+			status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/git/blobs", owner, repo), map[string]any{"content": f.Content, "encoding": "base64"})
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+			if status != 201 {
+				return Outcome{Error: fmt.Sprintf("GitHub answered %d for blob %s: %v", status, f.Path, body["message"])}
+			}
+			entries = append(entries, map[string]any{"path": f.Path, "mode": "100644", "type": "blob", "sha": body["sha"]})
+		}
+		status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/trees", owner, repo), map[string]any{"base_tree": baseTree, "tree": entries})
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 201 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the tree: %v", status, body["message"])}
+		}
+		newTree, _ := body["sha"].(string)
+		status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/commits", owner, repo), map[string]any{
+			"message": message, "tree": newTree, "parents": []string{baseSHA},
+			"author": map[string]any{"name": "elixir", "email": "elixir@abovebeyond.ai"},
+		})
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 201 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the commit: %v", status, body["message"])}
+		}
+		commit, _ := body["sha"].(string)
+		status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/refs", owner, repo), map[string]any{"ref": "refs/heads/" + branch, "sha": commit})
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 201 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
+		}
+		return Outcome{OK: true, Detail: map[string]any{"branch": branch, "commit": commit, "base": baseSHA, "files": len(files)}}
 	case "pull.open":
 		head, _ := a.Params["branch"].(string)
 		basis, _ := a.Params["base"].(string)

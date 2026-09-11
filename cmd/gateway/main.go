@@ -295,10 +295,15 @@ type submitRequest struct {
 	Action     policy.Action      `json:"action"`
 	Extension  map[string]any     `json:"extension"`
 	Premises   *premises.Material `json:"premises"`
+	// Files of a branch.push: the runner's change, handed back instead of pushed. Bound to
+	// the judged parameters by params.files_sha256, checked before the judgement so a
+	// refusal names a mismatch, and kept beside the record as the material was.
+	Files []effects.FileChange `json:"files,omitempty"`
 }
 
 func (s *service) submit(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	// Up to 8 MiB: a branch.push carries lockfiles, and a large one is a megabyte or two.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": "bad request: " + err.Error()})
 		return
@@ -324,10 +329,29 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
+	if req.Action.Kind == "branch.push" {
+		want, _ := req.Action.Params["files_sha256"].(string)
+		got, _ := effects.FilesDigest(req.Files)
+		if len(req.Files) == 0 || want == "" || got != want {
+			writeJSON(w, 400, map[string]any{"error": "branch.push needs the files attached and params.files_sha256 equal to their canonical digest"})
+			return
+		}
+		if req.Action.Attached == nil {
+			req.Action.Attached = map[string]any{}
+		}
+		req.Action.Attached["files"] = req.Files
+	}
 	v := g.SubmitWith(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature, req.Capability)
 	if v.Verdict == "FAIL_CLOSED" {
 		writeJSON(w, 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token})
 		return
+	}
+	if len(req.Files) > 0 {
+		// What was pushed, beside the record that allowed it, as the working is.
+		if err := s.store.Attach(req.Agent, v.Step, "files", req.Files); err != nil {
+			writeJSON(w, 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the files could not be kept beside the record: " + err.Error(), "step": v.Step})
+			return
+		}
 	}
 	principal := req.Principal
 	if principal == "" {
@@ -428,8 +452,13 @@ func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Act
 	case "pull.open":
 		body, _ := params["body"].(string)
 		params["body"] = body + relying.Footer(relying.EncodeToken(tok), capTok)
+	case "branch.push":
+		// The commit message carries the same footer as a pull request body: the record
+		// and the capability that allowed this change to exist.
+		message, _ := params["message"].(string)
+		params["message"] = message + relying.Footer(relying.EncodeToken(tok), capTok)
 	}
-	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification}
+	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
 }
 
 // authed refuses a submission without the client token when one is configured.
