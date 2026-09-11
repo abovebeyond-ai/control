@@ -7,11 +7,15 @@
 
 ## System (10.1.4, 10.1.6)
 
-Elixir's repair hands at Above Beyond: `security-fix` and `maintenance`, version the
-deployed commit of `abovebeyond-ai/elixir` on the Hetzner box (167.233.221.164), and the
-control gateway `abovebeyond-ai/control` v0.9.3 (courier and verifier v0.10.0), in service on an Intel TDX confidential VM
-on Google Cloud (europe-west4) since 10 September 2026; the in-process gateway inside Elixir
-is kept for comparison and writes no production records.
+Elixir's repair hands at Above Beyond: `security-fix` and `maintenance`, and since the
+evening of 11 September 2026 `major-upgrade` (agent `#agent-major-upgrade`: a model moves
+the calls across a major version in Elixir's clone with read and edit tools only, the
+project's own CI on the branch is the judge, a person merges; first run the same evening,
+which changed nothing and said why), version the deployed commit of `abovebeyond-ai/elixir`
+on the Hetzner box (167.233.221.164), and the control gateway `abovebeyond-ai/control`
+v0.13.0 (courier and verifier the same), in service on an Intel TDX confidential VM on
+Google Cloud (europe-west4) since 10 September 2026; the in-process gateway inside Elixir is
+kept for comparison and writes no production records.
 
 **Boundary.** Inside: the gateway process (policy, premises verifier, chain and tree,
 signing key, evidence log, effect adapters), its configuration and its secrets. Outside:
@@ -19,7 +23,12 @@ Portal, the hands, the anchorer, the verifier, the timestamp authority, Hedera, 
 provisioning service, the did:webvh log, GitHub.
 
 **In-scope action classes.** `workflow.dispatch` (start a repair workflow on a repository's
-CI), `branch.push`, `pull.open`. **Excluded:** `pull.merge` (no hand holds a grant for it;
+CI), `branch.push` (since control v0.11.0 performed by the gateway itself from the files
+the runner hands back), `pull.open`, and `branch.delete` (since v0.13.0: a branch of the
+agent's own naming that never went green, removed on the record; never a person's).
+Each grant names the judgements a certificate of premises may argue for it (v0.13.0):
+the two repair hands accept `FIX_WITHIN_SEMVER`, the major-upgrade hand `MAJOR_PROPOSED`
+and `MAJOR_UNDER_TESTS`; a working that argues another, or none, is refused. **Excluded:** `pull.merge` (no hand holds a grant for it;
 merging is a person's act or the automation rung earned in Portal's ledger, outside this
 claim), reads of any kind (measurements do not change a repository), and anything a
 person does with the same tokens by hand (not an agent action).
