@@ -44,11 +44,17 @@ by the DID log).
 
 ## The DID update key
 
-Signs new versions of `did.jsonl`, that is, changes to which keys are valid. Today a JWK
-file in `~/.config/proveml` on the operator's laptop, readable by the operator. From
-11 September: token A (YubiKey 5C NFC, PIV slot, Ed25519, PIN-protected, non-exportable),
-with the pre-rotated next key on token B kept elsewhere. A signature then needs the token
-and the PIN; the key cannot be copied. Runbook: `scripts/README.md` in the site repository.
+Signs new versions of `did.jsonl`, that is, changes to which keys are valid. Since
+11 September 2026 (log versions 5 and 6): on token A, a YubiKey 5C NFC, serial 39780281,
+PIV slot 9c, Ed25519, generated on the token and non-exportable; a signature needs the PIN
+and a touch. The pre-rotated next key is on token B, serial 39780275, slot 9d, kept apart
+from A. The software keys that signed versions 4 and 5 were deleted: verification needs
+only the public keys in the log, and a retired private key could only sign a fork.
+Residual: the laptop that runs the ceremony sees the PIN while it is typed; an attacker
+who holds token A and its PIN can sign until B rotates it out; losing A and B together
+ends the identity, since no seed exists off the tokens (a third committed next key on a
+file in a safe would cover that, at a future rotation). Runbook: `scripts/README.md` in
+the site repository, with what the day taught.
 
 ## The hands' submission key
 
