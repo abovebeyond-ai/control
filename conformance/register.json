@@ -50,7 +50,7 @@
       "id": "agent-identified",
       "statement": "the record names the agent by a fragment of a DID whose key history is signed",
       "domain": "C5",
-      "mechanism": "did:webvh log at abovebeyond.ai with pre-rotation",
+      "mechanism": "did:webvh log at abovebeyond.ai with pre-rotation; the update key on a hardware token; every version pinned at DigiCert and on the Hedera topic, the ledger's first posting per version compared with the log (anchor identity check, control v0.10.0)",
       "fact_evidenced": "which key was valid for the agent at the record's time",
       "tier": 2,
       "trust_analysis": [
@@ -58,8 +58,9 @@
         "the operator's update key custody: a hardware token with PIN and touch since 11 September 2026, the next key on a second token kept apart"
       ],
       "rows_open_for_tier_3": [
-        "witness on the log"
-      ]
+        "8.1.5"
+      ],
+      "note": "Hedera testnet until first external use; a did:webvh witness was not added, a named witness being a single trusted party (8.1.2); the ledger gives one history with no party to trust, as for history-anchored"
     },
     {
       "id": "gateway-attested",
