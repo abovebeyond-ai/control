@@ -48,3 +48,22 @@ The key above comes from `did.json`, which is derived from `did.jsonl`, the sign
 To verify the history rather than trust the derived document, the site's repository
 carries `scripts/did-webvh.mjs verify` (didwebvh-ts, DIF); it replays every version and
 its signature from the first entry, whose hash is the identifier.
+
+That proves nobody else wrote the log. It does not prove the operator wrote only one: a
+second history, signed with the same key and shown to a different reader, replays just as
+well. So every version's identifier is also posted to the public ledger, the same Hedera
+topic as the checkpoints, and you can read the topic back without any receipt of ours:
+
+```
+go run ./cmd/anchor identity check --log https://abovebeyond.ai/.well-known/did.jsonl \
+  --out /nonexistent --hedera testnet.json
+```
+
+where `testnet.json` is `{"network":"testnet","topicId":"0.0.10275637"}`; no account is
+needed to read. The checker keeps the FIRST message the ledger holds for each version
+number of this DID and compares it with the log you fetched. `holds` means the log you see
+is the one first published, version by version. `two histories` means it is not. A version
+that was never posted is named as well: the operator does not get to skip the ledger for a
+version it would rather nobody saw. The receipts we keep, one per version at DigiCert and
+on Hedera, are in the public copy under `anchors/identity/`; with `--out` pointing at them
+the same command checks those too, offline with `--offline`.
