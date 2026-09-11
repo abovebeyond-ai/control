@@ -5,7 +5,9 @@ verification using only published materials and no operator credentials. This pa
 those materials. Nothing here needs an account, a key or a word from Above Beyond; a
 machine with git, Go 1.22 or later, curl and python3 is enough.
 
-Keep the terminal output with the date: that is the recorded run.
+Keep the terminal output with the date: that is the recorded run. Or let GitHub keep it: fork
+https://github.com/abovebeyond-ai/verify-abovebeyond, switch Actions on, and your fork runs the
+same steps daily on GitHub's machines and writes the verdict under your account.
 
 ```sh
 # 1. The evidence: the public mirror of what the gateway wrote.

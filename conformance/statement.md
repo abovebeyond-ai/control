@@ -189,6 +189,17 @@ observed before it was rehearsed; the second run held and the work proceeded. Th
 check on pull requests, and the branch protection that requires it, are the next step; the
 drills, the availability analysis and the inventory follow.
 
+## The outsider's run (8.1.5)
+
+Not recorded yet. What exists since 11 September 2026 is `abovebeyond-ai/verify-abovebeyond`:
+one workflow that clones the public copy, takes the checker at a pinned release and the key
+from the identity log, verifies the chains, the workings, the attestation and the anchors,
+reads the identity log back from the public ledger, and writes the verdict with the run id,
+the release, the evidence commit and the key into the repository that ran it. It runs daily
+under Above Beyond's own account on GitHub's infrastructure with no credential of ours; that
+is a public run, not an outsider's, and the row stays open until a fork under someone else's
+account carries a verdict. Anyone may fork it and switch Actions on; nobody is asked to.
+
 ## Coverage reconciled, the validator and its window (10.3.2, 10.3.3, 10.3.4)
 
 Coverage that counts records against records proves nothing. Daily, after the mirror is
