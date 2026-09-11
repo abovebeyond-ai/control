@@ -57,6 +57,34 @@ type Grant struct {
 	// (rows 4.2.1, 5.1.3). The gateway takes the intersection of grant and
 	// capability, so a capability narrows and never widens (row 4.2.3).
 	PrincipalKey string `json:"principal_key,omitempty"`
+	// Judgements names the controls a certificate of premises may argue for this grant.
+	// A working is only as good as the rule it argues: a permit that accepts "within
+	// semver" must not be satisfied by a working that argues something else. Empty means
+	// the one judgement the fleet has used since 7 September 2026, FIX_WITHIN_SEMVER.
+	// A grant that lets an agent cross a major version names MAJOR_UNDER_TESTS here, and
+	// the working then has to argue tests before and after the change.
+	Judgements []string `json:"judgements,omitempty"`
+}
+
+// DefaultJudgements is what a grant accepts when it names none.
+var DefaultJudgements = []string{"FIX_WITHIN_SEMVER"}
+
+// Accepted says whether every control a certificate argues is one the grant accepts;
+// the first that is not is returned.
+func (p Policy) Accepted(required []string) (string, bool) {
+	accepted := p.Grant.Judgements
+	if len(accepted) == 0 {
+		accepted = DefaultJudgements
+	}
+	for _, c := range required {
+		if !contains(accepted, c) {
+			return c, false
+		}
+	}
+	if len(required) == 0 {
+		return "", false
+	}
+	return "", true
 }
 
 // PathSummary is bounded path state: counts per kind and the resources
@@ -140,7 +168,7 @@ func (p Policy) Bundle() map[string]any {
 	sort.Strings(premises)
 	return map[string]any{
 		"principal": p.Grant.Principal, "kinds": kinds, "resources": resources,
-		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises,
+		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises, "judgements": append([]string{}, p.Grant.Judgements...),
 		"path_aware": p.PathAware, "version": Version, "schemas": schemaDocument(),
 		"submitter_key": p.Grant.SubmitterKey, "principal_key": p.Grant.PrincipalKey,
 		"expiry": "none: a standing grant, replaced by a new bundle when it changes",
