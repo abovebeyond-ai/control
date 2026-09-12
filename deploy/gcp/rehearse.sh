@@ -6,7 +6,7 @@
 #
 #   deploy/gcp/rehearse.sh create | submit | fetch | verify | stop | start | delete | config FILE
 #   deploy/gcp/rehearse.sh tokens | live | dry        (the service-mode switch, and its reverse)
-#   deploy/gcp/rehearse.sh lockdown | breakglass | reboot | serial   (custody: no login, ever, except on purpose)
+#   deploy/gcp/rehearse.sh lockdown | breakglass | reboot | reset | serial   (custody: no login, ever, except on purpose; reboot is stop+start, reset a power cut)
 #   deploy/gcp/rehearse.sh principal <hex>                           (the principal's ticket key changed; applies with a reboot)
 #   deploy/gcp/rehearse.sh upgrade                                   (carry startup.sh with its pinned release and reboot)
 #
@@ -131,7 +131,16 @@ upgrade)
   "$0" reboot
   ;;
 reboot)
-  # A reset boots the pinned release from the boot script; the disk and the key persist.
+  # A stop and a start, not a reset. A reset is a power cut: on 11 and 12 September 2026
+  # every reset lost the attachments written in the minute before it (the records were
+  # synced, the files beside them were not). A stop is an orderly shutdown that flushes
+  # the disk; it takes a minute longer. The boot script then installs the pinned release.
+  $G instances stop "$NAME" --zone "$ZONE" --quiet
+  $G instances start "$NAME" --zone "$ZONE" --quiet
+  echo "stopped and started; the gateway is back within two minutes (attestation, then serve)"
+  ;;
+reset)
+  # The power cut, kept for when a stop hangs. Not for routine use.
   $G instances reset "$NAME" --zone "$ZONE"
   echo "reset; the gateway is back within a minute (attestation, then serve)"
   ;;
