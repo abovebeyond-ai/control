@@ -24,6 +24,7 @@ import (
 	"github.com/abovebeyond-ai/control/log"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/premises"
+	"github.com/abovebeyond-ai/control/relying"
 	proveml "github.com/abovebeyond-ai/proveml-go"
 )
 
@@ -450,5 +451,90 @@ func TestABranchThatNeverWentGreenIsDeletedOnTheRecord(t *testing.T) {
 	}
 	if len(calls) != 1 {
 		t.Errorf("GitHub was asked to delete a person's branch: %v", calls)
+	}
+}
+
+// A draft the gateway opened is marked ready on the record: the body is rewritten with
+// the green working's words, the footer it was born with stays, and GitHub's mutation
+// makes it a proposal. A person's pull request, or one without our footer, is refused.
+func TestADraftOfTheGatewaysOwnIsMarkedReadyWithItsFooterKept(t *testing.T) {
+	calls := []string{}
+	patched := ""
+	pulls := map[string]map[string]any{
+		"7": {"node_id": "PR_7", "number": 7, "draft": true, "html_url": "https://github.com/x/y/pull/7", "head": map[string]any{"ref": "elixir/major-uuid-2026-09-12"},
+			"body": "A model edited this code.\n\n" + relying.FooterMark + "\nEvidence: e1\nCapability: c1\n"},
+		"8": {"node_id": "PR_8", "number": 8, "draft": true, "head": map[string]any{"ref": "feature/mine"}, "body": "mine"},
+		"9": {"node_id": "PR_9", "number": 9, "draft": true, "head": map[string]any{"ref": "elixir/security-2026-09-01"}, "body": "no footer here"},
+	}
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		raw, _ := io.ReadAll(r.Body)
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/repos/x/y/pulls/"):
+			pr, ok := pulls[strings.TrimPrefix(r.URL.Path, "/repos/x/y/pulls/")]
+			if !ok {
+				w.WriteHeader(404)
+				return
+			}
+			json.NewEncoder(w).Encode(pr)
+		case r.Method == "PATCH":
+			var in map[string]any
+			json.Unmarshal(raw, &in)
+			patched, _ = in["body"].(string)
+			json.NewEncoder(w).Encode(map[string]any{"number": 7})
+		case r.URL.Path == "/graphql":
+			if !strings.Contains(string(raw), "markPullRequestReadyForReview") || !strings.Contains(string(raw), "PR_7") {
+				w.WriteHeader(400)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"markPullRequestReadyForReview": map[string]any{"pullRequest": map[string]any{"isDraft": false}}}})
+		default:
+			w.WriteHeader(500)
+		}
+	}))
+	defer github.Close()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-token-x"), []byte("tok-x\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("38", 32))
+	agent := "did:webvh:QmTest:example.org#agent-major-upgrade"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"pull.ready"}, Resources: []string{"x/y"}, MaxPerKind: 1}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.GitHub{SecretsDir: filepath.Join(dir, "secrets"), Base: github.URL})
+	post := func(run string, params map[string]any) (int, map[string]any) {
+		raw, _ := json.Marshal(submitRequest{Run: run, Agent: agent, Action: policy.Action{Kind: "pull.ready", Resource: "x/y", Params: params}})
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	code, out := post("r1", map[string]any{"number": 7, "body": "Judged green by run 4242.\n"})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("%d %v", code, out)
+	}
+	if want := "Judged green by run 4242.\n\n" + relying.FooterMark + "\nEvidence: e1\nCapability: c1\n"; patched != want {
+		t.Errorf("the body lost its footer or its words: %q", patched)
+	}
+	if strings.Join(calls, " ") != "GET /repos/x/y/pulls/7 PATCH /repos/x/y/pulls/7 POST /graphql" {
+		t.Errorf("GitHub saw %v", calls)
+	}
+	if effects.FooterMark != relying.FooterMark {
+		t.Errorf("the effects package spells the footer mark differently from the relying party")
+	}
+	for run, number := range map[string]int{"r2": 8, "r3": 9} {
+		calls = nil
+		code, out = post(run, map[string]any{"number": number})
+		if code != 200 || out["effect"].(map[string]any)["ok"] != false {
+			t.Fatalf("pull %d: %d %v", number, code, out)
+		}
+		if len(calls) != 1 {
+			t.Errorf("pull %d: GitHub was asked more than to look: %v", number, calls)
+		}
 	}
 }
