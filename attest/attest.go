@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/abovebeyond-ai/control/canonical"
@@ -52,6 +53,24 @@ type Record struct {
 	RTMRs      []string `json:"rtmrs"`
 	PublicKey  string   `json:"public_key"`
 	AcquiredAt string   `json:"acquired_at"`
+	// The boot event log (since v0.15.0): the ACPI CCEL table and the log it points
+	// at, as the kernel exposes them, so a reader can replay RTMR0 to RTMR2 and name
+	// what was measured instead of trusting three opaque digests.
+	EventLogTable string `json:"event_log_table,omitempty"`
+	EventLog      string `json:"event_log,omitempty"`
+	// What the gateway extended into RTMR3 before this quote, in order: the SHA-384
+	// of its own binary and of the configuration the operator carried. A reader
+	// folds these from zero and holds RTMR3 to the result.
+	RTMR3Inputs []Input `json:"rtmr3_inputs,omitempty"`
+}
+
+// Input is one extension of RTMR3: what it was and its SHA-384. A small input
+// travels with the record (the carried configuration, base64), so a reader holds
+// the digest to the bytes; a large one is found elsewhere (the binary, on the release).
+type Input struct {
+	Name    string `json:"name"`
+	SHA384  string `json:"sha384"`
+	Content string `json:"content,omitempty"`
 }
 
 // Measurement is the tagged digest the token carries under this record: the
@@ -121,6 +140,22 @@ func Acquire(pub ed25519.PublicKey) (*Record, error) {
 // FromRaw builds the record for a quote obtained elsewhere (a test, another provider).
 func FromRaw(raw []byte, provider string, pub ed25519.PublicKey) (*Record, error) {
 	return record(raw, provider, pub)
+}
+
+// WithBootLog attaches the boot event log the kernel exposes, when it does; a
+// machine without one (software, or a kernel that does not publish it) leaves the
+// record as it was, and the verifier says so rather than failing.
+func (r *Record) WithBootLog() {
+	table, err := os.ReadFile(ccelTablePath)
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(ccelDataPath)
+	if err != nil {
+		return
+	}
+	r.EventLogTable = base64.StdEncoding.EncodeToString(table)
+	r.EventLog = base64.StdEncoding.EncodeToString(data)
 }
 
 func record(raw []byte, provider string, pub ed25519.PublicKey) (*Record, error) {

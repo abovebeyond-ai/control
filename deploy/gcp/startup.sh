@@ -78,10 +78,15 @@ fi
 # rehearsal configuration below.
 CARRIED="$(meta control-config)"
 if [ -n "$CARRIED" ]; then
+  # The attribute's bytes are kept as they came: the gateway measures this file into
+  # RTMR3 before it takes its quote (since v0.15.0), so the quote binds the policy the
+  # machine booted with, and a reader can hold it to the file in the public copy.
+  printf '%s' "$CARRIED" > /var/lib/control/carried-config.json
+  chmod 644 /var/lib/control/carried-config.json
   printf '%s' "$CARRIED" | python3 -c "
 import json,sys
 c=json.load(sys.stdin)
-c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','carried_over':True,'release':'$RELEASE sha256:$GATEWAY_SHA'})
+c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','carried_over':True,'release':'$RELEASE sha256:$GATEWAY_SHA','carried_config':'/var/lib/control/carried-config.json'})
 json.dump(c, open('/var/lib/control/config.json','w'), indent=2)
 "
   echo "configuration taken from the instance attribute control-config"

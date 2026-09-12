@@ -63,16 +63,18 @@
     },
     {
       "id": "gateway-attested",
-      "statement": "the production gateway's key was generated inside an Intel TDX trust domain, is bound in the hardware quote, and the quote's digest is anchored with every checkpoint",
+      "statement": "the production gateway's key was generated inside an Intel TDX trust domain, is bound in the hardware quote, the quote's digest is anchored with every checkpoint, and the quote's registers are held to published references: Google's signed firmware endorsement, the replayed boot event log of the pinned public image, and the gateway's own binary and carried configuration in RTMR3",
       "domain": "C7",
-      "mechanism": "TDX quote with REPORTDATA = SHA-512('poc-evidence-key\\0' || key); MRTD as the record's measurement; daily refresh",
+      "mechanism": "TDX quote with REPORTDATA = SHA-512('poc-evidence-key\\0' || key); MRTD held to Google's launch endorsement under Google's pinned root; RTMR0-2 replayed from the CCEL event log carried in the record; RTMR3 = fold(SHA-384 of the release binary, SHA-384 of the carried configuration), extended by the gateway before the quote; daily refresh",
       "fact_evidenced": "that the signer of shadow records runs inside the measured domain",
       "tier": 2,
       "trust_analysis": [
         "Intel's attestation chain",
-        "Google's hypervisor and disk (snapshot by a project owner, audit-logged)"
+        "Google's word for its firmware, signed (the endorsement)",
+        "Google's hypervisor and disk (snapshot by a project owner, audit-logged)",
+        "Canonical's word for the contents of the public image the boot log names"
       ],
-      "note": "production since 10 September 2026 14:20 UTC; no login path to the VM since 14:45 UTC; Tier 3 with the rest once 8.1.5 is recorded by an outsider"
+      "note": "production since 10 September 2026 14:20 UTC; no login path to the VM since 14:45 UTC; the layer references since 12 September 2026 (v0.15.0, conformance/machine-image.md); Tier 3 with the rest once 8.1.5 is recorded by an outsider"
     },
     {
       "id": "task-authorized",

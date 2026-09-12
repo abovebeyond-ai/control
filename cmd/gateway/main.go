@@ -76,6 +76,10 @@ type config struct {
 	// Release names this gateway's own build, "v0.11.0 sha256:…", written by the boot
 	// script from what it installed; every record carries it as control_gateway.
 	Release string `json:"release"`
+	// CarriedConfig is the file holding the configuration the operator carried, as the
+	// attribute bytes: measured into RTMR3 before the quote (since v0.15.0), so a
+	// reader can hold the quote to the policy the machine booted with.
+	CarriedConfig string `json:"carried_config,omitempty"`
 }
 
 type service struct {
@@ -156,6 +160,21 @@ func attestation(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 	return nil, fmt.Errorf("attestation %q: software or tdx", cfg.Attestation)
 }
 
+// rtmr3Inputs: the running binary and the carried configuration, when there is one.
+func rtmr3Inputs(cfg config) []attest.Input {
+	exe, err := os.ReadFile("/proc/self/exe")
+	if err != nil {
+		return nil
+	}
+	inputs := []attest.Input{attest.InputOf("control-gateway-linux-amd64", exe)}
+	if cfg.CarriedConfig != "" {
+		if raw, err := os.ReadFile(cfg.CarriedConfig); err == nil {
+			inputs = append(inputs, attest.InputWithContent("carried-config", raw))
+		}
+	}
+	return inputs
+}
+
 func stored(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 	raw, err := os.ReadFile(filepath.Join(cfg.Store, "attestation.json"))
 	if err != nil {
@@ -180,10 +199,28 @@ func stored(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 }
 
 func acquire(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
+	// Our own layer first (since v0.15.0): the binary that will serve and the
+	// configuration the operator carried go into RTMR3 before the quote is taken, so
+	// the quote itself binds the release. A kernel without the door, or a register
+	// that holds something else, leaves the record without inputs, and the verifier
+	// says so; the quote is still taken.
+	inputs := rtmr3Inputs(cfg)
+	measured := false
+	if len(inputs) > 0 {
+		if err := attest.ExtendRTMR3(inputs); err != nil {
+			fmt.Fprintf(os.Stderr, "RTMR3 not extended: %v\n", err)
+		} else {
+			measured = true
+		}
+	}
 	r, err := attest.Acquire(key.Public().(ed25519.PublicKey))
 	if err != nil {
 		return nil, err
 	}
+	if measured {
+		r.RTMR3Inputs = inputs
+	}
+	r.WithBootLog()
 	raw, _ := json.MarshalIndent(r, "", "  ")
 	if err := os.WriteFile(filepath.Join(cfg.Store, "attestation.json"), append(raw, '\n'), 0o644); err != nil {
 		return nil, err
