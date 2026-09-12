@@ -117,6 +117,13 @@ func main() {
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets})
 	s.attested, err = attestation(cfg, key)
 	fail(err)
+	// Every agent's chain is opened now, not at its first request: an action the last
+	// run was stopped in the middle of gets its closing records at boot.
+	for agent := range cfg.Agents {
+		if _, err := s.gateway(agent); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", agent, err)
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))

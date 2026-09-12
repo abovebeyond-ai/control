@@ -217,6 +217,17 @@ under Above Beyond's own account on GitHub's infrastructure with no credential o
 is a public run, not an outsider's, and the row stays open until a fork under someone else's
 account carries a verdict. Anyone may fork it and switch Actions on; nobody is asked to.
 
+## An action the gateway was stopped in the middle of (7.6.x, since v0.16.1)
+
+A request record with no effect record behind it is an action the gateway was stopped in
+the middle of: on 12 September 2026 at 08:26 UTC a `pull.open` was judged ALLOW and the
+machine was reset before the effect was recorded. The effect may or may not have reached
+GitHub; what is certain is that nothing recorded it. Since v0.16.1 the gateway closes such
+an action at its next open, at boot, with the effect and result records it lacks, whose
+outcome says "interrupted" in those words, so every action on the chain carries its three
+records and a verifier reads an interruption rather than a gap. The one action of 12
+September is closed that way, and stays visible as such.
+
 ## Coverage reconciled, the validator and its window (10.3.2, 10.3.3, 10.3.4)
 
 Coverage that counts records against records proves nothing. Daily, after the mirror is

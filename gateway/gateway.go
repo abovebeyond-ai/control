@@ -164,7 +164,57 @@ func Open(cfg Config) (*Gateway, error) {
 		}
 	}
 	g.step = len(records)
+	// An action with a request record and no effect record is an action the gateway was
+	// stopped in the middle of (12 September 2026, 08:26 UTC: a pull.open judged ALLOW,
+	// then the machine was reset before the effect was recorded). The effect may or may
+	// not have reached the far end; what is certain is that nothing recorded it. The two
+	// missing records are written now, saying exactly that, so every action on the chain
+	// has its three and a verifier reads an interruption instead of a gap.
+	g.closeInterrupted(records)
 	return g, nil
+}
+
+// Interrupted is the outcome written for an action whose effect the gateway never recorded.
+const Interrupted = "interrupted: the gateway stopped between the request record and the effect record; whether the effect reached the far end is not recorded"
+
+func (g *Gateway) closeInterrupted(records []evidence.Token) {
+	seen := map[string]map[string]bool{}
+	var order []string
+	principals := map[string]string{}
+	steps := map[string]int{}
+	for i, tok := range records {
+		c := tok.Claims()
+		id, phase := str(c["control_action"]), str(c["control_phase"])
+		if id == "" {
+			continue
+		}
+		if seen[id] == nil {
+			seen[id] = map[string]bool{}
+			order = append(order, id)
+			principals[id] = str(c["initiating_user"])
+			steps[id] = i
+		}
+		seen[id][phase] = true
+	}
+	for _, id := range order {
+		if seen[id][PhaseEffect] && seen[id][PhaseResult] {
+			continue
+		}
+		var done stepAction
+		if found, _ := g.cfg.Store.Attachment(g.cfg.Agent, steps[id], "action", &done); !found {
+			// Without the action beside the record the phases cannot be written; the
+			// verifier keeps reporting the gap, which is the truth of it.
+			continue
+		}
+		verdict := str(records[steps[id]].Claims()["verdict"])
+		outcome := map[string]any{"ok": false, "error": Interrupted}
+		if !seen[id][PhaseEffect] {
+			g.Follow(done.Run, id, PhaseEffect, done.Action, principals[id], verdict, "effect interrupted", outcome)
+		}
+		if !seen[id][PhaseResult] {
+			g.Follow(done.Run, id, PhaseResult, done.Action, principals[id], verdict, "result interrupted", map[string]any{"verdict": verdict, "action": id, "effect": outcome})
+		}
+	}
 }
 
 // stepAction is what is written beside each record so the run's path can be

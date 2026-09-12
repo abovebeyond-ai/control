@@ -96,12 +96,14 @@ func TestRefusalsAreRecordedAndThePathCounts(t *testing.T) {
 func TestTheChainPersistsAndABrokenLogRefusesToOpen(t *testing.T) {
 	g, store := fixture(t)
 	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
+	// A request with no effect behind it is an interrupted action: reopening writes
+	// the two records that say so, and the next action starts after them.
 	again, err := Open(g.cfg)
-	if err != nil || again.Step() != 1 {
+	if err != nil || again.Step() != 3 {
 		t.Fatalf("reopen: %v, step %d", err, again.Step())
 	}
 	v := again.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil)
-	if !v.Allowed() || v.Token.Claims()["step_index"] != 1 {
+	if !v.Allowed() || v.Token.Claims()["step_index"] != 3 {
 		t.Errorf("%+v", v)
 	}
 	file := filepath.Join(store.Dir, strings.NewReplacer(":", "_", "#", "_").Replace(g.cfg.Agent)+".jsonl")
@@ -109,6 +111,44 @@ func TestTheChainPersistsAndABrokenLogRefusesToOpen(t *testing.T) {
 	os.WriteFile(file, []byte(strings.Replace(string(raw), `"verdict":"ALLOW"`, `"verdict":"DENY"`, 1)), 0o640)
 	if _, err := Open(g.cfg); err == nil || !strings.Contains(err.Error(), "breaks at record 0") {
 		t.Errorf("a rewritten log opened: %v", err)
+	}
+}
+
+// The gateway stopped between a request record and its effect record (a reset of the
+// machine on 12 September 2026): on the next open the effect and result records are
+// written, and say the effect is unrecorded, so the chain has its three per action and
+// a verifier reads an interruption, not a gap. An action with all three is left alone,
+// and opening twice writes nothing more.
+func TestAnInterruptedActionIsClosedOnOpenAndSaysSo(t *testing.T) {
+	g, store := fixture(t)
+	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
+	if !v.Allowed() {
+		t.Fatal(v)
+	}
+	again, err := Open(g.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, _ := store.Records(g.cfg.Agent)
+	if len(records) != 3 {
+		t.Fatalf("%d records", len(records))
+	}
+	effect, result := records[1].Claims(), records[2].Claims()
+	if effect["control_phase"] != PhaseEffect || effect["control_action"] != v.ActionID || effect["reason"] != "effect interrupted" || effect["verdict"] != "ALLOW" || effect["initiating_user"] != "p" {
+		t.Errorf("effect record: %v", effect)
+	}
+	if result["control_phase"] != PhaseResult || result["control_action"] != v.ActionID || result["reason"] != "result interrupted" {
+		t.Errorf("result record: %v", result)
+	}
+	var outcome map[string]any
+	if found, _ := store.Attachment(g.cfg.Agent, 1, "outcome", &outcome); !found || outcome["ok"] != false || outcome["error"] != Interrupted {
+		t.Errorf("outcome beside the effect: %v %v", found, outcome)
+	}
+	if _, err := Open(again.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if records, _ = store.Records(g.cfg.Agent); len(records) != 3 {
+		t.Errorf("opening again wrote %d records", len(records)-3)
 	}
 }
 
