@@ -1,0 +1,21 @@
+# The merge check of Proof-of-Control (row 8.3.5): a pull request opened by one of
+# Elixir's hands carries the gateway's signed record and the principal's capability in
+# its footer; this holds them to the DID log at abovebeyond.ai and the public evidence
+# mirror before the pull request can be merged. Runs only for the hands' branches (elixir/ and workbench/); a
+# person's pull request is not the hands' business. Needs no secret.
+name: evidence
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  evidence:
+    # The hands' branches: Elixir's under elixir/, the workbench's (a session on the
+    # operator's machine, proposing through the same gateway) under workbench/.
+    if: startsWith(github.head_ref, 'elixir/') || startsWith(github.head_ref, 'workbench/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: abovebeyond-ai/control-verify-action@v1
+        with:
+          mode: pull
