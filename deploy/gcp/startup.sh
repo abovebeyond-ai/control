@@ -9,8 +9,8 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.15.1}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-3bd25f0cae6970d2f6e67d29445f65975697e2133590bd215268803b73ca3325}"
+RELEASE="${CONTROL_RELEASE:-v0.16.0}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-169c356619580938d5df38afae63c42743fbd1b59a77a7896eaa6bed00ec90d2}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
 AGENT="${CONTROL_AGENT:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal}"
 PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai}"
@@ -172,7 +172,14 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now control-attest.timer
-systemctl enable control-gateway
+# The gateway is started here, by this script, after the release check, and not by
+# systemd at boot. On the first stop-and-start upgrade (12 September 2026, v0.15.1) the
+# unit came up before this script ran: the old binary measured itself into RTMR3, the
+# script then installed the new release and restarted it, and the new binary found the
+# register taken. A register extends once per boot, so the quote bound the release
+# that was replaced. Disabled, the gateway waits the few seconds this script takes; if
+# the script does not run, the gateway does not serve, which is the right way round.
+systemctl disable control-gateway >/dev/null 2>&1 || true
 systemctl restart control-gateway
 sleep 3
 systemctl --no-pager status control-gateway | head -5
