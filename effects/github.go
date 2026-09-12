@@ -57,6 +57,12 @@ type FileChange struct {
 	// plain file and the operator's next `rehearse.sh upgrade` would have been refused).
 	// Part of the digest only when true, so a hand that never sets it digests as before.
 	Executable bool `json:"executable,omitempty"`
+	// Delete removes the path instead of writing it (since v0.16.0). Content must be
+	// empty. Twice on 2026-09-12 a hand could add a file but not take one away: two
+	// copies of a measurement landed at the wrong path and had to be removed by the
+	// operator, and a rename was a person's job. A tree entry with a null sha is how
+	// GitHub's tree API deletes; that is all this is.
+	Delete bool `json:"delete,omitempty"`
 }
 
 // FilesDigest is what params.files_sha256 must equal: the canonical digest of the files.
@@ -66,6 +72,9 @@ func FilesDigest(files []FileChange) (string, error) {
 		items[i] = map[string]any{"path": f.Path, "content": f.Content}
 		if f.Executable {
 			items[i]["executable"] = true
+		}
+		if f.Delete {
+			items[i]["delete"] = true
 		}
 	}
 	return canonical.Digest(items)
@@ -84,6 +93,9 @@ func DecodeFiles(v any) ([]FileChange, error) {
 	for _, f := range files {
 		if f.Path == "" || strings.HasPrefix(f.Path, "/") || strings.Contains(f.Path, "..") {
 			return nil, fmt.Errorf("file path %q is not a plain repository path", f.Path)
+		}
+		if f.Delete && f.Content != "" {
+			return nil, fmt.Errorf("file %s: a deletion carries no content", f.Path)
 		}
 		if _, err := base64.StdEncoding.DecodeString(f.Content); err != nil {
 			return nil, fmt.Errorf("file %s: content is not base64", f.Path)
@@ -211,6 +223,10 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		}
 		entries := make([]map[string]any, 0, len(files))
 		for _, f := range files {
+			if f.Delete {
+				entries = append(entries, map[string]any{"path": f.Path, "mode": "100644", "type": "blob", "sha": nil})
+				continue
+			}
 			status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/git/blobs", owner, repo), map[string]any{"content": f.Content, "encoding": "base64"})
 			if err != nil {
 				return Outcome{Error: err.Error()}
