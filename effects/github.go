@@ -44,7 +44,7 @@ type GitHub struct {
 }
 
 func (g GitHub) Kinds() []string {
-	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open"}
+	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open", "pull.ready"}
 }
 
 // FileChange is one file of a branch.push: the path and the full new content. The runner
@@ -262,16 +262,87 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if head == "" || basis == "" || title == "" {
 			return Outcome{Error: "pull.open needs params.branch, params.base and params.title"}
 		}
-		status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/pulls", owner, repo), map[string]any{"head": head, "base": basis, "title": title, "body": text})
+		draft, _ := a.Params["draft"].(bool)
+		status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/pulls", owner, repo), map[string]any{"head": head, "base": basis, "title": title, "body": text, "draft": draft})
 		if err != nil {
 			return Outcome{Error: err.Error()}
 		}
 		if status != 201 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"url": body["html_url"], "number": body["number"]}}
+		return Outcome{OK: true, Detail: map[string]any{"url": body["html_url"], "number": body["number"], "draft": draft}}
+	case "pull.ready":
+		// Only a draft of the gateway's own making: its head is a branch under elixir/
+		// and its body carries the footer the gateway wrote. A person's draft is never
+		// marked ready by a machine, and a body without our footer is not ours.
+		number, ok := wholeNumber(a.Params["number"])
+		if !ok {
+			return Outcome{Error: "pull.ready needs params.number"}
+		}
+		status, body, err := call("GET", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number), nil)
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 200 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the pull request: %v", status, body["message"])}
+		}
+		head, _ := body["head"].(map[string]any)
+		ref, _ := head["ref"].(string)
+		if !strings.HasPrefix(ref, "elixir/") {
+			return Outcome{Error: "pull.ready is for a pull request on a branch under elixir/, not " + ref}
+		}
+		old, _ := body["body"].(string)
+		mark := strings.Index(old, FooterMark)
+		if mark < 0 {
+			return Outcome{Error: "the pull request carries no evidence footer of the gateway's"}
+		}
+		nodeID, _ := body["node_id"].(string)
+		if text, given := a.Params["body"].(string); given {
+			// The new body, then the footer as it was: the record that opened the draft
+			// stays the one the merge check reads; this record is in the chain.
+			status, res, err := call("PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number), map[string]any{"body": strings.TrimRight(text, "\n") + "\n\n" + old[mark:]})
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+			if status != 200 {
+				return Outcome{Error: fmt.Sprintf("GitHub answered %d for the body: %v", status, res["message"])}
+			}
+		}
+		if isDraft, _ := body["draft"].(bool); isDraft {
+			// Marking ready for review exists only in the GraphQL API.
+			status, res, err := call("POST", "/graphql", map[string]any{
+				"query":     "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
+				"variables": map[string]any{"id": nodeID},
+			})
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+			if errs, _ := res["errors"].([]any); status != 200 || len(errs) > 0 {
+				return Outcome{Error: fmt.Sprintf("GitHub answered %d marking the pull request ready: %v", status, errs)}
+			}
+		}
+		return Outcome{OK: true, Detail: map[string]any{"number": number, "url": body["html_url"], "ready": true}}
 	}
 	return Outcome{Error: "no adapter for " + a.Kind}
+}
+
+// FooterMark is the line the gateway's pull request footer starts with (relying.FooterMark);
+// spelled here so the effects package does not import the relying party.
+const FooterMark = "<!-- proof-of-control -->"
+
+// wholeNumber reads a JSON number that must be an integer.
+func wholeNumber(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		if n == float64(int(n)) {
+			return int(n), true
+		}
+	}
+	return 0, false
 }
 
 // Registry of adapters by kind.

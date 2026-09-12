@@ -24,8 +24,14 @@ provisioning service, the did:webvh log, GitHub.
 
 **In-scope action classes.** `workflow.dispatch` (start a repair workflow on a repository's
 CI), `branch.push` (since control v0.11.0 performed by the gateway itself from the files
-the runner hands back), `pull.open`, and `branch.delete` (since v0.13.0: a branch of the
-agent's own naming that never went green, removed on the record; never a person's).
+the runner hands back), `pull.open` (since v0.14.0 optionally as a draft), `branch.delete` (since v0.13.0: a branch of the
+agent's own naming that never went green, removed on the record; never a person's), and
+`pull.ready` (since v0.14.0: a draft the gateway opened, marked ready for review once the
+pull request's own checks went green, its body rewritten with the green working's words and
+the footer it was born with kept; refused for a person's pull request or one without the
+gateway's footer). The draft exists because most repositories run their tests on a pull
+request and not on a bare branch, so a change whose only judge is that run has to be a
+pull request before it is judged; the draft says it is not yet a proposal.
 Each grant names the judgements a certificate of premises may argue for it (v0.13.0):
 the two repair hands accept `FIX_WITHIN_SEMVER`, the major-upgrade hand `MAJOR_PROPOSED`
 and `MAJOR_UNDER_TESTS`; a working that argues another, or none, is refused. **Excluded:** `pull.merge` (no hand holds a grant for it;

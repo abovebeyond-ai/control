@@ -38,8 +38,17 @@ var Schemas = map[string]Schema{
 		Optional: map[string]string{"reason": "string"},
 	},
 	"pull.open": {
+		// draft (since v0.14.0): opened as a draft, for a change whose only judge is the
+		// pull request's own checks; pull.ready turns it into a proposal on green.
 		Required: map[string]string{"branch": "string", "base": "string"},
-		Optional: map[string]string{"title": "string", "body": "string", "packages": "int"},
+		Optional: map[string]string{"title": "string", "body": "string", "packages": "int", "draft": "bool"},
+	},
+	"pull.ready": {
+		// A draft the gateway opened, marked ready for review once the pull request's
+		// checks went green, with the body rewritten to say so; the footer the draft was
+		// born with stays, so the merge check still finds the record that made it.
+		Required: map[string]string{"number": "int"},
+		Optional: map[string]string{"body": "string"},
 	},
 }
 
@@ -98,6 +107,10 @@ func checkType(key, typ string, v any) error {
 			}
 		default:
 			return fmt.Errorf("parameter %q must be a whole number", key)
+		}
+	case "bool":
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("parameter %q must be true or false", key)
 		}
 	case "strings":
 		m, ok := v.(map[string]any)
