@@ -179,14 +179,36 @@ func (s *Store) Attach(agent string, step int, name string, data any) error {
 	if err != nil {
 		return err
 	}
-	// Written whole or not at all: a reset that lands mid-write left an empty action
-	// file beside a record on 11 September 2026, and every reader of it failed since.
+	// Written whole and synced, then renamed into place. The records were synced from
+	// the first day; the material beside them was not, and every hard reset of the
+	// machine on 11 and 12 September 2026 left the attachments of the minute before it
+	// as empty files (35 of them, all beside intact records). A reset is a power cut:
+	// a file whose name reached the disk but whose bytes did not reads as empty.
 	final := filepath.Join(dir, strconv.Itoa(step)+".json")
 	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o640); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, final)
+	if _, err := f.Write(append(raw, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // Attachment reads material beside a record; nil when there is none.
