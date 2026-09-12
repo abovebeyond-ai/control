@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,14 +201,19 @@ func (g *Gateway) closeInterrupted(records []evidence.Token) {
 		if seen[id][PhaseEffect] && seen[id][PhaseResult] {
 			continue
 		}
+		c := records[steps[id]].Claims()
+		verdict := str(c["verdict"])
+		outcome := map[string]any{"ok": false, "error": Interrupted}
 		var done stepAction
 		if found, _ := g.cfg.Store.Attachment(g.cfg.Agent, steps[id], "action", &done); !found {
-			// Without the action beside the record the phases cannot be written; the
-			// verifier keeps reporting the gap, which is the truth of it.
-			continue
+			// The action beside the record went with the same reset (a file whose name
+			// never reached the disk). The record's own claims still say what was judged:
+			// the kind, from what the grant matched, and the resource. That is what the
+			// closing records name, and they say the parameters are lost.
+			kind, _, _ := strings.Cut(str(c["control_matched"]), " on ")
+			done = stepAction{Action: policy.Action{Kind: kind, Resource: str(c["target_resource"])}}
+			outcome["error"] = Interrupted + "; the action's parameters beside the request record were lost with the same stop, kind and resource are taken from the record"
 		}
-		verdict := str(records[steps[id]].Claims()["verdict"])
-		outcome := map[string]any{"ok": false, "error": Interrupted}
 		if !seen[id][PhaseEffect] {
 			g.Follow(done.Run, id, PhaseEffect, done.Action, principals[id], verdict, "effect interrupted", outcome)
 		}

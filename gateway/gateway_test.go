@@ -152,6 +152,26 @@ func TestAnInterruptedActionIsClosedOnOpenAndSaysSo(t *testing.T) {
 	}
 }
 
+// The same stop can take the action file beside the request with it: the closing
+// records then name the kind and resource from the record's claims and say the
+// parameters are lost, rather than leaving the gap.
+func TestAnInterruptedActionWithoutItsFileIsStillClosed(t *testing.T) {
+	g, store := fixture(t)
+	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
+	os.Remove(filepath.Join(store.Dir, strings.NewReplacer(":", "_", "#", "_").Replace(g.cfg.Agent), "action", "0.json"))
+	if _, err := Open(g.cfg); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := store.Records(g.cfg.Agent)
+	if len(records) != 3 || records[1].Claims()["control_action"] != v.ActionID || records[1].Claims()["target_resource"] != "x/y" {
+		t.Fatalf("%d records: %v", len(records), records[len(records)-1].Claims())
+	}
+	var outcome map[string]any
+	if found, _ := store.Attachment(g.cfg.Agent, 1, "outcome", &outcome); !found || !strings.Contains(str(outcome["error"]), "parameters beside the request record were lost") {
+		t.Errorf("outcome: %v %v", found, outcome)
+	}
+}
+
 func TestAnUnwritableStoreFailsClosed(t *testing.T) {
 	g, store := fixture(t)
 	g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
