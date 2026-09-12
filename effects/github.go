@@ -85,8 +85,14 @@ func DecodeFiles(v any) ([]FileChange, error) {
 	return files, nil
 }
 
+// token reads the credential for a repository owner. The file is named by the owner in
+// lower case: GitHub compares owners case-insensitively, the grants name them as the
+// repositories spell them (ShaneDeconinck, Hoet-design), and the boot script on the VM
+// fetches the secrets under lower-case names. The first proposal of the workbench on
+// 2026-09-11 was allowed, recorded, and then not performed: "no GitHub token for
+// ShaneDeconinck", while github-token-shanedeconinck sat right there.
 func (g GitHub) token(owner string) (string, error) {
-	raw, err := os.ReadFile(filepath.Join(g.SecretsDir, "github-token-"+owner))
+	raw, err := os.ReadFile(filepath.Join(g.SecretsDir, "github-token-"+strings.ToLower(owner)))
 	if err != nil {
 		return "", fmt.Errorf("no GitHub token for %s in the gateway's secrets", owner)
 	}
