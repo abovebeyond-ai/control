@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -36,6 +37,10 @@ func main() {
 	}
 	if os.Args[1] == "identity" {
 		identity(os.Args[2:])
+		return
+	}
+	if os.Args[1] == "topic" {
+		topic(os.Args[2:])
 		return
 	}
 	fs := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
@@ -100,6 +105,30 @@ func main() {
 	default:
 		usage()
 	}
+}
+
+// topic create: one public topic on the network the operator file names, once. The id
+// it prints goes into the operator file as topicId; the file is never written here.
+func topic(args []string) {
+	if len(args) < 1 || args[0] != "create" {
+		usage()
+	}
+	fs := flag.NewFlagSet("topic create", flag.ExitOnError)
+	hederaFile := fs.String("hedera", "", "a Hedera operator file {network, accountId, privateKey}")
+	memo := fs.String("memo", "abovebeyond.ai proof-of-control anchors", "the topic's memo, public")
+	_ = fs.Parse(args[1:])
+	if *hederaFile == "" {
+		fail(errors.New("topic create needs --hedera"))
+	}
+	raw, err := os.ReadFile(*hederaFile)
+	fail(err)
+	var op anchor.Operator
+	fail(json.Unmarshal(raw, &op))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	id, err := anchor.SDKSubmitter{Operator: op}.CreateTopic(ctx, *memo)
+	fail(err)
+	fmt.Printf("topic %s on %s; add it to the operator file as topicId\n", id, op.Network)
 }
 
 // identity: the did:webvh log, pinned per version and read back from the ledger.
@@ -207,6 +236,7 @@ func chosen(tsa, hederaFile string) []anchor.Backend {
 }
 
 func usage() {
+	fmt.Fprintln(os.Stderr, "usage: anchor topic create --hedera operator.json [--memo TEXT]")
 	fmt.Fprintln(os.Stderr, "usage: anchor pin (--gateway URL --agent DID | --checkpoint FILE --key HEX) --out DIR (--tsa URL | --hedera FILE)\n       anchor check --out DIR --agent DID --key HEX [--offline]\n       anchor identity pin --log FILE|URL --out DIR (--tsa URL | --hedera FILE)\n       anchor identity check --log FILE|URL --out DIR (--tsa URL | --hedera FILE) [--offline]")
 	os.Exit(2)
 }

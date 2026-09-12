@@ -72,7 +72,7 @@ independent monitors (7.2.2, 7.3.3, 7.3.5, 8.1.6, 8.1.7) describe.
 - The service's checkpoint for both agents was pinned on 7 September at 19:56 UTC on two
   independent parties: DigiCert's RFC 3161 responder ("DigiCert SHA256 RSA4096 Timestamp
   Responder 2026 1", verified offline against the certificate in the token) and Hedera
-  Consensus Service (testnet, topic 0.0.10275637, sequence 10, kept as the mirror node
+  Consensus Service (at the time the testnet, topic 0.0.10275637; mainnet topic 0.0.10856156 since 12 September 2026, sequence 10, kept as the mirror node
   returned it). Two receipts per checkpoint; the verifier demands that the chain extend
   the anchored head.
 - The agent is `did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-security-fix`,

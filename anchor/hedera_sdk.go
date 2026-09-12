@@ -22,7 +22,8 @@ type SDKSubmitter struct{ Operator Operator }
 
 var txIDForm = regexp.MustCompile(`@(\d+)\.(\d+)$`)
 
-func (s SDKSubmitter) Submit(ctx context.Context, topicID string, message []byte) (int64, string, error) {
+// client opens the network the operator names, with the operator set.
+func (s SDKSubmitter) client() (*hiero.Client, error) {
 	var client *hiero.Client
 	switch s.Operator.Network {
 	case "mainnet":
@@ -30,12 +31,11 @@ func (s SDKSubmitter) Submit(ctx context.Context, topicID string, message []byte
 	case "testnet", "":
 		client = hiero.ClientForTestnet()
 	default:
-		return 0, "", errors.New("unknown Hedera network " + s.Operator.Network)
+		return nil, errors.New("unknown Hedera network " + s.Operator.Network)
 	}
-	defer client.Close()
 	account, err := hiero.AccountIDFromString(s.Operator.AccountID)
 	if err != nil {
-		return 0, "", err
+		return nil, err
 	}
 	var key hiero.PrivateKey
 	if strings.HasPrefix(s.Operator.PrivateKey, "3030") {
@@ -44,9 +44,41 @@ func (s SDKSubmitter) Submit(ctx context.Context, topicID string, message []byte
 		key, err = hiero.PrivateKeyFromStringEd25519(s.Operator.PrivateKey)
 	}
 	if err != nil {
-		return 0, "", err
+		return nil, err
 	}
 	client.SetOperator(account, key)
+	return client, nil
+}
+
+// CreateTopic makes a public topic with the given memo, nobody's submit key, so anyone
+// can read it and only the operator pays to post; returns its id. Done once per
+// network (12 September 2026: the mainnet topic, after months on the testnet one).
+func (s SDKSubmitter) CreateTopic(ctx context.Context, memo string) (string, error) {
+	client, err := s.client()
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	resp, err := hiero.NewTopicCreateTransaction().SetTopicMemo(memo).Execute(client)
+	if err != nil {
+		return "", err
+	}
+	receipt, err := resp.GetReceipt(client)
+	if err != nil {
+		return "", err
+	}
+	if receipt.TopicID == nil {
+		return "", errors.New("the receipt names no topic")
+	}
+	return receipt.TopicID.String(), nil
+}
+
+func (s SDKSubmitter) Submit(ctx context.Context, topicID string, message []byte) (int64, string, error) {
+	client, err := s.client()
+	if err != nil {
+		return 0, "", err
+	}
+	defer client.Close()
 	topic, err := hiero.TopicIDFromString(topicID)
 	if err != nil {
 		return 0, "", err

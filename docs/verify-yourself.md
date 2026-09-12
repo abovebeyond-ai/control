@@ -70,11 +70,12 @@ topic as the checkpoints, and you can read the topic back without any receipt of
 
 ```
 go run ./cmd/anchor identity check --log https://abovebeyond.ai/.well-known/did.jsonl \
-  --out /nonexistent --hedera testnet.json
+  --out /nonexistent --hedera mainnet.json
 ```
 
-where `testnet.json` is `{"network":"testnet","topicId":"0.0.10275637"}`; no account is
-needed to read. The checker keeps the FIRST message the ledger holds for each version
+where `mainnet.json` is `{"network":"mainnet","topicId":"0.0.10856156"}`; no account is
+needed to read. Before 12 September 2026 the anchors went to the testnet, topic
+0.0.10275637 with `"network":"testnet"`, which stays readable for that history. The checker keeps the FIRST message the ledger holds for each version
 number of this DID and compares it with the log you fetched. `holds` means the log you see
 is the one first published, version by version. `two histories` means it is not. A version
 that was never posted is named as well: the operator does not get to skip the ledger for a
