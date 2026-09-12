@@ -69,7 +69,7 @@ today:
 | the action carried a verified reason | ProveML certificate with its material beside the record; replayable by three independent verifiers | 2 | same boundary as above |
 | the chain has not been rewritten below the anchored size | RFC 3161 timestamp and Hedera consensus time on the signed checkpoint, daily | 3 | Hedera testnet; mainnet before external use |
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it; the update key on a hardware token since 11 September 2026; every version of the log pinned at DigiCert and on Hedera, and the ledger's first posting per version compared with the log (control v0.10.0, `anchor identity check`) | 3 | Hedera testnet; mainnet before external use, as for the chain claim above. The witness of the did:webvh format was not added: a named witness is a single trusted party (8.1.2); the public ledger answers the same question, one history, with no party to trust |
-| the gateway's key was made inside the sealed machine | TDX quote binding the key (REPORTDATA = SHA-512 of the key), MRTD as the record's measurement, refreshed daily; the quote's digest anchored with every checkpoint | 2 | 8.1.5; the measurement is not yet matched to a published build of the machine image |
+| the gateway's key was made inside the sealed machine | TDX quote binding the key (REPORTDATA = SHA-512 of the key), MRTD as the record's measurement, refreshed daily; the quote's digest anchored with every checkpoint | 2 | 8.1.5 |
 | every action was performed on a ticket the principal signed for that task | Ed25519 capability (issuer #portal, subject the hand, audience the gateway, task, kinds, resources, expiry), verified by the gateway, intersected with the grant; digest and task on the record | 2 | 8.1.5 (the ticket key is in Cloud KMS since 11 September 2026; Google is on the trust list) |
 
 Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
@@ -86,7 +86,13 @@ a branch by the gateway with its own token, opened as a draft, judged green by t
 project's own tests, marked ready by the gateway (`pull.ready`, v0.14.0), and merged by the
 operator. Every write to a client repository is now inside the boundary; the exception is
 closed. The in-process gateway in Elixir no longer writes production records. Platform INTEL_TDX, the key generated inside the trust
-domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3). Since 14:45 UTC the
+domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3). Since 12 September
+2026 (v0.15.0) the quote's registers are held to references a reader can fetch: the MRTD to
+Google's signed launch endorsement for that firmware, RTMR0 to RTMR2 to the boot event log
+the record carries, replayed, naming shim, grub, the kernel with its command line and the
+initrd of the pinned public image, and RTMR3 to the gateway's own binary and the carried
+configuration, which it measures in before taking the quote (`conformance/machine-image.md`
+names the references and what each rests on). Since 14:45 UTC the
 same day there is no login path to the VM: its secrets come from Secret Manager under its
 own service account, its policy from an instance attribute, and both apply at boot; the
 custody configuration in `key-custody.md` names the one path left, a disk snapshot by the

@@ -52,6 +52,8 @@ func main() {
 	offline := flag.Bool("offline", false, "check anchor receipts and the attestation without the network")
 	attestation := flag.String("attestation", "", "the gateway's attestation record (attestation.json beside the store)")
 	gatewayURL := flag.String("gateway", "", "read everything from a running gateway at this URL instead of a store directory")
+	endorsement := flag.String("endorsement", "", "Google's launch endorsement for the firmware (a .binarypb); default: fetched by MRTD unless --offline")
+	releaseSHA384 := flag.String("release-sha384", "", "the SHA-384 of the release binary the machine should have measured into RTMR3 (from the release asset)")
 	flag.Parse()
 	var src source
 	var live *remote
@@ -119,6 +121,7 @@ func main() {
 		}
 		_, *measurement, _ = canonical.UntagAny(rec.Measurement())
 		fmt.Printf("holds  attestation: %s quote binds the key, MRTD %s\n", rec.Platform, rec.MRTD)
+		broken += bootLayers(&rec, *endorsement, *releaseSHA384, *offline)
 	}
 	for _, agent := range agents {
 		records, err := src.Records(agent)
@@ -400,4 +403,80 @@ func fail(err error) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// bootLayers holds the machine to its layers (since v0.15.0): the firmware to Google's
+// signed endorsement, the boot chain to the replayed event log, and RTMR3 to the
+// gateway's own inputs. Each layer is its own line, so a reader sees which of the
+// three parties' words the quote rests on and where it stops.
+func bootLayers(rec *attest.Record, endorsementFile, releaseSHA384 string, offline bool) int {
+	broken := 0
+	// The firmware.
+	var raw []byte
+	var err error
+	switch {
+	case endorsementFile != "":
+		raw, err = os.ReadFile(endorsementFile)
+	case offline:
+		fmt.Printf("note   firmware: offline, Google's endorsement for MRTD %s not fetched (%s)\n", rec.MRTD[:16], attest.EndorsementURL(rec.MRTD))
+	default:
+		raw, err = attest.FetchEndorsement(nil, rec)
+	}
+	if err != nil {
+		fmt.Printf("BROKEN firmware: %v\n", err)
+		broken++
+	} else if raw != nil {
+		fw, err := attest.VerifyFirmware(rec, raw, time.Time{})
+		if err != nil {
+			fmt.Printf("BROKEN firmware: %v\n", err)
+			broken++
+		} else {
+			fmt.Printf("holds  firmware: MRTD is one Google signed for UEFI %s… (endorsed %s, svn %d)\n", fw.UEFISHA384[:16], fw.EndorsedAt.Format("2006-01-02"), fw.SVN)
+		}
+	}
+	// The boot chain.
+	if rec.EventLog == "" {
+		fmt.Printf("note   boot: the record carries no event log; RTMR0 to RTMR2 are unnamed digests\n")
+	} else if boot, err := attest.ReplayBootLog(rec); err != nil {
+		fmt.Printf("BROKEN boot: %v\n", err)
+		broken++
+	} else {
+		fmt.Printf("holds  boot: %d events replay to RTMR0 to RTMR2; secure boot %v; kernel %q\n", boot.Events, boot.SecureBoot, boot.Kernel)
+		for _, a := range boot.Apps {
+			fmt.Printf("       boot: EFI application %s\n", a)
+		}
+		for _, f := range boot.Files {
+			fmt.Printf("       boot: %s %s\n", f.SHA384, f.Name)
+		}
+	}
+	// Our own layer.
+	if err := attest.VerifyRTMR3(rec); err != nil {
+		if len(rec.RTMR3Inputs) == 0 {
+			fmt.Printf("note   gateway: %v\n", err)
+		} else {
+			fmt.Printf("BROKEN gateway: %v\n", err)
+			broken++
+		}
+	} else {
+		for _, in := range rec.RTMR3Inputs {
+			fmt.Printf("holds  gateway: RTMR3 carries %s %s\n", in.Name, in.SHA384)
+			if in.Name == "control-gateway-linux-amd64" && releaseSHA384 != "" && in.SHA384 != releaseSHA384 {
+				fmt.Printf("BROKEN gateway: the measured binary is not the release asset (%s…)\n", releaseSHA384[:16])
+				broken++
+			}
+		}
+		if releaseSHA384 != "" && !broken1(rec, releaseSHA384) {
+			fmt.Printf("holds  gateway: the measured binary is the release asset\n")
+		}
+	}
+	return broken
+}
+
+func broken1(rec *attest.Record, releaseSHA384 string) bool {
+	for _, in := range rec.RTMR3Inputs {
+		if in.Name == "control-gateway-linux-amd64" {
+			return in.SHA384 != releaseSHA384
+		}
+	}
+	return true
 }

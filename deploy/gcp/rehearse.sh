@@ -24,10 +24,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 case "${1:-}" in
 create)
+  # The image by name, not by family (since 12 September 2026): the boot chain the
+  # quote's RTMR1 and RTMR2 measure is that image's shim, grub, kernel and initrd,
+  # and a reference value needs a fixed thing to point at. conformance/machine-image.md
+  # names the image the production machine runs; change both together.
   $G instances create "$NAME" --zone "$ZONE" \
     --machine-type c3-standard-4 --confidential-compute-type TDX \
     --maintenance-policy TERMINATE --shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
-    --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
+    --image "${CONTROL_GCP_IMAGE:-ubuntu-2404-noble-amd64-v20260906}" --image-project ubuntu-os-cloud \
     --boot-disk-size 20GB --no-address \
     --metadata-from-file startup-script="$here/startup.sh"
   echo "created without a public address; reach it with: gcloud compute ssh --tunnel-through-iap"

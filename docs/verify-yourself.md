@@ -26,12 +26,20 @@ for m in doc["verificationMethod"]:
 echo "gateway key from the DID log: $KEY"
 # 4. Verify: chain, three records per action, premises replayed, attestation under
 #    Intel's roots, anchors, and that the anchored attestation is the one presented.
+#    Since v0.15.0 also the machine's layers: the firmware against Google's signed
+#    endorsement, the boot log replayed to RTMR0-2, and RTMR3 against the gateway's
+#    own binary (the release asset, hashed here) and carried configuration.
+RELEASE=$(grep -o 'CONTROL_RELEASE:-v[0-9.]*' control/deploy/gcp/startup.sh | cut -d- -f2)
+curl -fsSL -o /tmp/control-gateway-linux-amd64 "https://github.com/abovebeyond-ai/control/releases/download/$RELEASE/control-gateway-linux-amd64"
 cd control && go run ./cmd/verify \
   --store ../control-evidence/store \
   --key "$KEY" \
   --anchors ../control-evidence/anchors \
-  --attestation ../control-evidence/store/attestation.json
+  --attestation ../control-evidence/store/attestation.json \
+  --release-sha384 "$(sha384sum /tmp/control-gateway-linux-amd64 | cut -d' ' -f1)"
 ```
+
+The layers are explained, with what each rests on, in `conformance/machine-image.md`.
 
 Drop `--offline` in when the machine has no network for Intel's collateral or the Hedera
 mirror node; the signatures, chains and receipts still verify, the freshness of the
