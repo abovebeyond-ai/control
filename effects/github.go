@@ -53,6 +53,10 @@ func (g GitHub) Kinds() []string {
 type FileChange struct {
 	Path    string `json:"path"`
 	Content string `json:"content"` // base64
+	// Executable keeps a script's bit (since v0.15.0: the rehearsal script arrived as a
+	// plain file and the operator's next `rehearse.sh upgrade` would have been refused).
+	// Part of the digest only when true, so a hand that never sets it digests as before.
+	Executable bool `json:"executable,omitempty"`
 }
 
 // FilesDigest is what params.files_sha256 must equal: the canonical digest of the files.
@@ -60,6 +64,9 @@ func FilesDigest(files []FileChange) (string, error) {
 	items := make([]map[string]any, len(files))
 	for i, f := range files {
 		items[i] = map[string]any{"path": f.Path, "content": f.Content}
+		if f.Executable {
+			items[i]["executable"] = true
+		}
 	}
 	return canonical.Digest(items)
 }
@@ -211,7 +218,11 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			if status != 201 {
 				return Outcome{Error: fmt.Sprintf("GitHub answered %d for blob %s: %v", status, f.Path, body["message"])}
 			}
-			entries = append(entries, map[string]any{"path": f.Path, "mode": "100644", "type": "blob", "sha": body["sha"]})
+			mode := "100644"
+			if f.Executable {
+				mode = "100755"
+			}
+			entries = append(entries, map[string]any{"path": f.Path, "mode": mode, "type": "blob", "sha": body["sha"]})
 		}
 		status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/trees", owner, repo), map[string]any{"base_tree": baseTree, "tree": entries})
 		if err != nil {
