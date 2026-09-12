@@ -276,6 +276,13 @@ func TestABranchIsPushedByTheGatewayFromTheFilesHandedBack(t *testing.T) {
 			if !strings.Contains(string(raw), `"base_tree":"tree-base"`) || !strings.Contains(string(raw), `"path":"package-lock.json"`) {
 				t.Errorf("tree request: %s", raw)
 			}
+			// The script keeps its bit, the lock file stays plain.
+			if !strings.Contains(string(raw), `"mode":"100755","path":"bin/rehearse.sh"`) && !strings.Contains(string(raw), `"path":"bin/rehearse.sh","sha":"blob-1","type":"blob"`) {
+				t.Errorf("the executable bit was lost: %s", raw)
+			}
+			if strings.Count(string(raw), `"mode":"100644"`) != 1 {
+				t.Errorf("one plain file expected: %s", raw)
+			}
 			w.WriteHeader(201)
 			_, _ = w.Write([]byte(`{"sha":"tree-new"}`))
 		case strings.HasSuffix(r.URL.Path, "/git/commits"):
@@ -324,8 +331,12 @@ func TestABranchIsPushedByTheGatewayFromTheFilesHandedBack(t *testing.T) {
 		Provenance:       map[string]string{"package:tar.name": "inferred", "package:tar.from": "inferred", "package:tar.to": "inferred", "package:tar.semverSafe": "gateway"},
 		RequiredControls: []string{"FIX_WITHIN_SEMVER"}, RequiredGrades: map[string]string{"semverSafe": "gateway"},
 	}
-	files := []effects.FileChange{{Path: "package-lock.json", Content: "eyJuYW1lIjoieSJ9"}}
+	files := []effects.FileChange{{Path: "package-lock.json", Content: "eyJuYW1lIjoieSJ9"}, {Path: "bin/rehearse.sh", Content: "IyEvYmluL3NoCg==", Executable: true}}
 	digest, _ := effects.FilesDigest(files)
+	// A hand that never sets the bit digests as before: the field is absent when false.
+	if plain, _ := effects.FilesDigest(files[:1]); plain != mustDigest(t, []map[string]any{{"path": "package-lock.json", "content": "eyJuYW1lIjoieSJ9"}}) {
+		t.Fatalf("the digest of a plain file changed")
+	}
 	params := map[string]any{"branch": "elixir/security-1", "base_sha": "abc123", "message": "Security updates", "files_sha256": digest, "packages": 1}
 
 	// Files that do not match the digest are refused before any judgement.
@@ -345,7 +356,7 @@ func TestABranchIsPushedByTheGatewayFromTheFilesHandedBack(t *testing.T) {
 	if detail["commit"] != "commit-new" || detail["branch"] != "elixir/security-1" {
 		t.Errorf("effect: %v", detail)
 	}
-	if strings.Join(calls, " ") != "GET /repos/x/y/git/commits/abc123 POST /repos/x/y/git/blobs POST /repos/x/y/git/trees POST /repos/x/y/git/commits POST /repos/x/y/git/refs" {
+	if strings.Join(calls, " ") != "GET /repos/x/y/git/commits/abc123 POST /repos/x/y/git/blobs POST /repos/x/y/git/blobs POST /repos/x/y/git/trees POST /repos/x/y/git/commits POST /repos/x/y/git/refs" {
 		t.Errorf("GitHub saw %v", calls)
 	}
 	if !strings.HasPrefix(commitMessage, "Security updates\n\n") || !strings.Contains(commitMessage, "Evidence: ") {
@@ -354,7 +365,7 @@ func TestABranchIsPushedByTheGatewayFromTheFilesHandedBack(t *testing.T) {
 	// The files are kept beside the record, as the working is.
 	var kept []effects.FileChange
 	step := int(out["step"].(float64))
-	if found, err := store.Attachment(agent, step, "files", &kept); err != nil || !found || len(kept) != 1 || kept[0].Path != "package-lock.json" {
+	if found, err := store.Attachment(agent, step, "files", &kept); err != nil || !found || len(kept) != 2 || kept[0].Path != "package-lock.json" || !kept[1].Executable {
 		t.Errorf("attachment: %v %v %v", found, err, kept)
 	}
 }
@@ -537,4 +548,13 @@ func TestADraftOfTheGatewaysOwnIsMarkedReadyWithItsFooterKept(t *testing.T) {
 			t.Errorf("pull %d: GitHub was asked more than to look: %v", number, calls)
 		}
 	}
+}
+
+func mustDigest(t *testing.T, items []map[string]any) string {
+	t.Helper()
+	d, err := canonical.Digest(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
