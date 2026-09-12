@@ -179,7 +179,14 @@ func (s *Store) Attach(agent string, step int, name string, data any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, strconv.Itoa(step)+".json"), append(raw, '\n'), 0o640)
+	// Written whole or not at all: a reset that lands mid-write left an empty action
+	// file beside a record on 11 September 2026, and every reader of it failed since.
+	final := filepath.Join(dir, strconv.Itoa(step)+".json")
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, final)
 }
 
 // Attachment reads material beside a record; nil when there is none.
