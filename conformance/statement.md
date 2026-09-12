@@ -65,7 +65,7 @@ today:
 
 | claim | evidence | tier | why not higher |
 | --- | --- | --- | --- |
-| every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release; since 10 September 2026 14:20 UTC written and performed by the attested gateway on Google (service mode), with no login path to it since 14:45 UTC | 2 | the rows of the other chapters still open below (an outsider's recorded verification, 8.1.5, first among them); the branch push is still performed by the hand (7.1.4, see below) |
+| every in-scope action was judged before it happened | signed token per action, hash chain, Merkle tree, write before release; since 10 September 2026 14:20 UTC written and performed by the attested gateway on Google (service mode), with no login path to it since 14:45 UTC | 2 | the rows of the other chapters still open below (an outsider's recorded verification, 8.1.5, first among them) |
 | the action carried a verified reason | ProveML certificate with its material beside the record; replayable by three independent verifiers | 2 | same boundary as above |
 | the chain has not been rewritten below the anchored size | RFC 3161 timestamp and Hedera consensus time on the signed checkpoint, daily | 3 | Hedera testnet; mainnet before external use |
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it; the update key on a hardware token since 11 September 2026; every version of the log pinned at DigiCert and on Hedera, and the ledger's first posting per version compared with the log (control v0.10.0, `anchor identity check`) | 3 | Hedera testnet; mainnet before external use, as for the chain claim above. The witness of the did:webvh format was not added: a named witness is a single trusted party (8.1.2); the public ledger answers the same question, one history, with no party to trust |
@@ -75,12 +75,17 @@ today:
 Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
 propose through the tunnel with a signed submission and a client token, the gateway judges,
 records and performs the workflow dispatch and the pull request with tokens that live only
-inside the trust domain (7.1.1, 7.1.4 option a). One effect is not yet mediated inside the
-boundary: a branch push, which is a git operation from the hand's checkout; projects that
-carry the fix workflow do not push from the hand at all (the runner pushes under the token
-GitHub issues for that run), and projects without it cannot push (read-only tokens), so the
-exception is disclosed and bounded rather than silent. The in-process gateway in Elixir no
-longer writes production records. Platform INTEL_TDX, the key generated inside the trust
+inside the trust domain (7.1.1, 7.1.4 option a). Until 12 September 2026 one effect was
+disclosed as outside the boundary: the branch push, a git operation from the hand's checkout
+or, for projects carrying the fix workflow, from the runner under the token GitHub issues for
+that run. Since control v0.11.0 the gateway performs the push itself from the files the
+runner or the model hands back, the runner's tag moved to read-only contents on 11 September,
+and on 12 September 2026 06:54 UTC the first change reached a client repository that way:
+kubo-global/afrodidact-website pull request 22, a major version moved by a model, pushed as
+a branch by the gateway with its own token, opened as a draft, judged green by the
+project's own tests, marked ready by the gateway (`pull.ready`, v0.14.0), and merged by the
+operator. Every write to a client repository is now inside the boundary; the exception is
+closed. The in-process gateway in Elixir no longer writes production records. Platform INTEL_TDX, the key generated inside the trust
 domain and bound in the quote (7.2.4), the quote retaken daily (7.2.3). Since 14:45 UTC the
 same day there is no login path to the VM: its secrets come from Secret Manager under its
 own service account, its policy from an instance attribute, and both apply at boot; the
