@@ -44,7 +44,7 @@
         "Hedera consensus and mirror nodes",
         "the mathematics"
       ],
-      "note": "Hedera testnet until first external use; the mechanism satisfies 7.3.3 (single-history consensus)"
+      "note": "Hedera mainnet since 12 September 2026 19:41 UTC (topic 0.0.10856156; the testnet topic 0.0.10275637 holds 7 to 12 September and stays readable); the mechanism satisfies 7.3.3 (single-history consensus)"
     },
     {
       "id": "agent-identified",
@@ -59,7 +59,7 @@
         "DigiCert as a timestamp authority",
         "Hedera consensus and mirror nodes"
       ],
-      "note": "tier 3 on the same ground as history-anchored, decided by the operator on 11 September 2026: the log's versions are pinned on a public ledger anyone reads back with published tooling and no credential; Hedera testnet until first external use; a did:webvh witness was not added, a named witness being a single trusted party (8.1.2)"
+      "note": "tier 3 on the same ground as history-anchored, decided by the operator on 11 September 2026: the log's versions are pinned on a public ledger anyone reads back with published tooling and no credential; Hedera mainnet since 12 September 2026 (all twelve versions on topic 0.0.10856156); a did:webvh witness was not added, a named witness being a single trusted party (8.1.2)"
     },
     {
       "id": "gateway-attested",
