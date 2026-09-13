@@ -706,3 +706,24 @@ func TestTheCapabilityIsKeptBesideTheRecordItAllowed(t *testing.T) {
 		t.Fatal("SignedBy must hold under the operator's key and under no other")
 	}
 }
+
+// A review page is 8.4 MB of HTML and 11.2 MB as base64 inside the submission, so the first
+// limit of 8 MiB refused Vera's first real publish (13 September 2026). The limit stays, to
+// keep whoever reaches the port from filling a sealed machine, but it now fits the work and
+// says so: a hand that cannot tell "too large" from "connection lost" retries forever.
+func TestASubmissionOverTheLimitIsRefusedByName(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	s := &service{key: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{4}, 32)), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}, cfg: config{Issuer: "x", Store: filepath.Join(dir, "store"), Dry: true}}
+	rec := httptest.NewRecorder()
+	s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(bytes.Repeat([]byte{'a'}, maxSubmission+1))))
+	if rec.Code != 413 || !strings.Contains(rec.Body.String(), "larger than 32 MiB") {
+		t.Fatalf("over the limit: %d %s", rec.Code, rec.Body.String())
+	}
+	// What fits is judged on its merits, not on its weight: this one is refused for its shape.
+	rec = httptest.NewRecorder()
+	s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader([]byte("{"))))
+	if rec.Code != 400 || strings.Contains(rec.Body.String(), "larger than") {
+		t.Fatalf("within the limit: %d %s", rec.Code, rec.Body.String())
+	}
+}
