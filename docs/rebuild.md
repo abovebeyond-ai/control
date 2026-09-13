@@ -54,4 +54,23 @@ attests, its layers hold, its key is new. Step 4 on a throwaway identity with So
 (scripts/README.md in the site repository). Step 5 is a change of one name and is not
 rehearsed apart from the real thing.
 
-Not rehearsed yet, as of 13 September 2026.
+## Rehearsed, 13 September 2026, 06:20 to 06:40 UTC
+
+Steps 1 to 3 on `control-gateway-rehearsal`, from the pinned image and the v0.16.2 boot
+script, with the production configuration carried and the machine set to dry: it came up in
+under two minutes, made its own key (`7afec428…`, not the production key), fetched the
+tokens from Secret Manager under the service account, measured itself, attested, served. A
+checker through Google's tunnel from the operator's laptop read all layers as holds: the
+same MRTD as production, RTMR0 to RTMR2 byte for byte the same as production (same image,
+same kernel `7.0.0-1011-gcp`, the boot log's 112 events replaying), RTMR3 the release asset
+plus the carried configuration (a different digest from production's, since the dry flag
+is in the carried bytes). Then deleted. Cost: cents.
+
+Two things the rehearsal found and fixed in the create step, both set by hand on the
+production machine and absent from the script until then: the service account Secret
+Manager trusts and the listen address (found writing this page), and the network tag the
+firewall rule for the tunnel range names, without which the tunnel could not reach the
+port (found in the rehearsal). A rebuild from the script now sets all three.
+
+Not rehearsed: step 4 on the real identity (the key replacement is a ceremony with both
+tokens), and step 5, the change of name.
