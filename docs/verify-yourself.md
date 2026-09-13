@@ -83,3 +83,19 @@ that was never posted is named as well: the operator does not get to skip the le
 version it would rather nobody saw. The receipts we keep, one per version at DigiCert and
 on Hedera, are in the public copy under `anchors/identity/`; with `--out` pointing at them
 the same command checks those too, offline with `--offline`.
+
+## The operator's word
+
+A request record whose `control_task.iss` names an operator key (`did:webvh:…#operator`,
+`#operator-2`) was allowed on a capability that key signed on a hardware token. Since v0.20.0
+the gateway keeps the capability as presented beside the record; with `--did-log`, `verify`
+re-checks its signature against the key the identity log publishes under that fragment and
+says at which version the key became public:
+
+    holds  did:webvh:…#agent-workbench: 3 action(s) admitted by #operator-2, key valid since version 13 (2026-09-13); the signature verifies under the published key
+
+That is the end of the chain: not the gateway's word that it checked, and not the
+application that carried the token, but a signature only the holder of the token could
+have made, against a key anyone can read from the log. Records from before v0.20.0 name
+the issuer without the capability beside them; `verify` says so as a note.
+
