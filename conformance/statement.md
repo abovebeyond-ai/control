@@ -85,6 +85,7 @@ today:
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it; the update key on a hardware token since 11 September 2026; every version of the log pinned at DigiCert and on Hedera, and the ledger's first posting per version compared with the log (control v0.10.0, `anchor identity check`) | 3 | none since 12 September 2026: all twelve versions of the log are on Hedera mainnet, topic 0.0.10856156, and the ledger's first posting per version matches the log, as for the chain claim above. The witness of the did:webvh format was not added: a named witness is a single trusted party (8.1.2); the public ledger answers the same question, one history, with no party to trust |
 | the gateway's key was made inside the sealed machine | TDX quote binding the key (REPORTDATA = SHA-512 of the key), MRTD as the record's measurement, refreshed daily; the quote's digest anchored with every checkpoint | 2 | 8.1.5 |
 | every action was performed on a ticket the principal signed for that task | Ed25519 capability (issuer #portal, subject the hand, audience the gateway, task, kinds, resources, expiry), verified by the gateway, intersected with the grant; digest and task on the record | 2 | 8.1.5 (the ticket key is in Cloud KMS since 11 September 2026; Google is on the trust list) |
+| every workbench action was admitted by the operator in person | the capability signed by `#operator` or `#operator-2` on a YubiKey, verified against the DID log, kept beside the record, re-verified by `verify` and by the far end | 3 | none: the key never left the token; what is trusted is on the disclosure list |
 
 Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
 propose through the tunnel with a signed submission and a client token, the gateway judges,
@@ -144,8 +145,45 @@ public half, nothing else; every signature is in Google's audit log with the cal
 stolen account is revoked, a stolen file was for good. The seed file that signed before is
 deleted. What is still trusted: Google, and that the account is not misused while valid.
 
-Not applicable: human approval records (4.1.6: merging is a person's act in GitHub,
-outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.2).
+Met since 13 September 2026 for the workbench, the session on the operator's machine that
+proposes through the same door (`#agent-workbench`): the operator's word is a signature
+on a hardware token, not an application's. The operator's keys live in PIV slot 9c of two
+YubiKeys (`#operator` on #39780275, `#operator-2` on #39780281), Ed25519, generated on the
+token, touch on every use, and are published in the DID log; the grant names them by
+fragment (`principal_keys`, v0.19.0); a workbench capability names its issuer, the gateway
+verifies it against that key and records which key spoke (`control_task.iss`); the
+capability as presented is kept beside the record it allowed (v0.20.0), so a reader
+re-verifies it against the log's key at the version that published it (`verify
+--did-log`), and the far end that checks a pull request does the same (`relying`,
+v0.20.1). The chain of a workbench action therefore ends at a person's key that anyone
+can read from the log, not at Portal (4.2.2 to the originating principal; 4.1.6: the
+approval record is the capability itself, its payload the exact content the operator
+signed, its issuer the authenticated identity, its `iat` the time; 6.3.1 for the
+operator's keys). Portal keeps a copy of such a capability for its page only after
+checking the same signature; it can neither make nor widen one. The fallback for a machine
+without the token is a WebAuthn passkey assertion Portal verifies before it signs on the
+operator's behalf; that path ends at Portal's key and is disclosed as such until the
+passkeys' public keys are published and the gateway verifies the assertion itself.
+
+Not applicable: human approval records for merges (4.1.6: merging is a person's act in
+GitHub, outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.2).
+
+### The identity's succession (13 September 2026)
+
+The first identifier, `did:webvh:QmdUpq…:abovebeyond.ai`, is final at version 14. Each
+version committed the hash of one next update key, held on the waiting token; on 13
+September a key generation was run on that token by the operator on the assistant's wrong
+instruction, and did:webvh admits no other signer. Nothing published under it is
+invalid, nothing can be added or revoked under it. The successor
+`did:webvh:Qmb8LWd9DWcCY9KxESX69Dfkgf4n1LXtGeje6Hn9647yxD:abovebeyond.ai:id`, served under
+`/id`, carries the same seven keys under the same fragments, names the first identifier
+in `alsoKnownAs`, and commits two next-key hashes at every version: the waiting token's
+and a spare in slot 9a of the token that signed last, so that one destroyed slot never
+ends a log again; both tokens lost does, and that is the line two tokens draw. Records
+before 16:25 UTC name agents of the first identifier and verify against its log; records
+after name the successor's. A verifier configured with the first identifier accepts an
+agent of the successor only when the successor's document names the predecessor in
+`alsoKnownAs` and carries the same `#key-1`, the identity's own key.
 
 ## Trust-assumption disclosure (7.4.1, C10.2)
 
@@ -154,7 +192,8 @@ outside the claim); confidential delegation (4.2.4); agent-to-agent messages (5.
 | Ed25519 signatures, SHA-256, RFC 6962 tree, RFC 8785 canonical form | the mathematics |
 | the gateway's key | Intel's attestation chain, Google's hypervisor and disk encryption, and that no project owner snapshotted the disk (the one path left; audit-logged; `key-custody.md`) |
 | the anchors | DigiCert as a timestamp authority; Hedera's consensus and its mirror nodes |
-| the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry |
+| the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry; a successor is trusted on the shared `#key-1`, which is a file on the operator's machine until it moves to a token |
+| the operator's word | Yubico's key generation and PIN/touch enforcement; that the tool showing the payload before the touch (`hand.mjs`) is the tool the operator ran, since a token cannot display what it signs; the grant bounds what a wrong touch can allow |
 | the premises | the OSV advisory data the hands read, graded as inferred or gateway in the provenance |
 | the effect | GitHub honours a token; it verifies nothing about the evidence |
 
