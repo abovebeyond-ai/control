@@ -29,14 +29,15 @@ echo "gateway key from the DID log: $KEY"
 #    Since v0.15.0 also the machine's layers: the firmware against Google's signed
 #    endorsement, the boot log replayed to RTMR0-2, and RTMR3 against the gateway's
 #    own binary (the release asset, hashed here) and carried configuration.
-RELEASE=$(grep -o 'CONTROL_RELEASE:-v[0-9.]*' control/deploy/gcp/startup.sh | cut -d- -f2)
-curl -fsSL -o /tmp/control-gateway-linux-amd64 "https://github.com/abovebeyond-ai/control/releases/download/$RELEASE/control-gateway-linux-amd64"
+#    The release is the one the records name: the checker fetches that asset, holds it to
+#    the sha256 the records carry, and RTMR3 to its SHA-384 (v0.16.4; --release-sha384
+#    still takes a hash by hand, --offline skips it). The keys come from the identity log,
+#    every one the gateway ever had, so a rebuilt machine leaves old chains verifiable.
 cd control && go run ./cmd/verify \
   --store ../control-evidence/store \
-  --key "$KEY" \
+  --did-log https://abovebeyond.ai/.well-known/did.jsonl \
   --anchors ../control-evidence/anchors \
-  --attestation ../control-evidence/store/attestation.json \
-  --release-sha384 "$(sha384sum /tmp/control-gateway-linux-amd64 | cut -d' ' -f1)"
+  --attestation ../control-evidence/store/attestation.json
 ```
 
 The layers are explained, with what each rests on, in `conformance/machine-image.md`.
