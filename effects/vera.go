@@ -29,7 +29,9 @@ import (
 // as the gateway's own key was, and the register names it as #vera. A judgement is never
 // an effect here: those are people's, on the page.
 //
-// Resources are "vera/<review id>": one review per permit line, the id as the app knows it.
+// Resources are "vera/<project>/<review id>": the project the review belongs to, as Portal
+// names it, and the id as the app knows it. A grant covers a project's reviews with
+// "vera/<project>/*"; the ticket names the one review.
 type Vera struct {
 	SecretsDir string
 	Client     *http.Client
@@ -42,13 +44,13 @@ func (v Vera) Kinds() []string {
 
 var reviewID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// ReviewIDOf reads the review id from a "vera/<id>" resource.
+// ReviewIDOf reads the review id from a "vera/<project>/<id>" resource.
 func ReviewIDOf(resource string) (string, bool) {
-	prefix, id, ok := strings.Cut(resource, "/")
-	if !ok || prefix != "vera" || !reviewID.MatchString(id) {
+	parts := strings.Split(resource, "/")
+	if len(parts) != 3 || parts[0] != "vera" || !reviewID.MatchString(parts[1]) || !reviewID.MatchString(parts[2]) {
 		return "", false
 	}
-	return id, true
+	return parts[2], true
 }
 
 func (v Vera) token() (string, error) {
@@ -92,7 +94,7 @@ func SealMessage(id, root string) []byte {
 func (v Vera) Perform(ctx context.Context, a policy.Action) Outcome {
 	id, ok := ReviewIDOf(a.Resource)
 	if !ok {
-		return Outcome{Error: "resource is not vera/<review id>"}
+		return Outcome{Error: "resource is not vera/<project>/<review id>"}
 	}
 	switch a.Kind {
 	case "review.sign":

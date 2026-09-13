@@ -6,6 +6,7 @@ package policy
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/abovebeyond-ai/control/canonical"
 )
@@ -260,7 +261,7 @@ func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 	if err := Validate(a); err != nil {
 		return "DENY", "out of schema: " + err.Error()
 	}
-	if !contains(p.Grant.Resources, a.Resource) {
+	if !ResourceCovered(p.Grant.Resources, a.Resource) {
 		return "DENY", "resource not in grant"
 	}
 	if p.PathAware && p.Grant.MaxPerKind > 0 && phi.PerKind[a.Kind]+1 > p.Grant.MaxPerKind {
@@ -271,6 +272,23 @@ func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 
 // RequiresPremises says whether a kind must carry a certificate.
 func (p Policy) RequiresPremises(kind string) bool { return contains(p.Grant.PremisesFor, kind) }
+
+// ResourceCovered: a grant names resources exactly ("owner/repo") or by prefix, an
+// entry ending in "/*" ("vera/hoet/*", since 13 September 2026: a review is made under
+// a project and its id is not known when the permit is written). A prefix entry covers
+// what lies under it and nothing beside it: "vera/hoet/*" covers "vera/hoet/paper1",
+// not "vera/hoet" and not "vera/hoetx/paper1".
+func ResourceCovered(list []string, resource string) bool {
+	for _, x := range list {
+		if x == resource {
+			return true
+		}
+		if strings.HasSuffix(x, "/*") && strings.HasPrefix(resource, strings.TrimSuffix(x, "*")) && len(resource) > len(x)-1 {
+			return true
+		}
+	}
+	return false
+}
 
 func contains(list []string, s string) bool {
 	for _, x := range list {
