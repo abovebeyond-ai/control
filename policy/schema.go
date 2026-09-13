@@ -79,6 +79,20 @@ var Schemas = map[string]Schema{
 		Required: map[string]string{"branch": "string", "base": "string"},
 		Optional: map[string]string{"title": "string", "body": "string", "packages": "int", "draft": "bool"},
 	},
+	// The review hand (13 September 2026): a page published, a person invited, a root
+	// sealed. The page travels attached and digest-bound like a push's files; the root is
+	// a sha-256 tag; a judgement is never a verb.
+	"review.publish": {
+		Required: map[string]string{"page_sha256": "hex64"},
+		Optional: map[string]string{"title": "string", "by": "string"},
+	},
+	"review.invite": {
+		Required: map[string]string{"email": "string"},
+	},
+	"review.sign": {
+		Required: map[string]string{"root": "string"},
+		Optional: map[string]string{"readings": "int", "judged": "int"},
+	},
 	"pull.ready": {
 		// A draft the gateway opened, marked ready for review once the pull request's
 		// checks went green, with the body rewritten to say so; the footer the draft was

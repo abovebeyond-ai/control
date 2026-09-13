@@ -80,6 +80,8 @@ type config struct {
 	// attribute bytes: measured into RTMR3 before the quote (since v0.15.0), so a
 	// reader can hold the quote to the policy the machine booted with.
 	CarriedConfig string `json:"carried_config,omitempty"`
+	// VeraBase is the Vera app the review hand publishes to (default https://vera.abovebeyond.ai).
+	VeraBase string `json:"vera_base,omitempty"`
 }
 
 type service struct {
@@ -115,6 +117,7 @@ func main() {
 	}
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets})
+	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.attested, err = attestation(cfg, key)
 	fail(err)
@@ -133,8 +136,13 @@ func main() {
 	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
 	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
 	mux.HandleFunc("GET /v1/proof", s.accessed("proof", s.proof))
+	// The seal key of the review hand (#vera) is made now, so the register can name it
+	// before the first review is sealed; it is published beside the gateway's own key.
+	veraKey, err := effects.Vera{SecretsDir: cfg.Secrets}.SealKey()
+	fail(err)
 	mux.HandleFunc("GET /v1/key", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform()})
+		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform(),
+			"keys": map[string]string{"control-gateway": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "vera": hex.EncodeToString(veraKey.Public().(ed25519.PublicKey))}})
 	})
 	mux.HandleFunc("GET /v1/attestation", s.accessed("attestation", s.attestation))
 	mux.HandleFunc("GET /v1/attestations", s.accessed("attestations", s.attestations))
@@ -382,11 +390,14 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
-	if req.Action.Kind == "branch.push" {
-		want, _ := req.Action.Params["files_sha256"].(string)
+	if req.Action.Kind == "branch.push" || req.Action.Kind == "review.publish" {
+		// A push binds its files, a publication its page, to the judged parameters by
+		// digest before any judgement: what does not match is refused unrecorded.
+		param := map[string]string{"branch.push": "files_sha256", "review.publish": "page_sha256"}[req.Action.Kind]
+		want, _ := req.Action.Params[param].(string)
 		got, _ := effects.FilesDigest(req.Files)
 		if len(req.Files) == 0 || want == "" || got != want {
-			writeJSON(w, 400, map[string]any{"error": "branch.push needs the files attached and params.files_sha256 equal to their canonical digest"})
+			writeJSON(w, 400, map[string]any{"error": req.Action.Kind + " needs the files attached and params." + param + " equal to their canonical digest"})
 			return
 		}
 		if req.Action.Attached == nil {
