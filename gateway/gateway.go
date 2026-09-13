@@ -324,6 +324,30 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 			}
 			// The task the principal named selects the task's own rules out of the grant.
 			pol, capReason = g.cfg.Policy.ForTask(p.Task.Playbook)
+			if capReason != "" {
+				break
+			}
+			// A kind the grant lists under PerAction needs a word for this act, spent here.
+			if containsString(pol.Grant.PerAction, action.Kind) {
+				if p.Act == "" {
+					capReason = action.Kind + " needs the operator's word for this act, and this word names a period instead"
+					break
+				}
+				if want := capability.ActDigest(action); p.Act != want {
+					capReason = "the operator's word names another act than this one"
+					break
+				}
+				fresh, err := g.cfg.Store.Spend(p.ID)
+				if err != nil {
+					capReason = "the word could not be spent: " + err.Error()
+					break
+				}
+				if !fresh {
+					capReason = "this word was already spent"
+					break
+				}
+				merged["control_word"] = map[string]any{"act": p.Act, "spent": true}
+			}
 		}
 	} else if token != "" {
 		merged["control_capability"] = capability.Digest(token)
@@ -674,4 +698,13 @@ func mustDecodeB64(s string) []byte {
 func acceptedJudgement(p policy.Policy, prem *premises.Material) bool {
 	_, ok := p.Accepted(prem.RequiredControls)
 	return ok
+}
+
+func containsString(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

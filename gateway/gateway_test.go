@@ -685,3 +685,61 @@ func TestOneAgentSeveralTasksTheCapabilitySelectsTheTask(t *testing.T) {
 		t.Fatalf("%d records", len(records))
 	}
 }
+
+// What a person cannot undo needs a word that names the act. A window is fine for a branch
+// and a pull request, which end in a review; an invitation is mail already sent and a seal is
+// anchored, so for those kinds the grant asks for a capability naming this action, and the
+// gateway spends it. Without spending, a machine holding the hand key could replay the same
+// signed word until it expired, and "the operator signed this action" would mean "signed one
+// like it, once" (13 September 2026).
+func TestAWordForOneActIsRequiredAndSpent(t *testing.T) {
+	principal := ed25519.NewKeyFromSeed([]byte("principal-seed-principal-seed-32"))
+	store, _ := log.Open(t.TempDir())
+	seed, _ := hex.DecodeString(strings.Repeat("11", 32))
+	now := time.Unix(1_800_000_000, 0)
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:ab#agent-vera",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:example:ab", Kinds: []string{"review.invite", "review.publish"}, Resources: []string{"vera/p/*"}, MaxPerKind: 5,
+			PerAction: []string{"review.invite"}, PrincipalKey: hex.EncodeToString(principal.Public().(ed25519.PublicKey))}},
+		Store: store, Key: ed25519.NewKeyFromSeed(seed), Clock: func() time.Time { return now }}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite := policy.Action{Kind: "review.invite", Resource: "vera/p/one", Params: map[string]any{"email": "someone@example.org"}}
+	word := func(act, id string) string {
+		tok, _ := capability.Issue(capability.Payload{Issuer: "did:example:ab#operator", Subject: cfg.Agent, Audience: cfg.Issuer,
+			Task: capability.Task{Playbook: "vera", Project: "p"}, Kinds: []string{"review.invite", "review.publish"}, Resources: []string{"vera/p/*"},
+			IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix(), ID: id, Act: act}, principal)
+		return tok
+	}
+	// A word for a period does not carry an act, so it cannot invite.
+	if v := g.SubmitWith("r1", invite, "did:example:ab", nil, nil, nil, nil, word("", "adm-1")); v.Allowed() || !strings.Contains(v.Reason, "names a period instead") {
+		t.Fatalf("a period: %v", v.Reason)
+	}
+	// A word for another act is refused, even for the same verb on the same review.
+	elsewhere := capability.ActDigest(policy.Action{Kind: "review.invite", Resource: "vera/p/one", Params: map[string]any{"email": "someone-else@example.org"}})
+	if v := g.SubmitWith("r2", invite, "did:example:ab", nil, nil, nil, nil, word(elsewhere, "adm-2")); v.Allowed() || !strings.Contains(v.Reason, "another act") {
+		t.Fatalf("another act: %v", v.Reason)
+	}
+	// The word for this act allows it once, and says on the record that it was spent.
+	this := word(capability.ActDigest(invite), "adm-3")
+	v := g.SubmitWith("r3", invite, "did:example:ab", nil, nil, nil, nil, this)
+	if !v.Allowed() {
+		t.Fatalf("this act: %v", v.Reason)
+	}
+	if w, ok := v.Token.Claims()["control_word"].(map[string]any); !ok || w["act"] != capability.ActDigest(invite) {
+		t.Fatalf("the record does not name the word: %v", v.Token.Claims()["control_word"])
+	}
+	if v := g.SubmitWith("r4", invite, "did:example:ab", nil, nil, nil, nil, this); v.Allowed() || !strings.Contains(v.Reason, "already spent") {
+		t.Fatalf("replay: %v", v.Reason)
+	}
+	// A kind the grant does not list keeps its window: publishing twice on one word is fine.
+	publish := policy.Action{Kind: "review.publish", Resource: "vera/p/one", Params: map[string]any{"page_sha256": strings.Repeat("ab", 32)}}
+	period := word("", "adm-4")
+	if v := g.SubmitWith("r5", publish, "did:example:ab", nil, nil, nil, nil, period); !v.Allowed() {
+		t.Fatalf("publish on a period: %v", v.Reason)
+	}
+	if v := g.SubmitWith("r6", publish, "did:example:ab", nil, nil, nil, nil, period); !v.Allowed() {
+		t.Fatalf("publish again on the same period: %v", v.Reason)
+	}
+}
