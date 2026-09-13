@@ -132,6 +132,35 @@ func (s *Store) RecordAccess(info map[string]any) error {
 	return err
 }
 
+// Spend marks a capability's id as used and says whether this is the first time. A word that
+// names one act (Payload.Act) may be presented once: without spending it, an attacker on a
+// machine that holds the hand key could replay the same signed word for as long as it has not
+// expired, and "the operator signed this action" would mean "signed one like it, once".
+// Durable on purpose: a restart that forgets is a restart that allows a replay.
+func (s *Store) Spend(id string) (bool, error) {
+	path := filepath.Join(s.Dir, "spent.jsonl")
+	if raw, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			var seen struct {
+				ID string `json:"jti"`
+			}
+			if json.Unmarshal([]byte(line), &seen) == nil && seen.ID == id {
+				return false, nil
+			}
+		}
+	}
+	line, _ := json.Marshal(map[string]any{"jti": id, "at": time.Now().UTC().Format(time.RFC3339)})
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		return false, err
+	}
+	return true, f.Sync()
+}
+
 // FailuresPath is the secondary durable log (row 7.6.1): beside the store
 // directory, not in it, so an evidence store that cannot be written still gets
 // its failure recorded. The halt drill of 10 September 2026 found it inside.

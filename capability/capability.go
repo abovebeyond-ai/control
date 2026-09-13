@@ -35,6 +35,13 @@ type Payload struct {
 	IssuedAt  int64    `json:"iat"`
 	Expires   int64    `json:"exp"`
 	ID        string   `json:"jti"`
+	// Act, when set, is the digest of the one action this word is for: kind, resource and
+	// parameters, canonically. A window (two hours, the rest of the day) is fine for what a
+	// person can undo, a branch and a pull request a human still merges. It is not fine for
+	// what reaches someone or is final: an invitation is mail that has been sent, a seal is
+	// anchored. For those the grant names the kind under PerAction and the word has to name
+	// the act, so the operator signs what is about to happen rather than a period of time.
+	Act string `json:"act,omitempty"`
 }
 
 // Task names the piece of work in the principal's own terms.
@@ -111,6 +118,14 @@ func SignedBy(token string, key ed25519.PublicKey) bool {
 // Covers says whether a capability names this kind on this resource.
 func (p Payload) Covers(kind, resource string) bool {
 	return contains(p.Kinds, kind) && policy.ResourceCovered(p.Resources, resource)
+}
+
+// ActDigest is what a word naming one act must carry: the action as the gateway judges it.
+// Params are included, so the same verb on the same resource with other parameters is a
+// different act and needs its own word.
+func ActDigest(a policy.Action) string {
+	d, _ := canonical.Digest(map[string]any{"kind": a.Kind, "resource": a.Resource, "params": a.Params})
+	return canonical.Tag(d)
 }
 
 // Digest names the exact token presented, for the record.

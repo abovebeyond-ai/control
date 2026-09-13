@@ -66,6 +66,12 @@ type Grant struct {
 	// operator's keys named here, the capability is a signature only the person holding
 	// the token could have made, and the record names which key spoke.
 	PrincipalKeys map[string]string `json:"principal_keys,omitempty"`
+	// PerAction names the kinds whose capability must name the act itself (Payload.Act):
+	// the word is then spent on one action and cannot be reused inside its window. Reserve
+	// it for what a person cannot undo, since every kind listed here costs the operator a
+	// touch of the key per action; a push and a pull request end in a review, an invitation
+	// is mail already sent and a seal is anchored.
+	PerAction []string `json:"per_action,omitempty"`
 	// Judgements names the controls a certificate of premises may argue for this grant.
 	// A working is only as good as the rule it argues: a permit that accepts "within
 	// semver" must not be satisfied by a working that argues something else. Empty means
