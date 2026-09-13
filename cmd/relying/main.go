@@ -71,7 +71,7 @@ func main() {
 	}
 	tok, err := relying.DecodeToken(*evidenceB64)
 	fail(err)
-	r := relying.Check(tok, *capTok, keys, o)
+	r := relying.CheckIn(ctx, tok, *capTok, keys, o)
 	if r.OK {
 		fmt.Printf("holds  %s step %d: %s by %s on %s, task %v, measurement %s\n", o.Kind, r.Step, r.Verdict, r.Agent, o.Repository, r.Task, short(r.Measured))
 		return
