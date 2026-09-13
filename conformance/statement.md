@@ -38,7 +38,10 @@ files), `review.invite` (a sign-in mail to a person), and `review.sign` (the rev
 sealed with a key made inside the machine and named in the register as `#vera`, under a
 working that says every reading on the page has a judgement, `REVIEW_COMPLETE`; the record
 carries the signature and the key, and nothing leaves the machine but the signature). A
-judgement is never a verb: those are people's, on the page.
+judgement is never a verb: those are people's, on the page. A review's resource is
+`vera/<project>/<id>`, and a grant may name a project's reviews by prefix, `vera/<project>/*`
+(v0.17.2), since a review's id is not known when the permit is written; a prefix covers
+what lies under it and nothing beside it, and the ticket still names the one review.
 Each grant names the judgements a certificate of premises may argue for it (v0.13.0):
 the two repair hands accept `FIX_WITHIN_SEMVER`, the major-upgrade hand `MAJOR_PROPOSED`
 and `MAJOR_UNDER_TESTS`, the headers hand `HEADERS_SAFE_SET`; a working that argues

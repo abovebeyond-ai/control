@@ -589,7 +589,7 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 	s := &service{
 		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
 			Grant policy.Grant `json:"grant"`
-		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"review.publish", "review.invite", "review.sign"}, Resources: []string{"vera/paper1"}, MaxPerKind: 2,
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"review.publish", "review.invite", "review.sign"}, Resources: []string{"vera/abovebeyond/*"}, MaxPerKind: 2,
 			PremisesFor: []string{"review.sign"}, Judgements: []string{"REVIEW_COMPLETE"}}}}},
 		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
 	}
@@ -606,11 +606,11 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 	digest, _ := effects.FilesDigest(page)
 
 	// Publish: the page must be attached and match its digest.
-	code, out := post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.publish", Resource: "vera/paper1", Params: map[string]any{"page_sha256": digest, "title": "The paper"}}})
+	code, out := post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.publish", Resource: "vera/abovebeyond/paper1", Params: map[string]any{"page_sha256": digest, "title": "The paper"}}})
 	if code != 400 {
 		t.Fatalf("a publication without its page: %d %v", code, out)
 	}
-	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.publish", Resource: "vera/paper1", Params: map[string]any{"page_sha256": digest, "title": "The paper"}}, Files: page})
+	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.publish", Resource: "vera/abovebeyond/paper1", Params: map[string]any{"page_sha256": digest, "title": "The paper"}}, Files: page})
 	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
 		t.Fatalf("publish: %d %v", code, out)
 	}
@@ -618,13 +618,13 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 		t.Errorf("the app saw %v %v", published, calls)
 	}
 	// Invite.
-	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.invite", Resource: "vera/paper1", Params: map[string]any{"email": "judge@example.org"}}})
+	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.invite", Resource: "vera/abovebeyond/paper1", Params: map[string]any{"email": "judge@example.org"}}})
 	if code != 200 || out["effect"].(map[string]any)["ok"] != true {
 		t.Fatalf("invite: %d %v", code, out)
 	}
 	// Sign: refused without the working, sealed with it, and the seal verifies under the key named.
 	root := "sha-256:" + strings.Repeat("ab", 32)
-	code, out = post(submitRequest{Run: "r2", Agent: agent, Action: policy.Action{Kind: "review.sign", Resource: "vera/paper1", Params: map[string]any{"root": root}}})
+	code, out = post(submitRequest{Run: "r2", Agent: agent, Action: policy.Action{Kind: "review.sign", Resource: "vera/abovebeyond/paper1", Params: map[string]any{"root": root}}})
 	if code != 200 || out["verdict"] != "DENY" || !strings.Contains(fmt.Sprint(out["reason"]), "premises") {
 		t.Fatalf("a seal without a working: %d %v", code, out)
 	}
@@ -635,7 +635,7 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 		Provenance:       map[string]string{"review:paper1.name": "inferred", "review:paper1.readings": "inferred", "review:paper1.judged": "inferred", "review:paper1.unjudged": "gateway"},
 		RequiredControls: []string{"REVIEW_COMPLETE"}, RequiredGrades: map[string]string{"unjudged": "gateway"},
 	}
-	code, out = post(submitRequest{Run: "r3", Agent: agent, Action: policy.Action{Kind: "review.sign", Resource: "vera/paper1", Params: map[string]any{"root": root}}, Premises: complete})
+	code, out = post(submitRequest{Run: "r3", Agent: agent, Action: policy.Action{Kind: "review.sign", Resource: "vera/abovebeyond/paper1", Params: map[string]any{"root": root}}, Premises: complete})
 	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
 		t.Fatalf("seal: %d %v", code, out)
 	}

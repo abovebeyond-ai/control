@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/abovebeyond-ai/control/policy"
 	"strings"
 	"time"
 
@@ -101,7 +102,7 @@ func Verify(token string, principal ed25519.PublicKey, audience, subject string,
 
 // Covers says whether a capability names this kind on this resource.
 func (p Payload) Covers(kind, resource string) bool {
-	return contains(p.Kinds, kind) && contains(p.Resources, resource)
+	return contains(p.Kinds, kind) && policy.ResourceCovered(p.Resources, resource)
 }
 
 // Digest names the exact token presented, for the record.
