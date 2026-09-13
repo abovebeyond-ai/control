@@ -95,7 +95,7 @@ tokens)
   # Since 13 September 2026 also portal-token, Portal's ingest token for the Portal adapter,
   # when the operator has placed it there: what a hand writes to Portal goes through the
   # gateway like a push, and the token stays where the pushes' tokens are.
-  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^portal-token$"'); do
+  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^portal-token$|^vera-token$"'); do
     n="control-$f"
     if gcloud --project="$PROJECT" secrets describe "$n" >/dev/null 2>&1; then
       ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | tr -d '\n' | gcloud --project="$PROJECT" secrets versions add "$n" --data-file=- >/dev/null && echo "updated $n"

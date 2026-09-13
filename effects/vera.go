@@ -96,25 +96,6 @@ func (v Vera) Perform(ctx context.Context, a policy.Action) Outcome {
 	if !ok {
 		return Outcome{Error: "resource is not vera/<project>/<review id>"}
 	}
-	switch a.Kind {
-	case "review.sign":
-		// Nothing leaves the machine but a signature: the root comes in the parameters,
-		// the working beside the record says every reading was judged, and the record
-		// carries the signature and the key. The app learns of it from the record.
-		root, _ := a.Params["root"].(string)
-		if _, err := canonical.Untag(root); err != nil {
-			return Outcome{Error: "review.sign needs params.root, a sha-256: tag of the review root"}
-		}
-		key, err := v.SealKey()
-		if err != nil {
-			return Outcome{Error: err.Error()}
-		}
-		sig := ed25519.Sign(key, SealMessage(id, root))
-		return Outcome{OK: true, Detail: map[string]any{
-			"review": id, "root": root, "signature": hex.EncodeToString(sig),
-			"key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "role": "#vera",
-		}}
-	}
 	token, err := v.token()
 	if err != nil {
 		return Outcome{Error: err.Error()}
@@ -148,6 +129,30 @@ func (v Vera) Perform(ctx context.Context, a policy.Action) Outcome {
 		return res.StatusCode, out, nil
 	}
 	switch a.Kind {
+	case "review.sign":
+		// Nothing leaves the machine but a signature: the root comes in the parameters,
+		// the working beside the record says every reading was judged, and the record
+		// carries the signature and the key. The app keeps the signature beside the
+		// review (PUT /r/<id>/root-signature) and verifies it before it does; Ed25519 is
+		// deterministic, so a retry after a refusal signs the same bytes again.
+		root, _ := a.Params["root"].(string)
+		if _, err := canonical.Untag(root); err != nil {
+			return Outcome{Error: "review.sign needs params.root, a sha-256: tag of the review root"}
+		}
+		key, err := v.SealKey()
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		sig := hex.EncodeToString(ed25519.Sign(key, SealMessage(id, root)))
+		pub := hex.EncodeToString(key.Public().(ed25519.PublicKey))
+		status, res, err := call("PUT", "/r/"+id+"/root-signature", map[string]any{"root": root, "signature": sig, "key": pub, "role": "#vera", "by": "the control gateway"})
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 200 {
+			return Outcome{Error: fmt.Sprintf("Vera answered %d for the root signature: %v", status, res["error"])}
+		}
+		return Outcome{OK: true, Detail: map[string]any{"review": id, "root": root, "signature": sig, "key": pub, "role": "#vera", "kept": true}}
 	case "review.publish":
 		// The page travels attached, digest bound to params.page_sha256 the way a push
 		// binds its files: what was judged is what is published.
