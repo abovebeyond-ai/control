@@ -575,6 +575,17 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "https://vera.example/r/paper1"})
 		case r.Method == "POST" && r.URL.Path == "/r/paper1/people/invite":
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "delivery": "mail"})
+		case r.Method == "PUT" && r.URL.Path == "/r/paper1/root-signature":
+			var in map[string]any
+			json.Unmarshal(raw, &in)
+			pub, _ := hex.DecodeString(fmt.Sprint(in["key"]))
+			sig, _ := hex.DecodeString(fmt.Sprint(in["signature"]))
+			if !ed25519.Verify(ed25519.PublicKey(pub), effects.SealMessage("paper1", fmt.Sprint(in["root"])), sig) {
+				w.WriteHeader(400)
+				json.NewEncoder(w).Encode(map[string]any{"error": "the signature does not verify under the key given"})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			w.WriteHeader(500)
 		}
@@ -650,7 +661,7 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 	if hex.EncodeToString(again.Public().(ed25519.PublicKey)) != fmt.Sprint(detail["key"]) {
 		t.Errorf("the seal key is not the one kept in the secrets")
 	}
-	if len(calls) != 2 {
-		t.Errorf("sealing must not call the app: %v", calls)
+	if len(calls) != 3 || !strings.HasPrefix(calls[2], "PUT /r/paper1/root-signature Bearer vera-tok") {
+		t.Errorf("the seal must reach the app once, with the token: %v", calls)
 	}
 }
