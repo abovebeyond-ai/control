@@ -28,9 +28,20 @@ import (
 // Keys resolved from the DID document.
 type Keys struct {
 	Gateway   ed25519.PublicKey // #control-gateway: signs the records
-	Principal ed25519.PublicKey // #portal: signs the capabilities
+	Principal ed25519.PublicKey // #portal: signs the capabilities of the principal's own hands
 	DID       string            // the document's id
 	Aliases   []string          // its alsoKnownAs: the did:webvh form of a did:web document, and back
+	// Methods holds every Ed25519 verification method by fragment ("operator", "key-1"): a
+	// capability names its issuer by fragment, and the operator's keys on the hardware
+	// tokens sign the workbench's admissions (since control v0.19.0).
+	Methods map[string]ed25519.PublicKey
+	// Successors: documents that name this DID (or an alias) in their alsoKnownAs AND carry
+	// the same #key-1, the identity's own key. An identifier whose log ended (13 September
+	// 2026: the first log's committed next key was destroyed) is succeeded by one under a
+	// path; the records under the successor are the same principal's, and only a document
+	// holding the same identity key can say so. Resolved on demand, by the agent's DID.
+	Successors map[string]Keys
+	resolve    func(ctx context.Context, url string) (Keys, error)
 }
 
 // Under says whether an agent id is a fragment of the DID or one of its aliases.
@@ -41,6 +52,89 @@ func (k Keys) Under(agent string) bool {
 		}
 	}
 	return false
+}
+
+// Issuer picks the key a capability's issuer names: #portal, or any published method
+// (the operator's keys). Nil when the document names no such fragment.
+func (k Keys) Issuer(iss string) ed25519.PublicKey {
+	frag := iss[strings.LastIndex(iss, "#")+1:]
+	if frag == "" || !strings.Contains(iss, "#") {
+		return nil
+	}
+	if key, ok := k.Methods[frag]; ok {
+		return key
+	}
+	return nil
+}
+
+// DocumentURL is where a did:webvh or did:web publishes its document: at /.well-known
+// without path segments, under the segments with them (did:web:host:a:b -> /a/b/did.json).
+func DocumentURL(did string) string {
+	var host, rest string
+	switch {
+	case strings.HasPrefix(did, "did:webvh:"):
+		parts := strings.SplitN(strings.TrimPrefix(did, "did:webvh:"), ":", 3) // scid, host, path…
+		if len(parts) < 2 {
+			return ""
+		}
+		host = parts[1]
+		if len(parts) == 3 {
+			rest = parts[2]
+		}
+	case strings.HasPrefix(did, "did:web:"):
+		host, rest, _ = strings.Cut(strings.TrimPrefix(did, "did:web:"), ":")
+	default:
+		return ""
+	}
+	host = strings.ReplaceAll(host, "%3A", ":")
+	if rest == "" {
+		return "https://" + host + "/.well-known/did.json"
+	}
+	return "https://" + host + "/" + strings.ReplaceAll(rest, ":", "/") + "/did.json"
+}
+
+// Successor resolves the document of an agent that is not under this DID and accepts it
+// as this identity's successor when it names this DID or an alias in alsoKnownAs and
+// carries the same #key-1. Anyone can publish a document that claims a predecessor; only
+// the identity's own key makes the claim the identity's.
+func (k *Keys) Successor(ctx context.Context, agent string) (Keys, bool) {
+	did, _, ok := strings.Cut(agent, "#")
+	if !ok {
+		return Keys{}, false
+	}
+	if s, seen := k.Successors[did]; seen {
+		return s, s.DID != ""
+	}
+	if k.Successors == nil {
+		k.Successors = map[string]Keys{}
+	}
+	k.Successors[did] = Keys{}
+	resolve := k.resolve
+	if resolve == nil {
+		resolve = func(ctx context.Context, url string) (Keys, error) {
+			return ResolveKeys(ctx, url, "control-gateway", "portal")
+		}
+	}
+	url := DocumentURL(did)
+	if url == "" {
+		return Keys{}, false
+	}
+	s, err := resolve(ctx, url)
+	if err != nil {
+		return Keys{}, false
+	}
+	names := false
+	for _, a := range s.Aliases {
+		if a == k.DID || contains(k.Aliases, a) {
+			names = true
+		}
+	}
+	own, mine := k.Methods["key-1"], s.Methods["key-1"]
+	if !names || own == nil || mine == nil || !own.Equal(mine) {
+		return Keys{}, false
+	}
+	k.Successors[did] = s
+	return s, true
 }
 
 // ResolveKeys reads a did.json (the derived document of a did:webvh log) and
@@ -71,10 +165,14 @@ func ResolveKeys(ctx context.Context, url, gatewayFragment, principalFragment st
 	}
 	k.DID = doc.ID
 	k.Aliases = doc.AlsoKnownAs
+	k.Methods = map[string]ed25519.PublicKey{}
 	for _, m := range doc.VerificationMethod {
 		raw, err := base64.RawURLEncoding.DecodeString(m.PublicKeyJwk.X)
 		if err != nil || len(raw) != ed25519.PublicKeySize {
 			continue
+		}
+		if i := strings.LastIndex(m.ID, "#"); i >= 0 {
+			k.Methods[m.ID[i+1:]] = ed25519.PublicKey(raw)
 		}
 		switch {
 		case strings.HasSuffix(m.ID, "#"+gatewayFragment):
@@ -132,6 +230,11 @@ func DecodeToken(b64 string) (evidence.Token, error) {
 // Check holds a record and a capability to the keys and the options. Every
 // failing condition is a reason; the caller acts only on OK.
 func Check(tok evidence.Token, capTok string, keys Keys, o Options) Result {
+	return CheckIn(context.Background(), tok, capTok, keys, o)
+}
+
+// CheckIn is Check with a context for resolving a successor's document.
+func CheckIn(ctx context.Context, tok evidence.Token, capTok string, keys Keys, o Options) Result {
 	r := Result{}
 	fail := func(f string, a ...any) { r.Reasons = append(r.Reasons, fmt.Sprintf(f, a...)) }
 	if tok == nil {
@@ -160,7 +263,13 @@ func Check(tok evidence.Token, capTok string, keys Keys, o Options) Result {
 		fail("the record matched %q, not %s", m, o.Kind)
 	}
 	if !keys.Under(str("agent_id")) {
-		fail("the record's agent %s is not under the DID %s or its aliases", str("agent_id"), keys.DID)
+		// An agent of a successor identity: the same principal under a new identifier,
+		// accepted only on the successor's own word signed with the same identity key.
+		if s, ok := keys.Successor(ctx, str("agent_id")); ok {
+			keys = s
+		} else {
+			fail("the record's agent %s is not under the DID %s or its aliases, nor under a successor that carries its #key-1", str("agent_id"), keys.DID)
+		}
 	}
 	if o.MaxAge > 0 {
 		if iat, ok := tok["iat"].(float64); !ok || o.Now.Sub(time.Unix(int64(iat), 0)) > o.MaxAge {
@@ -185,7 +294,17 @@ func Check(tok evidence.Token, capTok string, keys Keys, o Options) Result {
 		fail("no capability from the principal")
 	} else {
 		issuer, _ := tok["iss"].(string) // the gateway the capability was meant for
-		p, err := capability.Verify(capTok, keys.Principal, issuer, str("agent_id"), o.Now)
+		// The key the capability names as its issuer: #portal for the principal's own hands,
+		// #operator or #operator-2 for the workbench (a signature on the hardware token).
+		signer := keys.Principal
+		if unverified, _, _, perr := capability.Parse(capTok); perr == nil && len(keys.Methods) > 0 {
+			if key := keys.Issuer(unverified.Issuer); key != nil {
+				signer = key
+			} else if unverified.Issuer != "" {
+				fail("capability: its issuer %s is not a key the DID document publishes", unverified.Issuer)
+			}
+		}
+		p, err := capability.Verify(capTok, signer, issuer, str("agent_id"), o.Now)
 		if err != nil && !(o.MaxAge == 0 && strings.Contains(err.Error(), "expired")) {
 			fail("capability: %v", err)
 		}
