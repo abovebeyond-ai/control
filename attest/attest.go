@@ -62,6 +62,10 @@ type Record struct {
 	// of its own binary and of the configuration the operator carried. A reader
 	// folds these from zero and holds RTMR3 to the result.
 	RTMR3Inputs []Input `json:"rtmr3_inputs,omitempty"`
+	// Release names the build that took this quote, "vX.Y.Z sha256:…", as the records do.
+	// The checker holds RTMR3 to that release's asset; the newest record's release is the
+	// fallback, and lags after an upgrade until the first new record (13 September 2026).
+	Release string `json:"release,omitempty"`
 }
 
 // Input is one extension of RTMR3: what it was and its SHA-384. A small input
