@@ -109,10 +109,20 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		_ = json.Unmarshal(raw, &out)
 		return res.StatusCode, out, nil
 	}
+	// Portal's refusal in Portal's words: "refused" on a 409, "message" on a validation
+	// error, and on a task that is not there the keys that are (the first task write
+	// through the gateway on 2026-09-13 came back as "Portal answered 404: <nil>").
 	answered := func(status int, body map[string]any) string {
-		msg := body["message"]
-		if r, ok := body["refused"]; ok {
-			msg = r
+		var msg any
+		switch {
+		case body["refused"] != nil:
+			msg = body["refused"]
+		case body["message"] != nil:
+			msg = body["message"]
+		case body["keys"] != nil:
+			msg = fmt.Sprintf("no such task; open: %v", body["keys"])
+		default:
+			msg = "no reason given"
 		}
 		return fmt.Sprintf("Portal answered %d: %v", status, msg)
 	}
