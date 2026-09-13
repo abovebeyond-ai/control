@@ -3,11 +3,14 @@ package effects
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -166,9 +169,21 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		if _, ok := a.Params["amount"].(float64); !ok || str("vendor") == "" {
 			return Outcome{Error: "portal.expense needs params.vendor and params.amount"}
 		}
-		// A file (an invoice) is not carried yet: it is an attachment, and it comes with
-		// the same digest binding a branch.push's files have. Until then a cost goes in
-		// without its document and the person attaches it in Portal.
+		// The invoice, when there is one, travels attached and digest bound to
+		// params.files_sha256 the way a push binds its files (since v0.18.0; until then a
+		// cost went in without its document and the session uploaded the file itself, the
+		// last write outside the gateway). Checked before the expense is written.
+		var invoice *FileChange
+		if want := str("files_sha256"); want != "" {
+			files, err := DecodeFiles(a.Attached["files"])
+			if err != nil || len(files) != 1 {
+				return Outcome{Error: "portal.expense with files_sha256 needs exactly one file attached, the invoice: " + fmt.Sprint(err)}
+			}
+			if got, _ := FilesDigest(files); got != want {
+				return Outcome{Error: "the attached invoice does not match params.files_sha256"}
+			}
+			invoice = &files[0]
+		}
 		status, body, err := call("POST", "expense", pick("vendor", "amount", "currency", "date", "description", "invoiceNumber", "rebillable"))
 		if err != nil {
 			return Outcome{Error: err.Error()}
@@ -176,7 +191,16 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		if status/100 != 2 {
 			return Outcome{Error: answered(status, body)}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"project": slug, "vendor": str("vendor"), "amount": a.Params["amount"]}}
+		detail := map[string]any{"project": slug, "vendor": str("vendor"), "amount": a.Params["amount"], "expense": body["id"]}
+		if invoice != nil {
+			fileID, err := p.upload(ctx, client, base, token, slug, body["id"], *invoice, str("evidence"), str("capability"))
+			if err != nil {
+				// The cost is in, its document is not: said so, and the record carries it.
+				return Outcome{Error: fmt.Sprintf("the expense was written (id %v) but its invoice was not: %v", body["id"], err), Detail: detail}
+			}
+			detail["file"] = fileID
+		}
+		return Outcome{OK: true, Detail: detail}
 	case "portal.project.patch":
 		fields := map[string]any{}
 		for _, k := range projectFields {
@@ -249,4 +273,56 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		return Outcome{OK: true, Detail: map[string]any{"project": slug, "playbook": playbook, "queued": body["queued"]}}
 	}
 	return Outcome{Error: "no adapter for " + a.Kind}
+}
+
+// upload puts the invoice on the expense: Portal's file door takes a multipart form (the
+// file, the project, the expense id, a label), and answers with the file's id.
+func (p Portal) upload(ctx context.Context, client *http.Client, base, token, slug string, expenseID any, f FileChange, evidence, capTok string) (any, error) {
+	content, err := base64.StdEncoding.DecodeString(f.Content)
+	if err != nil {
+		return nil, fmt.Errorf("the invoice is not base64")
+	}
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	name := path.Base(f.Path)
+	part, err := form.CreateFormFile("file", name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(content); err != nil {
+		return nil, err
+	}
+	_ = form.WriteField("project", slug)
+	_ = form.WriteField("label", "Kostenbewijs")
+	if n, ok := expenseID.(float64); ok {
+		_ = form.WriteField("expenseId", fmt.Sprintf("%d", int(n)))
+	}
+	if err := form.Close(); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/api/ingest/file", &buf)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	if evidence != "" {
+		req.Header.Set("Control-Evidence", evidence)
+	}
+	if capTok != "" {
+		req.Header.Set("Control-Capability", capTok)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	if res.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("Portal answered %d for the file: %v", res.StatusCode, out["message"])
+	}
+	return out["id"], nil
 }

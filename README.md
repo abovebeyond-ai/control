@@ -37,7 +37,8 @@ attackers are built, and it is what the standard's rows on independent monitors 
    `owner/repo`, one token per owner) and, since 13 September 2026, Portal (`portal.update`,
    `portal.time_entry`, `portal.expense`, `portal.project.patch`, `portal.task`,
    `portal.measure`, `portal.playbook` on `portal:<slug>`, the ingest token `portal-token`).
-   The Portal adapter exists because the writes of a session to the operator's own
+   Since v0.18.0 an expense may carry its invoice attached, digest bound like a push's files, so no
+   write of a session is left outside. The Portal adapter exists because the writes of a session to the operator's own
    dashboard went on the operator's token, from the session's machine, with no record: the
    same hand without evidence the GitHub adapter had replaced for pushes. The record and
    the capability travel with each write as `Control-Evidence` and `Control-Capability`

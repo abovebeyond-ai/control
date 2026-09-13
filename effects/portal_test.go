@@ -2,6 +2,7 @@ package effects
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -23,6 +24,21 @@ type portalCall struct {
 func fakePortal(t *testing.T) (*httptest.Server, *[]portalCall) {
 	var calls []portalCall
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/ingest/file" {
+			// The file door takes a multipart form: read it as Portal would, before the body is gone.
+			f, hdr, err := r.FormFile("file")
+			if err != nil {
+				w.WriteHeader(422)
+				_, _ = w.Write([]byte(`{"message":"no file"}`))
+				return
+			}
+			content, _ := io.ReadAll(f)
+			calls = append(calls, portalCall{Method: r.Method, Path: r.URL.Path, Auth: r.Header.Get("Authorization"), Evidence: r.Header.Get("Control-Evidence"), Capability: r.Header.Get("Control-Capability"),
+				Body: map[string]any{"project": r.FormValue("project"), "expenseId": r.FormValue("expenseId"), "label": r.FormValue("label"), "name": hdr.Filename, "content": string(content)}})
+			_, _ = w.Write([]byte(`{"ok":true,"id":9}`))
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
@@ -32,6 +48,8 @@ func fakePortal(t *testing.T) (*httptest.Server, *[]portalCall) {
 		case r.URL.Path == "/api/ingest/update" && body["title"] == "":
 			w.WriteHeader(422)
 			_, _ = w.Write([]byte(`{"message":"The title field is required."}`))
+		case r.URL.Path == "/api/ingest/expense":
+			_, _ = w.Write([]byte(`{"ok":true,"id":77}`))
 		case r.URL.Path == "/api/ingest/measure/hoet":
 			w.WriteHeader(202)
 			_, _ = w.Write([]byte(`{"queued":true}`))
@@ -169,5 +187,39 @@ func TestTheResourceIsAPrefixedSlugAndNoTokenMeansNoCall(t *testing.T) {
 	o := p.Perform(context.Background(), policy.Action{Kind: "portal.task", Resource: "portal:hoet", Params: map[string]any{"key": "packages", "state": "bezig", "url": "https://github.com/x/y/pull/1"}})
 	if !o.OK || (*calls)[0].Path != "/api/ingest/tasks/hoet/packages" || (*calls)[0].Body["state"] != "bezig" {
 		t.Fatalf("a task goes to tasks/<slug>/<key>: %+v %+v", o, *calls)
+	}
+}
+
+// An invoice travels with its expense, bound by digest; the expense is written first,
+// then the file goes on it. Without files_sha256 an expense passes without a file, and a
+// digest that does not match the attachment is refused before anything is written.
+func TestAnExpenseCarriesItsInvoice(t *testing.T) {
+	srv, calls := fakePortal(t)
+	p := portalWithToken(t, srv.URL)
+	files := []FileChange{{Path: "facturen/together-2026-09.pdf", Content: base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 fake"))}}
+	digest, _ := FilesDigest(files)
+	o := p.Perform(context.Background(), policy.Action{Kind: "portal.expense", Resource: "portal:hoet",
+		Params:   map[string]any{"vendor": "Together AI", "amount": 20.0, "files_sha256": digest, "evidence": "ev"},
+		Attached: map[string]any{"files": files}})
+	if !o.OK || o.Detail["expense"] != 77.0 || o.Detail["file"] != 9.0 {
+		t.Fatalf("expense with invoice: %+v", o)
+	}
+	if len(*calls) != 2 || (*calls)[0].Path != "/api/ingest/expense" || (*calls)[1].Path != "/api/ingest/file" {
+		t.Fatalf("expense first, then the file: %+v", *calls)
+	}
+	up := (*calls)[1]
+	if up.Body["expenseId"] != "77" || up.Body["project"] != "hoet" || up.Body["name"] != "together-2026-09.pdf" || up.Body["content"] != "%PDF-1.4 fake" || up.Evidence != "ev" {
+		t.Fatalf("the file goes on the expense with its name and the evidence: %+v", up)
+	}
+
+	*calls = nil
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.expense", Resource: "portal:hoet",
+		Params: map[string]any{"vendor": "Together AI", "amount": 20.0, "files_sha256": digest}, Attached: map[string]any{"files": []FileChange{{Path: "x.pdf", Content: base64.StdEncoding.EncodeToString([]byte("other"))}}}})
+	if o.OK || len(*calls) != 0 {
+		t.Fatalf("a mismatching invoice must be refused before the write: %+v %d", o, len(*calls))
+	}
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.expense", Resource: "portal:hoet", Params: map[string]any{"vendor": "Together AI", "amount": 20.0}})
+	if !o.OK || len(*calls) != 1 {
+		t.Fatalf("an expense without a file passes without one: %+v", o)
 	}
 }
