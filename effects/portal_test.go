@@ -97,18 +97,48 @@ func TestPortalsRefusalIsTheOutcome(t *testing.T) {
 	}
 }
 
-// A project field outside the known list is refused before anything is written: Portal's
-// validation would drop it silently and the record would say the field was set.
-func TestAnUnknownProjectFieldIsRefusedBeforeTheWrite(t *testing.T) {
+// A project patch carries the fields the schema names and nothing else (the schema
+// refuses the rest before the adapter sees it); a patch with nothing to set is refused
+// without a call, and clearNextAction becomes the null Portal takes.
+func TestAProjectPatchCarriesOnlyProjectFields(t *testing.T) {
 	srv, calls := fakePortal(t)
 	p := portalWithToken(t, srv.URL)
-	o := p.Perform(context.Background(), policy.Action{Kind: "portal.project.patch", Resource: "portal:hoet", Params: map[string]any{"fields": map[string]any{"status": "active", "monitor": false}}})
+	o := p.Perform(context.Background(), policy.Action{Kind: "portal.project.patch", Resource: "portal:hoet", Params: map[string]any{"evidence": "ev", "capability": "cap"}})
 	if o.OK || len(*calls) != 0 {
-		t.Fatalf("an unknown field must be refused without a call: %+v, %d calls", o, len(*calls))
+		t.Fatalf("a patch with no project field must be refused without a call: %+v, %d calls", o, len(*calls))
 	}
-	o = p.Perform(context.Background(), policy.Action{Kind: "portal.project.patch", Resource: "portal:hoet", Params: map[string]any{"fields": map[string]any{"nextAction": "bellen", "elixir": true}}})
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.project.patch", Resource: "portal:hoet", Params: map[string]any{"clearNextAction": true, "elixir": true, "evidence": "ev"}})
 	if !o.OK || (*calls)[0].Method != "PATCH" || (*calls)[0].Path != "/api/ingest/project/hoet" {
 		t.Fatalf("a known patch goes to the project: %+v %+v", o, *calls)
+	}
+	body := (*calls)[0].Body
+	if v, there := body["nextAction"]; !there || v != nil || body["elixir"] != true {
+		t.Fatalf("clearNextAction must reach Portal as a null nextAction: %v", body)
+	}
+	if _, there := body["evidence"]; there {
+		t.Fatal("the evidence rides in the headers, not the body")
+	}
+}
+
+// Every Portal kind has a parameter schema, or the gateway refuses it as out of schema
+// before the grant is read: the first proposal of a Portal write on 2026-09-13 was
+// refused with "no parameter schema is registered for portal.task".
+func TestEveryPortalKindHasASchema(t *testing.T) {
+	for _, k := range (Portal{}).Kinds() {
+		if _, ok := policy.Schemas[k]; !ok {
+			t.Fatalf("%s has no parameter schema", k)
+		}
+	}
+	err := policy.Validate(policy.Action{Kind: "portal.update", Resource: "portal:hoet", Params: map[string]any{"title": "Rapport", "body": []any{"Regel.", "- punt"}, "clientVisible": false}})
+	if err != nil {
+		t.Fatalf("a well-formed update must pass the schema: %v", err)
+	}
+	err = policy.Validate(policy.Action{Kind: "portal.project.patch", Resource: "portal:hoet", Params: map[string]any{"milestones": []any{map[string]any{"title": "Fase", "status": "bezig"}}, "stack": []any{"Laravel 13"}, "clearNextAction": true}})
+	if err != nil {
+		t.Fatalf("a well-formed patch must pass the schema: %v", err)
+	}
+	if err := policy.Validate(policy.Action{Kind: "portal.time_entry", Resource: "portal:hoet", Params: map[string]any{"hours": 2.5, "monitor": false}}); err == nil {
+		t.Fatal("a key outside the schema must be refused")
 	}
 }
 
