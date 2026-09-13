@@ -36,6 +36,50 @@ type LogEntry struct {
 	DID         string `json:"did"`
 }
 
+// KeysOf reads every Ed25519 public key a fragment ever had in a did.jsonl, oldest
+// first, the last being the current one. A rebuilt gateway has a new key, and the
+// chains its predecessor signed stay verifiable only if a checker knows the old one;
+// the identity log is that history (12 September 2026, ahead of the first rebuild).
+func KeysOf(raw []byte, fragment string) ([][]byte, error) {
+	var keys [][]byte
+	seen := map[string]bool{}
+	for i, line := range bytes.Split(raw, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e struct {
+			State struct {
+				VerificationMethod []struct {
+					ID  string `json:"id"`
+					JWK struct {
+						X string `json:"x"`
+					} `json:"publicKeyJwk"`
+				} `json:"verificationMethod"`
+			} `json:"state"`
+		}
+		if err := json.Unmarshal(line, &e); err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		for _, m := range e.State.VerificationMethod {
+			if !strings.HasSuffix(m.ID, "#"+fragment) || m.JWK.X == "" {
+				continue
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(m.JWK.X)
+			if err != nil || len(raw) != 32 {
+				return nil, fmt.Errorf("line %d: %s carries no 32-byte key", i+1, m.ID)
+			}
+			if !seen[m.JWK.X] {
+				seen[m.JWK.X] = true
+				keys = append(keys, raw)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("the log names no key under #%s", fragment)
+	}
+	return keys, nil
+}
+
 // ReadLog parses a did.jsonl; the DID is read from the state of the first entry.
 func ReadLog(raw []byte) ([]LogEntry, error) {
 	var out []LogEntry

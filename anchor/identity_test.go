@@ -3,6 +3,7 @@ package anchor
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -122,5 +123,29 @@ func TestReadLogRefusesGapsAndDisorder(t *testing.T) {
 	}
 	if _, err := ReadLog([]byte("\n")); err == nil {
 		t.Error("empty log accepted")
+	}
+}
+
+// The gateway's key history from the log: every key the fragment ever had, oldest first,
+// the last being the current one; a version that does not change it adds nothing.
+func TestKeysOfReadsTheFragmentsHistoryOldestFirst(t *testing.T) {
+	line := func(x string) string {
+		return `{"versionId":"1-Qm","versionTime":"2026-09-10T08:00:00Z","state":{"id":"did:webvh:Qm:x","verificationMethod":[{"id":"did:webvh:Qm:x#key-1","publicKeyJwk":{"x":"jc3CwjMlmEVTfZHEIap7X8lmYxm9WY89rLiHuzDWAn8"}},{"id":"did:webvh:Qm:x#control-gateway","publicKeyJwk":{"x":"` + x + `"}}]}}`
+	}
+	old := "jYwv3GY6N5KQ9oGqcc7BIFEua1s9cSH1eM15ZHhMbzE"
+	renewed := "riK2vr2KLIGU8bUZw_gJ-i_9M0hF_xLV9b6qQdTN5t0"
+	raw := []byte(line(old) + "\n" + line(old) + "\n" + line(renewed) + "\n")
+	keys, err := KeysOf(raw, "control-gateway")
+	if err != nil || len(keys) != 2 {
+		t.Fatalf("%v %d", err, len(keys))
+	}
+	if hex.EncodeToString(keys[0]) != "8d8c2fdc663a379290f681aa71cec120512e6b5b3d7121f578cd7964784c6f31" {
+		t.Errorf("first key: %x", keys[0])
+	}
+	if hex.EncodeToString(keys[1]) == hex.EncodeToString(keys[0]) {
+		t.Error("the renewed key must come last")
+	}
+	if _, err := KeysOf(raw, "agent-nobody"); err == nil {
+		t.Error("an unknown fragment must be refused")
 	}
 }

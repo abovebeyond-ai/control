@@ -26,6 +26,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,6 +55,7 @@ func main() {
 	gatewayURL := flag.String("gateway", "", "read everything from a running gateway at this URL instead of a store directory")
 	endorsement := flag.String("endorsement", "", "Google's launch endorsement for the firmware (a .binarypb); default: fetched by MRTD unless --offline")
 	releaseSHA384 := flag.String("release-sha384", "", "the SHA-384 of the release binary the machine should have measured into RTMR3 (from the release asset)")
+	didLog := flag.String("did-log", "", "the did.jsonl (file or URL) whose #control-gateway history supplies the keys: the current one for the attestation, and for each chain the one that signed it (instead of --key)")
 	flag.Parse()
 	var src source
 	var live *remote
@@ -68,18 +70,34 @@ func main() {
 			*keyHex = k.PublicKey
 			fmt.Printf("note   the key is the one the gateway publishes, %s; hold it to a published one with --key\n", *keyHex)
 		}
+	}
+	// The keys: one given by hand, or the history of #control-gateway from the identity
+	// log. A gateway rebuilt from its image has a new key; the chains its predecessor
+	// signed verify under the old one, which the log still names at the versions it held.
+	var keys []ed25519.PublicKey
+	if *didLog != "" {
+		raw, err := readRef(*didLog)
+		fail(err)
+		history, err := anchor.KeysOf(raw, "control-gateway")
+		fail(err)
+		for _, k := range history {
+			keys = append(keys, ed25519.PublicKey(k))
+		}
+		*keyHex = hex.EncodeToString(history[len(history)-1])
+		fmt.Printf("note   keys from the identity log: %d under #control-gateway, current %s…\n", len(keys), (*keyHex)[:16])
 	} else {
-		if *dir == "" || *keyHex == "" {
-			fmt.Fprintln(os.Stderr, "usage: verify --store DIR --key HEX [--measurement HEX] [--checkpoint FILE] | verify --gateway URL")
+		if *dir == "" && live == nil || *keyHex == "" {
+			fmt.Fprintln(os.Stderr, "usage: verify --store DIR (--key HEX | --did-log FILE|URL) [--measurement HEX] [--checkpoint FILE] | verify --gateway URL")
 			os.Exit(2)
 		}
+		pubRaw, err := hex.DecodeString(*keyHex)
+		if err != nil || len(pubRaw) != ed25519.PublicKeySize {
+			fmt.Fprintln(os.Stderr, "the key is not a 32-byte hex Ed25519 public key")
+			os.Exit(2)
+		}
+		keys = []ed25519.PublicKey{ed25519.PublicKey(pubRaw)}
 	}
-	pubRaw, err := hex.DecodeString(*keyHex)
-	if err != nil || len(pubRaw) != ed25519.PublicKeySize {
-		fmt.Fprintln(os.Stderr, "the key is not a 32-byte hex Ed25519 public key")
-		os.Exit(2)
-	}
-	pub := ed25519.PublicKey(pubRaw)
+	current := keys[len(keys)-1]
 	if src == nil {
 		store, err := log.Open(*dir)
 		fail(err)
@@ -138,6 +156,18 @@ func main() {
 			att, _ := records[0]["submods"].(map[string]any)
 			attestation, _ := att["attestation"].(map[string]any)
 			_, m, _ = canonical.UntagAny(fmt.Sprint(attestation["measurement"]))
+		}
+		// The key that signed this chain: the first in the history under which record 0
+		// verifies. A chain begun under a predecessor's key is that predecessor's chain.
+		pub := current
+		for _, k := range keys {
+			if len(records) > 0 && evidence.Verify(records[0], k) {
+				pub = k
+				break
+			}
+		}
+		if !pub.Equal(current) {
+			fmt.Printf("note   %s: signed by an earlier gateway key, %s…\n", agent, hex.EncodeToString(pub)[:16])
 		}
 		r := evidence.VerifyChain(records, pub, m)
 		if !r.OK {
@@ -479,4 +509,26 @@ func broken1(rec *attest.Record, releaseSHA384 string) bool {
 		}
 	}
 	return true
+}
+
+// readRef reads a file or fetches a URL: the identity log, wherever it is.
+func readRef(ref string) ([]byte, error) {
+	if !strings.HasPrefix(ref, "https://") && !strings.HasPrefix(ref, "http://") {
+		return os.ReadFile(ref)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", ref, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("%s: %s", ref, res.Status)
+	}
+	return io.ReadAll(io.LimitReader(res.Body, 8<<20))
 }
