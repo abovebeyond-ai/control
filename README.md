@@ -94,6 +94,15 @@ for which agent and gateway, which kinds on which resources, until when), and th
 takes the intersection of grant and capability, so a capability narrows and never widens
 (rows 4.2.1, 4.2.3, 5.1.3). The record carries the token's digest and the task it names.
 
+A grant may also name the principal's further keys by DID fragment (`principal_keys`, since
+v0.19.0): the operator's own key on a hardware token (`did:webvh:…#operator`) and its
+counterpart on the second token (`#operator-2`). A capability whose issuer is one of them
+is verified against that key, and the record's `control_task.iss` says which key spoke.
+Until then every capability was signed by the application that issued it (Portal), so the
+operator's word was whatever that application chose to sign; with the operator's keys named,
+the word is a signature only the person holding the token could have made, and the issuing
+application is a channel, not a trust root.
+
 A grant may be per task (`tasks`, v0.18.0): one hand that runs several playbooks under one
 key is one agent, not several, because the key is what a stranger can check and several
 agent ids on one key would claim a boundary that does not exist. The agent then holds one

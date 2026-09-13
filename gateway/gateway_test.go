@@ -486,6 +486,65 @@ func TestACapabilityFromThePrincipalIsRequiredAndNarrows(t *testing.T) {
 	}
 }
 
+// The operator's own keys, on hardware tokens, named in the grant by DID fragment: a
+// capability the operator signed is verified against the key its issuer names, either
+// token's; a capability that names a listed fragment but is signed by another key is
+// refused; a capability by the principal key still works; and an issuer the grant does
+// not name falls back to the principal key, which then fails the signature.
+func TestACapabilityFromTheOperatorsOwnKeyIsVerifiedAgainstIt(t *testing.T) {
+	portal := ed25519.NewKeyFromSeed([]byte("principal-seed-principal-seed-32"))
+	op1 := ed25519.NewKeyFromSeed([]byte("operator-one-operator-one-seed32"))
+	op2 := ed25519.NewKeyFromSeed([]byte("operator-two-operator-two-seed32"))
+	store, _ := log.Open(t.TempDir())
+	seed, _ := hex.DecodeString(strings.Repeat("11", 32))
+	now := time.Unix(1_800_000_000, 0)
+	pub := func(k ed25519.PrivateKey) string { return hex.EncodeToString(k.Public().(ed25519.PublicKey)) }
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:ab#agent-workbench",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:example:ab", Kinds: []string{"pull.open"}, Resources: []string{"o/r"}, MaxPerKind: 5,
+			PrincipalKey: pub(portal), PrincipalKeys: map[string]string{"did:example:ab#operator": pub(op1), "did:example:ab#operator-2": pub(op2)}}, PathAware: true},
+		Store: store, Key: ed25519.NewKeyFromSeed(seed), Clock: func() time.Time { return now }}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := policy.Action{Kind: "pull.open", Resource: "o/r", Params: map[string]any{"branch": "b", "base": "main"}}
+	issue := func(iss string, key ed25519.PrivateKey) string {
+		tok, _ := capability.Issue(capability.Payload{Issuer: iss, Subject: cfg.Agent, Audience: cfg.Issuer,
+			Task: capability.Task{Playbook: "workbench", Project: "demo"}, Kinds: []string{"pull.open"}, Resources: []string{"o/r"},
+			IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix(), ID: "01K"}, key)
+		return tok
+	}
+	for _, c := range []struct {
+		iss string
+		key ed25519.PrivateKey
+		ok  bool
+	}{
+		{"did:example:ab#operator", op1, true},
+		{"did:example:ab#operator-2", op2, true},
+		{"did:example:ab#portal", portal, true},
+		{"did:example:ab#operator", op2, false},    // the fragment of one token, the signature of the other
+		{"did:example:ab#operator", portal, false}, // Portal cannot speak as the operator
+		{"did:example:ab#stranger", op1, false},    // an issuer the grant does not name
+	} {
+		v := g.SubmitWith("r-"+c.iss, a, "did:example:ab", nil, nil, nil, nil, issue(c.iss, c.key))
+		if v.Allowed() != c.ok {
+			t.Fatalf("%s signed by its %v: allowed=%v reason=%s", c.iss, c.key != nil, v.Allowed(), v.Reason)
+		}
+		if c.ok && v.Token.Claims()["control_task"].(map[string]any)["iss"] != c.iss {
+			t.Fatalf("the record names which key spoke: %v", v.Token.Claims()["control_task"])
+		}
+	}
+	// A grant with operator keys and no principal key still demands a capability.
+	cfg.Policy.Grant.PrincipalKey = ""
+	g2, _ := Open(Config{Issuer: cfg.Issuer, Agent: cfg.Agent, Policy: cfg.Policy, Store: store, Key: cfg.Key, Clock: cfg.Clock})
+	if v := g2.SubmitWith("r-none", a, "did:example:ab", nil, nil, nil, nil, ""); v.Allowed() || !strings.Contains(v.Reason, "no capability") {
+		t.Fatalf("without a capability: %v", v)
+	}
+	if v := g2.SubmitWith("r-op", a, "did:example:ab", nil, nil, nil, nil, issue("did:example:ab#operator-2", op2)); !v.Allowed() {
+		t.Fatalf("the operator's key alone suffices: %v", v.Reason)
+	}
+}
+
 // A working is only as good as the rule it argues. A grant that names no judgement
 // accepts FIX_WITHIN_SEMVER and nothing else; a grant that names MAJOR_UNDER_TESTS accepts
 // a working that argues tests before and after crossing a major version. The certificate

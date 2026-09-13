@@ -58,6 +58,14 @@ type Grant struct {
 	// (rows 4.2.1, 5.1.3). The gateway takes the intersection of grant and
 	// capability, so a capability narrows and never widens (row 4.2.3).
 	PrincipalKey string `json:"principal_key,omitempty"`
+	// PrincipalKeys names further keys of the principal by DID fragment (the operator's
+	// own, "did:webvh:…#operator" on a hardware token, and its counterpart "#operator-2"
+	// on the second token): a capability whose issuer is one of them is verified against
+	// that key. Until 2026-09-13 every capability was signed by Portal's key, so the
+	// operator's word was whatever the Portal application chose to sign; with the
+	// operator's keys named here, the capability is a signature only the person holding
+	// the token could have made, and the record names which key spoke.
+	PrincipalKeys map[string]string `json:"principal_keys,omitempty"`
 	// Judgements names the controls a certificate of premises may argue for this grant.
 	// A working is only as good as the rule it argues: a permit that accepts "within
 	// semver" must not be satisfied by a working that argues something else. Empty means
@@ -227,6 +235,14 @@ func (p Policy) Bundle() map[string]any {
 	// as it did before tasks existed.
 	if len(p.Grant.Tasks) > 0 {
 		doc["tasks"] = tasksDocument(p.Grant.Tasks)
+	}
+	// Likewise the operator's keys: a bundle without them hashes as before.
+	if len(p.Grant.PrincipalKeys) > 0 {
+		keys := map[string]any{}
+		for k, v := range p.Grant.PrincipalKeys {
+			keys[k] = v
+		}
+		doc["principal_keys"] = keys
 	}
 	return doc
 }
