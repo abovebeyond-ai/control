@@ -558,3 +558,99 @@ func mustDigest(t *testing.T, items []map[string]any) string {
 	}
 	return d
 }
+
+// The review hand (13 September 2026): a page is published only as attached and digest
+// bound; a person is invited; a root is sealed with the #vera key made inside, under a
+// working that says every reading was judged, and the seal verifies under the key the
+// record names. The app's token stays in the secrets; a judgement is not a verb.
+func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
+	calls := []string{}
+	var published map[string]any
+	vera := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
+		raw, _ := io.ReadAll(r.Body)
+		switch {
+		case r.Method == "PUT" && r.URL.Path == "/r/paper1":
+			json.Unmarshal(raw, &published)
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "https://vera.example/r/paper1"})
+		case r.Method == "POST" && r.URL.Path == "/r/paper1/people/invite":
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "delivery": "mail"})
+		default:
+			w.WriteHeader(500)
+		}
+	}))
+	defer vera.Close()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "vera-token"), []byte("vera-tok\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("39", 32))
+	agent := "did:webvh:QmTest:example.org#agent-vera"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"review.publish", "review.invite", "review.sign"}, Resources: []string{"vera/paper1"}, MaxPerKind: 2,
+			PremisesFor: []string{"review.sign"}, Judgements: []string{"REVIEW_COMPLETE"}}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.Vera{SecretsDir: filepath.Join(dir, "secrets"), Base: vera.URL})
+	post := func(body any) (int, map[string]any) {
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	page := []effects.FileChange{{Path: "page.html", Content: "PGh0bWw+cmV2aWV3PC9odG1sPg=="}}
+	digest, _ := effects.FilesDigest(page)
+
+	// Publish: the page must be attached and match its digest.
+	code, out := post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.publish", Resource: "vera/paper1", Params: map[string]any{"page_sha256": digest, "title": "The paper"}}})
+	if code != 400 {
+		t.Fatalf("a publication without its page: %d %v", code, out)
+	}
+	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.publish", Resource: "vera/paper1", Params: map[string]any{"page_sha256": digest, "title": "The paper"}}, Files: page})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("publish: %d %v", code, out)
+	}
+	if published["page"] != "<html>review</html>" || published["title"] != "The paper" || !strings.HasPrefix(calls[0], "PUT /r/paper1 Bearer vera-tok") {
+		t.Errorf("the app saw %v %v", published, calls)
+	}
+	// Invite.
+	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: policy.Action{Kind: "review.invite", Resource: "vera/paper1", Params: map[string]any{"email": "judge@example.org"}}})
+	if code != 200 || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("invite: %d %v", code, out)
+	}
+	// Sign: refused without the working, sealed with it, and the seal verifies under the key named.
+	root := "sha-256:" + strings.Repeat("ab", 32)
+	code, out = post(submitRequest{Run: "r2", Agent: agent, Action: policy.Action{Kind: "review.sign", Resource: "vera/paper1", Params: map[string]any{"root": root}}})
+	if code != 200 || out["verdict"] != "DENY" || !strings.Contains(fmt.Sprint(out["reason"]), "premises") {
+		t.Fatalf("a seal without a working: %d %v", code, out)
+	}
+	complete := &premises.Material{
+		Certificate:      "@[review:paper1]{paper1} has %[readings]{12} readings, %[judged]{12} judged, %[unjudged]{0} unjudged, ?[complete: REVIEW_COMPLETE]{every reading judged}.",
+		Store:            map[string]any{"review:paper1.name": "paper1", "review:paper1.readings": 12, "review:paper1.judged": 12, "review:paper1.unjudged": 0},
+		Registry:         proveml.Registry{"REVIEW_COMPLETE": {Field: "unjudged", Op: "eq", Value: 0, Label: "every reading has a judgement"}},
+		Provenance:       map[string]string{"review:paper1.name": "inferred", "review:paper1.readings": "inferred", "review:paper1.judged": "inferred", "review:paper1.unjudged": "gateway"},
+		RequiredControls: []string{"REVIEW_COMPLETE"}, RequiredGrades: map[string]string{"unjudged": "gateway"},
+	}
+	code, out = post(submitRequest{Run: "r3", Agent: agent, Action: policy.Action{Kind: "review.sign", Resource: "vera/paper1", Params: map[string]any{"root": root}}, Premises: complete})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("seal: %d %v", code, out)
+	}
+	detail := out["effect"].(map[string]any)["detail"].(map[string]any)
+	pub, _ := hex.DecodeString(fmt.Sprint(detail["key"]))
+	sig, _ := hex.DecodeString(fmt.Sprint(detail["signature"]))
+	if !ed25519.Verify(ed25519.PublicKey(pub), effects.SealMessage("paper1", root), sig) {
+		t.Errorf("the seal does not verify under the key the record names")
+	}
+	sealer := effects.Vera{SecretsDir: filepath.Join(dir, "secrets")}
+	again, _ := sealer.SealKey()
+	if hex.EncodeToString(again.Public().(ed25519.PublicKey)) != fmt.Sprint(detail["key"]) {
+		t.Errorf("the seal key is not the one kept in the secrets")
+	}
+	if len(calls) != 2 {
+		t.Errorf("sealing must not call the app: %v", calls)
+	}
+}
