@@ -64,6 +64,55 @@ type Grant struct {
 	// A grant that lets an agent cross a major version names MAJOR_UNDER_TESTS here, and
 	// the working then has to argue tests before and after the change.
 	Judgements []string `json:"judgements,omitempty"`
+	// Tasks, when set, narrows the grant per task the principal's capability names.
+	// One hand that runs several playbooks under one key is one agent, not several:
+	// the key is what a stranger can check, and four agent ids on one key would claim
+	// a boundary that does not exist. So the agent holds one grant, and the playbook
+	// the capability names selects the task's own verbs, premises and judgements out
+	// of it (a task never widens: its kinds are met with the grant's). A capability
+	// naming a task the grant does not have is refused, and so is a submission
+	// without a capability when the grant is per task.
+	Tasks map[string]TaskGrant `json:"tasks,omitempty"`
+}
+
+// TaskGrant is what one task under an agent's grant may do: its verbs (within the
+// grant's), which of them carry a certificate, and which judgements that certificate
+// may argue.
+type TaskGrant struct {
+	Kinds       []string `json:"kinds"`
+	PremisesFor []string `json:"premises_for,omitempty"`
+	Judgements  []string `json:"judgements,omitempty"`
+}
+
+// PerTask says whether the grant is narrowed per task.
+func (p Policy) PerTask() bool { return len(p.Grant.Tasks) > 0 }
+
+// ForTask is the policy as it applies to one task: the grant with the task's verbs
+// (intersected with its own), premises and judgements in place of the agent-wide
+// ones. A grant without tasks is returned as it is. The second value is the reason
+// when the task is not one the grant names.
+func (p Policy) ForTask(playbook string) (Policy, string) {
+	if !p.PerTask() {
+		return p, ""
+	}
+	t, ok := p.Grant.Tasks[playbook]
+	if !ok {
+		if playbook == "" {
+			return p, "the grant is per task and the capability names none"
+		}
+		return p, "the grant names no task " + playbook
+	}
+	q := p
+	q.Grant.Kinds = nil
+	for _, k := range t.Kinds {
+		if contains(p.Grant.Kinds, k) {
+			q.Grant.Kinds = append(q.Grant.Kinds, k)
+		}
+	}
+	q.Grant.PremisesFor = append([]string{}, t.PremisesFor...)
+	q.Grant.Judgements = append([]string{}, t.Judgements...)
+	q.Grant.Tasks = nil
+	return q, ""
 }
 
 // DefaultJudgements is what a grant accepts when it names none.
@@ -166,13 +215,41 @@ func (p Policy) Bundle() map[string]any {
 	sort.Strings(kinds)
 	sort.Strings(resources)
 	sort.Strings(premises)
-	return map[string]any{
+	doc := map[string]any{
 		"principal": p.Grant.Principal, "kinds": kinds, "resources": resources,
 		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises, "judgements": append([]string{}, p.Grant.Judgements...),
 		"path_aware": p.PathAware, "version": Version, "schemas": schemaDocument(),
 		"submitter_key": p.Grant.SubmitterKey, "principal_key": p.Grant.PrincipalKey,
 		"expiry": "none: a standing grant, replaced by a new bundle when it changes",
 	}
+	// Only a grant that is per task carries the key, so a bundle without tasks hashes
+	// as it did before tasks existed.
+	if len(p.Grant.Tasks) > 0 {
+		doc["tasks"] = tasksDocument(p.Grant.Tasks)
+	}
+	return doc
+}
+
+// tasksDocument is the per-task narrowing as the bundle carries it, sorted so the
+// hash is stable.
+func tasksDocument(tasks map[string]TaskGrant) []map[string]any {
+	names := make([]string, 0, len(tasks))
+	for n := range tasks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]map[string]any, 0, len(names))
+	for _, n := range names {
+		t := tasks[n]
+		kinds := append([]string{}, t.Kinds...)
+		premises := append([]string{}, t.PremisesFor...)
+		judgements := append([]string{}, t.Judgements...)
+		sort.Strings(kinds)
+		sort.Strings(premises)
+		sort.Strings(judgements)
+		out = append(out, map[string]any{"task": n, "kinds": kinds, "premises_for": premises, "judgements": judgements})
+	}
+	return out
 }
 
 // Evaluate returns verdict and reason.

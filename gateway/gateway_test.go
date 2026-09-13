@@ -490,16 +490,19 @@ func TestACapabilityFromThePrincipalIsRequiredAndNarrows(t *testing.T) {
 // accepts FIX_WITHIN_SEMVER and nothing else; a grant that names MAJOR_UNDER_TESTS accepts
 // a working that argues tests before and after crossing a major version. The certificate
 // verifies either way: what changes is whether this permit takes that reason.
-func TestTheGrantNamesTheJudgementsAWorkingMayArgue(t *testing.T) {
-	major := func() *premises.Material {
-		return &premises.Material{
-			Certificate:      "@[package:uuid]{uuid} moves from %[from]{9.0.1} to %[to]{11.1.0}, a major; tests before %[testsBefore]{1}, tests after %[testsAfter]{1}, coverage %[coverage]{82}, ?[under: MAJOR_UNDER_TESTS]{green on both sides}.",
-			Store:            map[string]any{"package:uuid.name": "uuid", "package:uuid.from": "9.0.1", "package:uuid.to": "11.1.0", "package:uuid.testsBefore": 1, "package:uuid.testsAfter": 1, "package:uuid.coverage": 82, "package:uuid.underTests": 1},
-			Registry:         proveml.Registry{"MAJOR_UNDER_TESTS": {Field: "underTests", Op: "eq", Value: 1, Label: "the tests were green before and after the change"}},
-			Provenance:       map[string]string{"package:uuid.name": "inferred", "package:uuid.from": "inferred", "package:uuid.to": "inferred", "package:uuid.testsBefore": "gateway", "package:uuid.testsAfter": "gateway", "package:uuid.coverage": "inferred", "package:uuid.underTests": "gateway"},
-			RequiredControls: []string{"MAJOR_UNDER_TESTS"}, RequiredGrades: map[string]string{"underTests": "gateway"},
-		}
+// majorPremises is a working that argues MAJOR_UNDER_TESTS: tests green on both sides of a major.
+func majorPremises() *premises.Material {
+	return &premises.Material{
+		Certificate:      "@[package:uuid]{uuid} moves from %[from]{9.0.1} to %[to]{11.1.0}, a major; tests before %[testsBefore]{1}, tests after %[testsAfter]{1}, coverage %[coverage]{82}, ?[under: MAJOR_UNDER_TESTS]{green on both sides}.",
+		Store:            map[string]any{"package:uuid.name": "uuid", "package:uuid.from": "9.0.1", "package:uuid.to": "11.1.0", "package:uuid.testsBefore": 1, "package:uuid.testsAfter": 1, "package:uuid.coverage": 82, "package:uuid.underTests": 1},
+		Registry:         proveml.Registry{"MAJOR_UNDER_TESTS": {Field: "underTests", Op: "eq", Value: 1, Label: "the tests were green before and after the change"}},
+		Provenance:       map[string]string{"package:uuid.name": "inferred", "package:uuid.from": "inferred", "package:uuid.to": "inferred", "package:uuid.testsBefore": "gateway", "package:uuid.testsAfter": "gateway", "package:uuid.coverage": "inferred", "package:uuid.underTests": "gateway"},
+		RequiredControls: []string{"MAJOR_UNDER_TESTS"}, RequiredGrades: map[string]string{"underTests": "gateway"},
 	}
+}
+
+func TestTheGrantNamesTheJudgementsAWorkingMayArgue(t *testing.T) {
+	major := majorPremises
 	action := policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}
 
 	// The fleet's grant, naming nothing: a major's working is refused, and the reason says why.
@@ -542,5 +545,84 @@ func TestTheGrantNamesTheJudgementsAWorkingMayArgue(t *testing.T) {
 		if j, _ := grant["judgements"].([]any); len(j) != 1 || j[0] != "MAJOR_UNDER_TESTS" {
 			t.Errorf("grant in the record: %v", grant)
 		}
+	}
+}
+
+// One hand that runs several playbooks under one key is one agent: the grant is per
+// task, and the task the principal's capability names selects the verbs, the premises
+// and the judgements out of it. A capability for a task the grant does not have is
+// refused; so is a submission without one; a task never widens the grant.
+func TestOneAgentSeveralTasksTheCapabilitySelectsTheTask(t *testing.T) {
+	principal := ed25519.NewKeyFromSeed([]byte("principal-seed-principal-seed-32"))
+	store, _ := log.Open(t.TempDir())
+	seed, _ := hex.DecodeString(strings.Repeat("12", 32))
+	now := time.Unix(1_800_000_000, 0)
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:ab#agent-elixir",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:example:ab",
+			Kinds: []string{"workflow.dispatch", "branch.push", "pull.open", "pull.ready"}, Resources: []string{"o/r"}, MaxPerKind: 5,
+			PrincipalKey: hex.EncodeToString(principal.Public().(ed25519.PublicKey)),
+			Tasks: map[string]policy.TaskGrant{
+				"elixir-fix":    {Kinds: []string{"workflow.dispatch", "branch.push", "pull.open"}, PremisesFor: []string{"workflow.dispatch"}, Judgements: []string{"FIX_WITHIN_SEMVER"}},
+				"major-upgrade": {Kinds: []string{"workflow.dispatch", "branch.push", "pull.open", "pull.ready"}, PremisesFor: []string{"workflow.dispatch"}, Judgements: []string{"MAJOR_UNDER_TESTS"}},
+				"headers":       {Kinds: []string{"workflow.dispatch", "branch.push", "pull.open", "pull.merge"}, PremisesFor: []string{"workflow.dispatch"}, Judgements: []string{"HEADERS_SAFE_SET"}},
+			}}, PathAware: true},
+		Store: store, Key: ed25519.NewKeyFromSeed(seed), AgbomDigest: strings.Repeat("a", 64), Clock: func() time.Time { return now }}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := func(playbook string, kinds ...string) string {
+		tok, _ := capability.Issue(capability.Payload{Issuer: "did:example:ab#portal", Subject: cfg.Agent, Audience: cfg.Issuer,
+			Task: capability.Task{Playbook: playbook, Project: "demo"}, Kinds: kinds, Resources: []string{"o/r"},
+			IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix(), ID: "01J" + playbook}, principal)
+		return tok
+	}
+	dispatch := policy.Action{Kind: "workflow.dispatch", Resource: "o/r", Params: map[string]any{"workflow": "w", "ref": "main"}}
+	ready := policy.Action{Kind: "pull.ready", Resource: "o/r", Params: map[string]any{"number": 1}}
+
+	// The fixer's task takes the semver working and not the major's.
+	if v := g.SubmitWith("r1", dispatch, "did:example:ab", nil, goodPremises(), nil, nil, cap("elixir-fix", "workflow.dispatch")); !v.Allowed() {
+		t.Fatalf("fixer within semver: %v", v.Reason)
+	}
+	if v := g.SubmitWith("r2", dispatch, "did:example:ab", nil, majorPremises(), nil, nil, cap("elixir-fix", "workflow.dispatch")); v.Allowed() || !strings.Contains(v.Reason, "MAJOR_UNDER_TESTS, which this grant does not accept") {
+		t.Fatalf("fixer with a major's working: %v", v)
+	}
+	// The major's task takes it, and may mark a pull request ready; the fixer's may not.
+	if v := g.SubmitWith("r3", dispatch, "did:example:ab", nil, majorPremises(), nil, nil, cap("major-upgrade", "workflow.dispatch")); !v.Allowed() {
+		t.Fatalf("major under tests: %v", v.Reason)
+	}
+	if v := g.SubmitWith("r4", ready, "did:example:ab", nil, nil, nil, nil, cap("major-upgrade", "pull.ready")); !v.Allowed() {
+		t.Fatalf("major marks ready: %v", v.Reason)
+	}
+	if v := g.SubmitWith("r5", ready, "did:example:ab", nil, nil, nil, nil, cap("elixir-fix", "pull.ready")); v.Allowed() || v.Reason != "kind not in grant" {
+		t.Fatalf("fixer marks ready: %v", v)
+	}
+	// A task never widens: pull.merge is in the headers task but in nobody's grant.
+	merge := policy.Action{Kind: "pull.merge", Resource: "o/r", Params: map[string]any{"number": 1}}
+	if v := g.SubmitWith("r6", merge, "did:example:ab", nil, nil, nil, nil, cap("headers", "pull.merge")); v.Allowed() || v.Reason != "kind not in grant" {
+		t.Fatalf("task wider than grant: %v", v)
+	}
+	// A task the grant does not name, and no capability at all, are refused and recorded.
+	if v := g.SubmitWith("r7", dispatch, "did:example:ab", nil, goodPremises(), nil, nil, cap("vera", "workflow.dispatch")); v.Allowed() || v.Reason != "the grant names no task vera" {
+		t.Fatalf("unknown task: %v", v)
+	}
+	if v := g.SubmitWith("r8", dispatch, "did:example:ab", nil, goodPremises(), nil, nil, ""); v.Allowed() || !strings.Contains(v.Reason, "no capability") {
+		t.Fatalf("no capability: %v", v)
+	}
+	// The record names the task, and the bundle carries the tasks so a reader sees the rule.
+	v := g.SubmitWith("r9", dispatch, "did:example:ab", nil, goodPremises(), nil, nil, cap("elixir-fix", "workflow.dispatch"))
+	if v.Token.Claims()["control_task"].(map[string]any)["playbook"] != "elixir-fix" {
+		t.Fatalf("task in record: %v", v.Token.Claims())
+	}
+	tasks, ok := cfg.Policy.Bundle()["tasks"].([]map[string]any)
+	if !ok || len(tasks) != 3 || tasks[0]["task"] != "elixir-fix" {
+		t.Fatalf("bundle tasks: %v", cfg.Policy.Bundle()["tasks"])
+	}
+	if _, has := (policy.Policy{Grant: policy.Grant{Kinds: []string{"pull.open"}}}).Bundle()["tasks"]; has {
+		t.Fatal("a grant without tasks carries no tasks key, so its bundle hashes as before")
+	}
+	records, _ := store.Records(cfg.Agent)
+	if len(records) != 9 {
+		t.Fatalf("%d records", len(records))
 	}
 }

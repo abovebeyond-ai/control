@@ -93,6 +93,14 @@ for which agent and gateway, which kinds on which resources, until when), and th
 takes the intersection of grant and capability, so a capability narrows and never widens
 (rows 4.2.1, 4.2.3, 5.1.3). The record carries the token's digest and the task it names.
 
+A grant may be per task (`tasks`, v0.18.0): one hand that runs several playbooks under one
+key is one agent, not several, because the key is what a stranger can check and several
+agent ids on one key would claim a boundary that does not exist. The agent then holds one
+grant, and the task the capability names (`task.playbook`) selects that task's own verbs,
+`premises_for` and `judgements` out of it; a task's kinds are met with the grant's, so a task
+never widens. A capability naming a task the grant does not have, or no capability at all,
+is refused and recorded. The bundle carries the tasks, the record names the task.
+
 `client_token` in the configuration, when set, is what a hand must present as a bearer
 token to submit: a gateway reached from another machine holds credentials and judges within
 grants, and without it anyone who can reach the port could make it act. Reading stays open;
