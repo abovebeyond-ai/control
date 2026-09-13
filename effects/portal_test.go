@@ -35,6 +35,9 @@ func fakePortal(t *testing.T) (*httptest.Server, *[]portalCall) {
 		case r.URL.Path == "/api/ingest/measure/hoet":
 			w.WriteHeader(202)
 			_, _ = w.Write([]byte(`{"queued":true}`))
+		case r.URL.Path == "/api/ingest/tasks/hoet/nope":
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"keys":["packages","consent"]}`))
 		case r.URL.Path == "/api/ingest/playbooks/maintenance/hoet":
 			w.WriteHeader(409)
 			_, _ = w.Write([]byte(`{"queued":false,"refused":"no tests"}`))
@@ -90,6 +93,10 @@ func TestPortalsRefusalIsTheOutcome(t *testing.T) {
 	o := p.Perform(context.Background(), policy.Action{Kind: "portal.playbook", Resource: "portal:hoet", Params: map[string]any{"playbook": "maintenance"}})
 	if o.OK || o.Error != "Portal answered 409: no tests" {
 		t.Fatalf("expected Portal's refusal, got %+v", o)
+	}
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.task", Resource: "portal:hoet", Params: map[string]any{"key": "nope", "state": "in-progress"}})
+	if o.OK || o.Error != "Portal answered 404: no such task; open: [packages consent]" {
+		t.Fatalf("a missing task names the tasks that exist, got %+v", o)
 	}
 	o = p.Perform(context.Background(), policy.Action{Kind: "portal.measure", Resource: "portal:hoet", Params: map[string]any{"only": "site"}})
 	if !o.OK || o.Detail["queued"] != true {
