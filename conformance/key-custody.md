@@ -83,6 +83,34 @@ holds the key file of a service account with two roles on that one key, `signerV
 Google's audit log with the caller. Residual: whoever holds that file signs while it is valid; the
 cure is revocation, and the log says what was signed meanwhile. The seed file is deleted.
 
+## The operator's keys
+
+Sign the workbench's capability, the operator's word for a session on the operator's
+machine (rows 4.2.2, 4.1.6, 6.3.1), published as `#operator` and `#operator-2`. Since 13
+September 2026 (successor log, version 1): one Ed25519 key in PIV slot 9c of each of two
+YubiKey 5C NFC (serials 39780275 and 39780281), generated on the token by `ykman` with
+`--pin-policy once --touch-policy always`, non-exportable, a touch on every signature and
+the PIN per session. Either key admits; whichever token is in the operator's pocket
+works. Custody is the operator's person. Residual: a stolen token with its PIN signs until
+the fragment is removed from the log (one update signed with the other token), and the
+grant bounds what any signature can allow; a token cannot display what it signs, so the
+tool that shows the payload before the touch (`hand.mjs admit`) must be the tool the
+operator ran. What is left as a file, and said so: the identity's own key `#key-1`
+(`~/.config/proveml/abovebeyond-signing.jwk`), which signs credentials and vouches for a
+successor document; its move to a token is the next step.
+
+## The identity's update keys and the spare
+
+Sign the DID log itself, never a record or a capability. Since the successor: the update
+key in PIV slot 9d of the token that signed last, the next key in slot 9d of the other,
+and a spare in slot 9a of the signing token, all generated on the tokens; every version
+commits two next-key hashes, the next key's and the spare's, so one destroyed slot never
+ends the log (the first identifier ended that way on 13 September 2026: one committed
+hash, and a key generation on the wrong token). Both tokens lost ends the identity; a
+successor would then need a new identifier that the old cannot vouch for. Which token holds
+which role is read from the descriptor files in `~/.config/proveml/`, never from memory,
+before any command that touches a token.
+
 ## The client token and the tunnel account
 
 Bearer secrets, not signing keys: the client token guards the gateway's submit endpoint,
