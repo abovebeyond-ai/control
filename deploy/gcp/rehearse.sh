@@ -33,8 +33,14 @@ create)
     --maintenance-policy TERMINATE --shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
     --image "${CONTROL_GCP_IMAGE:-ubuntu-2404-noble-amd64-v20260906}" --image-project ubuntu-os-cloud \
     --boot-disk-size 20GB --no-address \
+    --service-account "control-gateway-vm@$PROJECT.iam.gserviceaccount.com" --scopes cloud-platform \
+    --metadata control-listen=0.0.0.0:8471 \
     --metadata-from-file startup-script="$here/startup.sh"
-  echo "created without a public address; reach it with: gcloud compute ssh --tunnel-through-iap"
+  # The service account is the one Secret Manager lets read the tokens, and the listen
+  # address is what the tunnel from the box expects; the production machine had both set
+  # by hand, and a rebuild from this step alone would have come up deaf and without
+  # tokens (found writing docs/rebuild.md, 13 September 2026). Then: config, tokens, lockdown.
+  echo "created without a public address; next: $0 config FILE, $0 tokens, $0 reboot, $0 lockdown (docs/rebuild.md)"
   ;;
 submit)
   $G ssh "$NAME" --zone "$ZONE" --tunnel-through-iap -- \
