@@ -31,7 +31,14 @@ pull request's own checks went green, its body rewritten with the green working'
 the footer it was born with kept; refused for a person's pull request or one without the
 gateway's footer). The draft exists because most repositories run their tests on a pull
 request and not on a bare branch, so a change whose only judge is that run has to be a
-pull request before it is judged; the draft says it is not yet a proposal.
+pull request before it is judged; the draft says it is not yet a proposal. Since v0.17.0
+(13 September 2026) a second hand, the review hand for Vera, brings three more:
+`review.publish` (a review page to the Vera app, attached and digest bound like a push's
+files), `review.invite` (a sign-in mail to a person), and `review.sign` (the review root
+sealed with a key made inside the machine and named in the register as `#vera`, under a
+working that says every reading on the page has a judgement, `REVIEW_COMPLETE`; the record
+carries the signature and the key, and nothing leaves the machine but the signature). A
+judgement is never a verb: those are people's, on the page.
 Each grant names the judgements a certificate of premises may argue for it (v0.13.0):
 the two repair hands accept `FIX_WITHIN_SEMVER`, the major-upgrade hand `MAJOR_PROPOSED`
 and `MAJOR_UNDER_TESTS`; a working that argues another, or none, is refused. **Excluded:** `pull.merge` (no hand holds a grant for it;
