@@ -17,7 +17,7 @@ PROJECT="${CONTROL_GCP_PROJECT:?set CONTROL_GCP_PROJECT to the project id}"
 ZONE="${CONTROL_GCP_ZONE:-europe-west4-a}"
 NAME="${CONTROL_GCP_NAME:-control-gateway}"
 OUT="${CONTROL_REHEARSAL_OUT:-$HOME/.config/proveml/rehearsal}"
-AGENT="did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal"
+AGENT="did:webvh:Qmb8LWd9DWcCY9KxESX69Dfkgf4n1LXtGeje6Hn9647yxD:abovebeyond.ai:id#agent-rehearsal"
 AGENT_Q="${AGENT//#/%23}" # in a query string the fragment sign must be escaped
 G="gcloud --project=$PROJECT compute"
 here=$(cd "$(dirname "$0")" && pwd)

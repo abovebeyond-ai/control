@@ -9,11 +9,15 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.20.1}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-c9fef7f7815cd9bebdf65cf2d3b6bb7e5937e4e7b7bcd75c2c02e4add457db52}"
+RELEASE="${CONTROL_RELEASE:-v0.21.0}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-a9a8c3acf1a639f7393bb03feaf55953cc4d96033cf776c35725f7c4457d421d}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
-AGENT="${CONTROL_AGENT:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai#agent-rehearsal}"
-PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai}"
+# The rehearsal's own identity, overridden by the carried configuration on a real boot. It
+# names the successor since 13 September 2026; the first identifier (QmdUpq…) is final at
+# version 14 and still resolves, but a default that names a closed identity misleads whoever
+# rebuilds from docs/rebuild.md, which is the one moment nobody has the context to spot it.
+AGENT="${CONTROL_AGENT:-did:webvh:Qmb8LWd9DWcCY9KxESX69Dfkgf4n1LXtGeje6Hn9647yxD:abovebeyond.ai:id#agent-rehearsal}"
+PRINCIPAL="${CONTROL_PRINCIPAL:-did:webvh:Qmb8LWd9DWcCY9KxESX69Dfkgf4n1LXtGeje6Hn9647yxD:abovebeyond.ai:id}"
 # Where to listen. 127.0.0.1 for a rehearsal reached over ssh; 0.0.0.0 when a hand on
 # another machine reaches it through Google's IAP tunnel (the firewall admits only
 # 35.235.240.0/20 on the port, and the token below guards the submission).
