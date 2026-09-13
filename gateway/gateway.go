@@ -289,6 +289,7 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 		merged[k] = v
 	}
 	var capReason string
+	pol := g.cfg.Policy
 	if key := g.cfg.Policy.Grant.PrincipalKey; key != "" {
 		switch {
 		case token == "":
@@ -308,12 +309,17 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 			merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires}
 			if !p.Covers(action.Kind, action.Resource) {
 				capReason = "the capability does not cover " + action.Kind + " on " + action.Resource
+				break
 			}
+			// The task the principal named selects the task's own rules out of the grant.
+			pol, capReason = g.cfg.Policy.ForTask(p.Task.Playbook)
 		}
 	} else if token != "" {
 		merged["control_capability"] = capability.Digest(token)
+	} else if g.cfg.Policy.PerTask() {
+		_, capReason = g.cfg.Policy.ForTask("")
 	}
-	return g.submit(run, action, principal, merged, prem, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified", capReason)
+	return g.submit(run, action, principal, merged, prem, pol, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified", capReason)
 }
 
 // SubmitIn is one intercepted step within a run. The path summary the policy
@@ -326,11 +332,15 @@ func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, e
 	capReason := ""
 	if g.cfg.Policy.Grant.PrincipalKey != "" {
 		capReason = "no capability from the principal for this task"
+	} else if g.cfg.Policy.PerTask() {
+		_, capReason = g.cfg.Policy.ForTask("")
 	}
-	return g.submit(run, action, principal, extension, prem, g.cfg.Policy.Grant.SubmitterKey != "", capReason)
+	return g.submit(run, action, principal, extension, prem, g.cfg.Policy, g.cfg.Policy.Grant.SubmitterKey != "", capReason)
 }
 
-func (g *Gateway) submit(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, unsigned bool, capReason string) Verdict {
+// submit judges under pol: the agent's policy, or the one task of it the capability
+// selected. The bundle a record names stays the agent's; the task is in control_task.
+func (g *Gateway) submit(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, pol policy.Policy, unsigned bool, capReason string) Verdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	phi := g.summary(run)
@@ -374,19 +384,19 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 		verdict, reason = "DENY", "the submission is not signed by the agent's key"
 	case capReason != "":
 		verdict, reason = "DENY", capReason
-	case g.cfg.Policy.RequiresPremises(action.Kind) && prem == nil:
+	case pol.RequiresPremises(action.Kind) && prem == nil:
 		verdict, reason = "DENY", "no certificate of premises for "+action.Kind
 	case prem != nil && !prem.Verified:
 		verdict, reason = "DENY", "the certificate of premises does not verify: "+first(prem.Errors)
-	case prem != nil && !acceptedJudgement(g.cfg.Policy, prem):
-		c, _ := g.cfg.Policy.Accepted(prem.RequiredControls)
+	case prem != nil && !acceptedJudgement(pol, prem):
+		c, _ := pol.Accepted(prem.RequiredControls)
 		if c == "" {
 			verdict, reason = "DENY", "the certificate of premises argues no judgement"
 		} else {
 			verdict, reason = "DENY", "the certificate argues "+c+", which this grant does not accept"
 		}
 	default:
-		verdict, reason = g.cfg.Policy.Evaluate(action, phi)
+		verdict, reason = pol.Evaluate(action, phi)
 	}
 
 	link := evidence.Link(g.head, snapshotDigest, verdict)
@@ -402,7 +412,7 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 	}
 	paramsDigest, _ := canonical.Digest(params)
 	if verdict == "ALLOW" {
-		extension["control_matched"] = policy.Matched(action, phi, g.cfg.Policy.Grant)
+		extension["control_matched"] = policy.Matched(action, phi, pol.Grant)
 	}
 	extension["control_params"] = canonical.Tag(paramsDigest)
 	// The bill of materials in force: the one the hand submitted for this request (its

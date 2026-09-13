@@ -41,7 +41,11 @@ carries the signature and the key, and nothing leaves the machine but the signat
 judgement is never a verb: those are people's, on the page.
 Each grant names the judgements a certificate of premises may argue for it (v0.13.0):
 the two repair hands accept `FIX_WITHIN_SEMVER`, the major-upgrade hand `MAJOR_PROPOSED`
-and `MAJOR_UNDER_TESTS`; a working that argues another, or none, is refused. **Excluded:** `pull.merge` (no hand holds a grant for it;
+and `MAJOR_UNDER_TESTS`, the headers hand `HEADERS_SAFE_SET`; a working that argues
+another, or none, is refused. Since v0.18.0 those four are tasks under one agent,
+`#agent-elixir`, because they run as one process under one key; the capability's task
+selects the task's judgements, and a certificate that argues another task's judgement is
+refused the same way. **Excluded:** `pull.merge` (no hand holds a grant for it;
 merging is a person's act or the automation rung earned in Portal's ledger, outside this
 claim), reads of any kind (measurements do not change a repository), and anything a
 person does with the same tokens by hand (not an agent action).
