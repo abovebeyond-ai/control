@@ -290,11 +290,22 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 	}
 	var capReason string
 	pol := g.cfg.Policy
-	if key := g.cfg.Policy.Grant.PrincipalKey; key != "" {
+	if key := g.cfg.Policy.Grant.PrincipalKey; key != "" || len(g.cfg.Policy.Grant.PrincipalKeys) > 0 {
 		switch {
 		case token == "":
 			capReason = "no capability from the principal for this task"
 		default:
+			// Which of the principal's keys: the one the token names as its issuer, when the
+			// grant lists it by fragment (the operator's token keys), else the principal key.
+			if unverified, _, _, perr := capability.Parse(token); perr == nil {
+				if k, named := g.cfg.Policy.Grant.PrincipalKeys[unverified.Issuer]; named {
+					key = k
+				}
+			}
+			if key == "" {
+				capReason = "the capability's issuer is not a key the grant names"
+				break
+			}
 			pub, err := hex.DecodeString(key)
 			if err != nil || len(pub) != ed25519.PublicKeySize {
 				capReason = "the grant's principal key is not a valid key"
@@ -306,7 +317,7 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 				break
 			}
 			merged["control_capability"] = capability.Digest(token)
-			merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires}
+			merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires, "iss": p.Issuer}
 			if !p.Covers(action.Kind, action.Resource) {
 				capReason = "the capability does not cover " + action.Kind + " on " + action.Resource
 				break
@@ -330,7 +341,7 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 // exactly as it was.
 func (g *Gateway) SubmitIn(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material) Verdict {
 	capReason := ""
-	if g.cfg.Policy.Grant.PrincipalKey != "" {
+	if g.cfg.Policy.Grant.PrincipalKey != "" || len(g.cfg.Policy.Grant.PrincipalKeys) > 0 {
 		capReason = "no capability from the principal for this task"
 	} else if g.cfg.Policy.PerTask() {
 		_, capReason = g.cfg.Policy.ForTask("")
