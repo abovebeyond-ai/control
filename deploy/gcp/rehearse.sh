@@ -73,14 +73,18 @@ config)
   # applies it with what belongs to the VM (listen, store, secrets, attestation, the token
   # from Secret Manager). A reboot applies it; nobody is inside.
   [ -f "${2:-}" ] || { echo "config FILE: the generated config.json"; exit 2; }
-  python3 - "$2" > /tmp/control-config.json <<'PYCFG'
+  # Into a fresh file, never a fixed path: on 13 September 2026 the operator had copied the
+  # box's config to /tmp/control-config.json, the shell truncated it as this command's
+  # output before python read it as its input, and the reboot re-applied the old grant.
+  carried=$(mktemp)
+  python3 - "$2" > "$carried" <<'PYCFG'
 import json,sys
 c=json.load(open(sys.argv[1]))
 for k in ('listen','store','secrets','attestation','client_token','carried_over'): c.pop(k, None)
 print(json.dumps(c, separators=(',',':')))
 PYCFG
-  $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config=/tmp/control-config.json
-  rm -f /tmp/control-config.json
+  $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file control-config="$carried"
+  rm -f "$carried"
   echo "carried; reboot to apply: $0 reboot"
   ;;
 tokens)
@@ -88,7 +92,10 @@ tokens)
   # service account and nothing else; the boot script fetches them. Read from the box's
   # secrets, never stored on this machine.
   BOX="${CONTROL_BOX:-elixir@167.233.221.164}"
-  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep ^github-token-'); do
+  # Since 13 September 2026 also portal-token, Portal's ingest token for the Portal adapter,
+  # when the operator has placed it there: what a hand writes to Portal goes through the
+  # gateway like a push, and the token stays where the pushes' tokens are.
+  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^portal-token$"'); do
     n="control-$f"
     if gcloud --project="$PROJECT" secrets describe "$n" >/dev/null 2>&1; then
       ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | tr -d '\n' | gcloud --project="$PROJECT" secrets versions add "$n" --data-file=- >/dev/null && echo "updated $n"

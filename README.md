@@ -32,7 +32,16 @@ attackers are built, and it is what the standard's rows on independent monitors 
    the token is the standard's claim set, EdDSA over its canonical form (RFC 8785).
 4. **Written before released.** The record is fsynced under a lock before the answer;
    an unwritable store answers FAIL_CLOSED and nothing leaves.
-5. **The effect**, by an adapter holding the credential: GitHub first.
+5. **The effect**, by an adapter holding the credential. Two adapters: GitHub
+   (`workflow.dispatch`, `branch.push`, `branch.delete`, `pull.open`, `pull.ready` on
+   `owner/repo`, one token per owner) and, since 13 September 2026, Portal (`portal.update`,
+   `portal.time_entry`, `portal.expense`, `portal.project.patch`, `portal.task`,
+   `portal.measure`, `portal.playbook` on `portal:<slug>`, the ingest token `portal-token`).
+   The Portal adapter exists because the writes of a session to the operator's own
+   dashboard went on the operator's token, from the session's machine, with no record: the
+   same hand without evidence the GitHub adapter had replaced for pushes. The record and
+   the capability travel with each write as `Control-Evidence` and `Control-Capability`
+   headers, so Portal can keep them beside what was written.
 
 ## Run it
 
