@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -139,6 +140,21 @@ func main() {
 		}
 		_, *measurement, _ = canonical.UntagAny(rec.Measurement())
 		fmt.Printf("holds  attestation: %s quote binds the key, MRTD %s\n", rec.Platform, rec.MRTD)
+		// The release the machine says it runs, from its newest record: the asset at that
+		// tag is what RTMR3 must carry. The checker's own tag is not the reference (13
+		// September 2026: the watcher moved to v0.16.3 for its checker while the machine
+		// stayed on v0.16.2, and held the machine to the wrong binary).
+		if *releaseSHA384 == "" && !*offline {
+			if tag, sha256Hex := releaseOf(src, agents); tag != "" {
+				sum384, err := releaseAsset(tag, sha256Hex)
+				if err != nil {
+					fmt.Printf("note   gateway: the release %s the records name could not be fetched: %v\n", tag, err)
+				} else {
+					*releaseSHA384 = sum384
+					fmt.Printf("holds  gateway: the records name release %s, whose asset matches its published sha256\n", tag)
+				}
+			}
+		}
 		broken += bootLayers(&rec, *endorsement, *releaseSHA384, *offline)
 	}
 	for _, agent := range agents {
@@ -531,4 +547,57 @@ func readRef(ref string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s", ref, res.Status)
 	}
 	return io.ReadAll(io.LimitReader(res.Body, 8<<20))
+}
+
+// releaseOf reads "vX.Y.Z sha256:HEX" from the newest record of any chain: what the
+// gateway says it runs, written by the boot script that installed it by that checksum.
+func releaseOf(src source, agents []string) (string, string) {
+	// The newest record across every chain: a chain that has not grown since an older
+	// release still names that older release.
+	var latest float64
+	tag, sum := "", ""
+	for _, agent := range agents {
+		records, err := src.Records(agent)
+		if err != nil || len(records) == 0 {
+			continue
+		}
+		c := records[len(records)-1].Claims()
+		at, _ := c["iat"].(float64)
+		v, _ := c["control_gateway"].(string)
+		t, rest, ok := strings.Cut(v, " ")
+		if !ok || !strings.HasPrefix(rest, "sha256:") || at < latest {
+			continue
+		}
+		latest, tag, sum = at, t, strings.TrimPrefix(rest, "sha256:")
+	}
+	return tag, sum
+}
+
+// releaseAsset fetches the gateway binary of a release, holds it to the sha256 the
+// records name, and returns its SHA-384, which is what the machine measured into RTMR3.
+func releaseAsset(tag, sha256Hex string) (string, error) {
+	url := "https://github.com/abovebeyond-ai/control/releases/download/" + tag + "/control-gateway-linux-amd64"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("%s: %s", url, res.Status)
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 64<<20)) // a static Go binary, tens of megabytes
+	if err != nil {
+		return "", err
+	}
+	if got := canonical.SHA256(raw); got != sha256Hex {
+		return "", fmt.Errorf("the asset at %s has sha256 %s, the records name %s", tag, got[:16], sha256Hex[:16])
+	}
+	sum := sha512.Sum384(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
