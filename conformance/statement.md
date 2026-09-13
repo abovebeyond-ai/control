@@ -202,9 +202,21 @@ is the public action `abovebeyond-ai/control-verify-action`, built from `cmd/rel
 pinned release, and it runs in the repository's own workflow, where neither Elixir nor the
 gateway can switch it off. Its first real run refused (the agent's DID form against the
 document's alias) and the job stopped with nothing done, which is the halt the row asks for,
-observed before it was rehearsed; the second run held and the work proceeded. The merge
-check on pull requests, and the branch protection that requires it, are the next step; the
-drills, the availability analysis and the inventory follow.
+observed before it was rehearsed; the second run held and the work proceeded.
+
+The merge check on pull requests runs since 10 September 2026 in every repository under
+Elixir and, since 12 September, in the three of our own and the seven that had no check
+before, for the hands' branches (`elixir/` and, since the workbench hand, `workbench/`); a
+person's pull request is skipped, and skipped is not a verdict. It was drilled on 13
+September 2026 at 12:14 UTC: the operator, by hand, pushed a branch named like the hands'
+branches to `abovebeyond-ai/verify-abovebeyond` and opened a pull request with no footer.
+The check ran and refused with "the pull request carries no evidence footer", the job
+failed, and GitHub marked the pull request unstable; it was closed unmerged and the branch
+deleted (`conformance/drills/merge-check-2026-09-13.md`). What the drill also showed: a
+failed check does not by itself stop a merge. Branch protection that requires it exists
+only where the plan allows, which is not the private repositories under the personal
+account, so there the check is a red mark a person must read, and the statement says so.
+The availability analysis and the inventory follow.
 
 ## The outsider's run (8.1.5)
 
