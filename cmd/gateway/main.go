@@ -363,10 +363,24 @@ type submitRequest struct {
 	Agbom map[string]any `json:"agbom,omitempty"`
 }
 
+// maxSubmission is what one submission may weigh. Eight MiB was the first number, sized for
+// a branch.push with its lockfiles. A review page is a different animal: Vera's paper page is
+// 8.4 MB of HTML with its readings, which is 11.2 MB once it travels as base64 inside the
+// JSON, and the gateway refused it with "request body too large" on 13 September 2026, the
+// evening Vera became a hand. The limit exists to keep a sealed machine from being filled by
+// whoever can reach the port, so it stays, at a size that fits the work the hands actually do.
+const maxSubmission = 32 << 20
+
 func (s *service) submit(w http.ResponseWriter, r *http.Request) {
-	// Up to 8 MiB: a branch.push carries lockfiles, and a large one is a megabyte or two.
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSubmission))
 	if err != nil {
+		// A body over the limit reads as a network error unless it is named; a hand that
+		// cannot tell "too large" from "connection lost" retries what will never fit.
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, 413, map[string]any{"error": fmt.Sprintf("the submission is larger than %d MiB", maxSubmission>>20)})
+			return
+		}
 		writeJSON(w, 400, map[string]any{"error": "bad request: " + err.Error()})
 		return
 	}
