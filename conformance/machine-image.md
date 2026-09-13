@@ -57,6 +57,16 @@ at the pinned tag.
   it, kept byte for byte at `/var/lib/control/carried-config.json` and travelling in the
   record as `rtmr3_inputs[1].content`.
 
+## Reproduced once
+
+On 13 September 2026 a second machine was created from the same image with the same boot
+script and the production configuration carried (dry), verified through Google's tunnel,
+and deleted (`docs/rebuild.md`). Its MRTD and its RTMR0 to RTMR2 were byte for byte the
+production machine's, its RTMR3 carried the same release binary, and its key was its own.
+That is the reference values reproduced by the one method this page claims for them,
+booting the named image, once, by the operator; a reader with a Google project can do the
+same with `deploy/gcp/rehearse.sh create` under a name of their choosing.
+
 ## What this does not reach
 
 The quote proves what booted and what the gateway measured before it took the quote. It

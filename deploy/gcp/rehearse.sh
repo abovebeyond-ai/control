@@ -34,12 +34,15 @@ create)
     --image "${CONTROL_GCP_IMAGE:-ubuntu-2404-noble-amd64-v20260906}" --image-project ubuntu-os-cloud \
     --boot-disk-size 20GB --no-address \
     --service-account "control-gateway-vm@$PROJECT.iam.gserviceaccount.com" --scopes cloud-platform \
+    --tags control-gateway \
     --metadata control-listen=0.0.0.0:8471 \
     --metadata-from-file startup-script="$here/startup.sh"
   # The service account is the one Secret Manager lets read the tokens, and the listen
   # address is what the tunnel from the box expects; the production machine had both set
   # by hand, and a rebuild from this step alone would have come up deaf and without
-  # tokens (found writing docs/rebuild.md, 13 September 2026). Then: config, tokens, lockdown.
+  # tokens (found writing docs/rebuild.md, 13 September 2026). The tag is what the
+  # firewall rule for the tunnel range names: without it Google's tunnel cannot reach the
+  # port (found in the first rehearsal, the same morning). Then: config, tokens, lockdown.
   echo "created without a public address; next: $0 config FILE, $0 tokens, $0 reboot, $0 lockdown (docs/rebuild.md)"
   ;;
 submit)
