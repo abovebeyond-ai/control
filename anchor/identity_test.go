@@ -1,6 +1,7 @@
 package anchor
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -147,5 +148,26 @@ func TestKeysOfReadsTheFragmentsHistoryOldestFirst(t *testing.T) {
 	}
 	if _, err := KeysOf(raw, "agent-nobody"); err == nil {
 		t.Error("an unknown fragment must be refused")
+	}
+}
+
+// The operator's keys resolve by fragment to the version that published them.
+func TestKeysNamedResolvesAFragmentToItsVersion(t *testing.T) {
+	x := func(b byte) string { return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
+	logRaw := []byte(`{"versionId":"1-a","versionTime":"2026-09-07T07:20:00Z","state":{"verificationMethod":[{"id":"did:web:e.org#key-1","publicKeyJwk":{"x":"` + x(1) + `"}}]}}
+{"versionId":"2-b","versionTime":"2026-09-13T15:00:00Z","state":{"verificationMethod":[{"id":"did:web:e.org#key-1","publicKeyJwk":{"x":"` + x(1) + `"}},{"id":"did:web:e.org#operator","publicKeyJwk":{"x":"` + x(2) + `"}},{"id":"did:web:e.org#operator-2","publicKeyJwk":{"x":"` + x(3) + `"}}]}}
+`)
+	keys, err := KeysNamed(logRaw, "operator")
+	if err != nil || len(keys) != 2 {
+		t.Fatalf("two operator keys: %v %d", err, len(keys))
+	}
+	if keys[0].ID != "did:web:e.org#operator" || keys[0].Version != 2 || keys[0].Time != "2026-09-13T15:00:00Z" || !bytes.Equal(keys[0].Key, bytes.Repeat([]byte{2}, 32)) {
+		t.Fatalf("operator: %+v", keys[0])
+	}
+	if keys[1].ID != "did:web:e.org#operator-2" || keys[1].Version != 2 {
+		t.Fatalf("operator-2: %+v", keys[1])
+	}
+	if k, _ := KeysNamed(logRaw, "key-1"); len(k) != 1 || k[0].Version != 1 {
+		t.Fatalf("key-1 first at version 1: %+v", k)
 	}
 }

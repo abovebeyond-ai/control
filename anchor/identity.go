@@ -80,6 +80,56 @@ func KeysOf(raw []byte, fragment string) ([][]byte, error) {
 	return keys, nil
 }
 
+// KeyAt is one key the log names under one fragment, with the version that first named it
+// and the version's time: what a record's "admitted by #operator-2" resolves to.
+type KeyAt struct {
+	ID      string // the full verification method id
+	Version int    // 1-based, the entry that carried it
+	Time    string // versionTime of that entry
+	Key     []byte
+}
+
+// KeysNamed returns every (fragment, key) the log ever names, in order of first appearance,
+// for the fragments a pattern matches ("operator", "operator-2" for "operator"): the
+// operator's own keys, as they were published, so a capability's issuer resolves to a key
+// and to the version that made it public.
+func KeysNamed(raw []byte, prefix string) ([]KeyAt, error) {
+	var out []KeyAt
+	seen := map[string]bool{}
+	for i, line := range bytes.Split(raw, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var e struct {
+			VersionTime string `json:"versionTime"`
+			State       struct {
+				VerificationMethod []struct {
+					ID  string `json:"id"`
+					JWK struct {
+						X string `json:"x"`
+					} `json:"publicKeyJwk"`
+				} `json:"verificationMethod"`
+			} `json:"state"`
+		}
+		if err := json.Unmarshal(line, &e); err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		for _, m := range e.State.VerificationMethod {
+			frag := m.ID[strings.LastIndex(m.ID, "#")+1:]
+			if !strings.HasPrefix(frag, prefix) || m.JWK.X == "" || seen[m.ID+"|"+m.JWK.X] {
+				continue
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(m.JWK.X)
+			if err != nil || len(raw) != 32 {
+				continue
+			}
+			seen[m.ID+"|"+m.JWK.X] = true
+			out = append(out, KeyAt{ID: m.ID, Version: i + 1, Time: e.VersionTime, Key: raw})
+		}
+	}
+	return out, nil
+}
+
 // ReadLog parses a did.jsonl; the DID is read from the state of the first entry.
 func ReadLog(raw []byte) ([]LogEntry, error) {
 	var out []LogEntry

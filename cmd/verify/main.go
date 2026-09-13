@@ -39,6 +39,7 @@ import (
 	"github.com/abovebeyond-ai/control/anchor"
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
+	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
@@ -76,9 +77,11 @@ func main() {
 	// log. A gateway rebuilt from its image has a new key; the chains its predecessor
 	// signed verify under the old one, which the log still names at the versions it held.
 	var keys []ed25519.PublicKey
+	var didRaw []byte
 	if *didLog != "" {
 		raw, err := readRef(*didLog)
 		fail(err)
+		didRaw = raw
 		history, err := anchor.KeysOf(raw, "control-gateway")
 		fail(err)
 		for _, k := range history {
@@ -239,6 +242,58 @@ func main() {
 			if err := premises.Replay(c, material); err != nil {
 				fmt.Printf("BROKEN %s record %d: %v\n", agent, i, err)
 				broken++
+			}
+		}
+		// The principal's word. A request record that names a capability's issuer under
+		// control_task.iss was allowed on a capability that issuer signed; where the identity
+		// log is given and the capability is kept beside the record, a stranger re-verifies
+		// it here against the key the log publishes under that fragment, and learns at which
+		// version that key became public. "Admitted by #operator-2, key valid since version
+		// 13" is the sentence the standard asks for (rows 4.1.6, 4.2.2): the chain ends at a
+		// person, not at the application that carried the token.
+		if didRaw != nil {
+			named, err := anchor.KeysNamed(didRaw, "operator")
+			if err != nil {
+				fmt.Printf("BROKEN identity log: %v\n", err)
+				broken++
+			}
+			byWord := map[string]int{}
+			for i, tok := range records {
+				c := tok.Claims()
+				task, _ := c["control_task"].(map[string]any)
+				iss, _ := task["iss"].(string)
+				if iss == "" || c["control_phase"] != "request" || !strings.Contains(iss, "#operator") {
+					continue
+				}
+				var kept map[string]any
+				found, err := src.Attachment(agent, i, "capability", &kept)
+				capTok, _ := kept["capability"].(string)
+				if err != nil || !found || capTok == "" {
+					fmt.Printf("note   %s record %d: admitted by %s; the capability itself is not kept beside the record (gateway before v0.20.0)\n", agent, i, iss[strings.LastIndex(iss, "#"):])
+					continue
+				}
+				if digest, _ := c["control_capability"].(string); digest != capability.Digest(capTok) {
+					fmt.Printf("BROKEN %s record %d: the capability beside the record is not the one the record names\n", agent, i)
+					broken++
+					continue
+				}
+				var holds *anchor.KeyAt
+				for k := range named {
+					// The log's ids are did:web (the parallel document) or did:webvh; the fragment is the name.
+					if named[k].ID[strings.LastIndex(named[k].ID, "#"):] == iss[strings.LastIndex(iss, "#"):] && capability.SignedBy(capTok, ed25519.PublicKey(named[k].Key)) {
+						holds = &named[k]
+						break
+					}
+				}
+				if holds == nil {
+					fmt.Printf("BROKEN %s record %d: admitted by %s, but no key the log publishes under that name signed the capability\n", agent, i, iss)
+					broken++
+					continue
+				}
+				byWord[fmt.Sprintf("%s, key valid since version %d (%s)", iss[strings.LastIndex(iss, "#"):], holds.Version, holds.Time[:10])]++
+			}
+			for word, n := range byWord {
+				fmt.Printf("holds  %s: %d action(s) admitted by %s; the signature verifies under the published key\n", agent, n, word)
 			}
 		}
 		// Row 1.1.1: the digest in the record resolves to a manifest. Where a bill of

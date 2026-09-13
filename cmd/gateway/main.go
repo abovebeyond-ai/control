@@ -431,6 +431,16 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.Capability != "" && v.Allowed() {
+		// The capability as presented, beside the record that names its digest: a stranger
+		// can then re-verify the principal's word against the key the identity log publishes,
+		// instead of taking the gateway's verification on trust (row 4.1.6: the exact content
+		// the human approved is the capability's own payload).
+		if err := s.store.Attach(req.Agent, v.Step, "capability", map[string]any{"capability": req.Capability}); err != nil {
+			writeJSON(w, 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the capability could not be kept beside the record: " + err.Error(), "step": v.Step})
+			return
+		}
+	}
 	if len(req.Files) > 0 {
 		// What was pushed, beside the record that allowed it, as the working is.
 		if err := s.store.Attach(req.Agent, v.Step, "files", req.Files); err != nil {

@@ -18,7 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/effects"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
@@ -663,5 +665,44 @@ func TestTheReviewHandPublishesInvitesAndSealsOnTheRecord(t *testing.T) {
 	}
 	if len(calls) != 3 || !strings.HasPrefix(calls[2], "PUT /r/paper1/root-signature Bearer vera-tok") {
 		t.Errorf("the seal must reach the app once, with the token: %v", calls)
+	}
+}
+
+// The operator's word is kept beside the record it allowed, so a later reader can
+// re-verify it against the published key instead of trusting the gateway's check: the
+// attachment is the capability as presented, and its digest is the record's.
+func TestTheCapabilityIsKeptBesideTheRecordItAllowed(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{5}, 32))
+	operator := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, 32))
+	agent := "did:webvh:QmTest:example.org#agent-workbench"
+	s := &service{key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}, cfg: config{Issuer: "https://gw.example/control", Store: filepath.Join(dir, "store"), Dry: true, Agents: map[string]struct {
+		Grant policy.Grant `json:"grant"`
+	}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"pull.open"}, Resources: []string{"x/y"}, MaxPerKind: 1,
+		PrincipalKeys: map[string]string{"did:webvh:QmTest:example.org#operator-2": hex.EncodeToString(operator.Public().(ed25519.PublicKey))}}}}}}
+	tok, _ := capability.Issue(capability.Payload{Issuer: "did:webvh:QmTest:example.org#operator-2", Subject: agent, Audience: "https://gw.example/control",
+		Task: capability.Task{Playbook: "workbench", Project: "demo"}, Kinds: []string{"pull.open"}, Resources: []string{"x/y"},
+		IssuedAt: time.Now().Unix(), Expires: time.Now().Add(time.Hour).Unix(), ID: "adm-1"}, operator)
+	body, _ := json.Marshal(submitRequest{Run: "r", Agent: agent, Capability: tok, Action: policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}})
+	rec := httptest.NewRecorder()
+	s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(body)))
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["verdict"] != "ALLOW" {
+		t.Fatalf("expected ALLOW, got %v", out)
+	}
+	var kept map[string]any
+	found, err := store.Attachment(agent, int(out["step"].(float64)), "capability", &kept)
+	if err != nil || !found || kept["capability"] != tok {
+		t.Fatalf("the capability must be kept beside the record: %v %v %v", found, err, kept)
+	}
+	records, _ := store.Records(agent)
+	c := records[int(out["step"].(float64))].Claims()
+	if c["control_capability"] != capability.Digest(tok) || c["control_task"].(map[string]any)["iss"] != "did:webvh:QmTest:example.org#operator-2" {
+		t.Fatalf("the record names the capability's digest and its issuer: %v", c)
+	}
+	if !capability.SignedBy(tok, operator.Public().(ed25519.PublicKey)) || capability.SignedBy(tok, key.Public().(ed25519.PublicKey)) {
+		t.Fatal("SignedBy must hold under the operator's key and under no other")
 	}
 }

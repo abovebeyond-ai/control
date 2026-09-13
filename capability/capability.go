@@ -100,6 +100,14 @@ func Verify(token string, principal ed25519.PublicKey, audience, subject string,
 	return p, nil
 }
 
+// SignedBy says whether the token's signature verifies under this key, and nothing more:
+// what a later reader asks of a capability kept beside a record, whose audience, subject
+// and expiry the gateway held it to at the time.
+func SignedBy(token string, key ed25519.PublicKey) bool {
+	_, raw, sig, err := Parse(token)
+	return err == nil && ed25519.Verify(key, raw, sig)
+}
+
 // Covers says whether a capability names this kind on this resource.
 func (p Payload) Covers(kind, resource string) bool {
 	return contains(p.Kinds, kind) && policy.ResourceCovered(p.Resources, resource)
