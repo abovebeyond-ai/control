@@ -37,10 +37,11 @@ func (p Portal) Kinds() []string {
 	return []string{"portal.update", "portal.time_entry", "portal.expense", "portal.project.patch", "portal.task", "portal.measure", "portal.playbook"}
 }
 
-// projectFields are the fields a project patch may carry: the same list lib/portal.mjs on
-// the operator's machine refuses everything outside of, so an unknown field is refused
-// here rather than dropped by Portal's validation and reported as written.
-var projectFields = map[string]bool{"status": true, "nextAction": true, "milestones": true, "summary": true, "stack": true, "links": true, "replaceLinks": true, "elixir": true, "productionTheirs": true}
+// projectFields are the fields a project patch may carry, flat in the parameters as the
+// schema names them (policy.Schemas): the same list lib/portal.mjs on the operator's
+// machine refuses everything outside of. clearNextAction stands for the null Portal takes
+// to empty the next action, since a schema cannot type a null.
+var projectFields = []string{"status", "nextAction", "milestones", "summary", "stack", "links", "replaceLinks", "elixir", "productionTheirs"}
 
 func (p Portal) token() (string, error) {
 	raw, err := os.ReadFile(filepath.Join(p.SecretsDir, "portal-token"))
@@ -167,14 +168,17 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		}
 		return Outcome{OK: true, Detail: map[string]any{"project": slug, "vendor": str("vendor"), "amount": a.Params["amount"]}}
 	case "portal.project.patch":
-		fields, _ := a.Params["fields"].(map[string]any)
-		if len(fields) == 0 {
-			return Outcome{Error: "portal.project.patch needs params.fields"}
-		}
-		for k := range fields {
-			if !projectFields[k] {
-				return Outcome{Error: "portal.project.patch does not carry the field " + k}
+		fields := map[string]any{}
+		for _, k := range projectFields {
+			if v, ok := a.Params[k]; ok && v != nil {
+				fields[k] = v
 			}
+		}
+		if clear, _ := a.Params["clearNextAction"].(bool); clear {
+			fields["nextAction"] = nil
+		}
+		if len(fields) == 0 {
+			return Outcome{Error: "portal.project.patch needs at least one project field"}
 		}
 		status, body, err := call("PATCH", "project/"+slug, fields)
 		if err != nil {

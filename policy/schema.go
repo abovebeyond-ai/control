@@ -17,9 +17,45 @@ type Schema struct {
 	Optional map[string]string `json:"optional"`
 }
 
-// Types: "string", "hex64" (a sha-256 in hex), "int" (a whole number), "strings"
-// (an object whose values are strings).
+// Types: "string", "hex64" (a sha-256 in hex), "int" (a whole number), "number" (any
+// finite number), "bool", "strings" (an object whose values are strings), "list" (an
+// array of strings), "records" (an array of objects whose values are strings).
 var Schemas = map[string]Schema{
+	// The Portal kinds (since v0.17.0): what a hand writes to the operator's dashboard,
+	// on the resource portal:<slug>. Every field Portal's ingest validation accepts is
+	// named here with its type, and nothing else: the adapter forwards a kind's own
+	// parameters only, so a key outside the schema is refused here rather than dropped
+	// there while the record says it was written.
+	"portal.update": {
+		Required: map[string]string{"title": "string"},
+		Optional: map[string]string{"date": "string", "clientVisible": "bool", "body": "list"},
+	},
+	"portal.time_entry": {
+		Required: map[string]string{"hours": "number"},
+		Optional: map[string]string{"date": "string", "note": "string", "billable": "bool"},
+	},
+	"portal.expense": {
+		Required: map[string]string{"vendor": "string", "amount": "number"},
+		Optional: map[string]string{"currency": "string", "date": "string", "description": "string", "invoiceNumber": "string", "rebillable": "bool"},
+	},
+	"portal.project.patch": {
+		// Every field is optional and at least one must be present (the adapter checks);
+		// clearNextAction empties the next action, since a null cannot be typed here.
+		Required: map[string]string{},
+		Optional: map[string]string{"status": "string", "nextAction": "string", "clearNextAction": "bool", "summary": "string", "milestones": "records", "stack": "list", "links": "records", "replaceLinks": "bool", "elixir": "bool", "productionTheirs": "bool"},
+	},
+	"portal.task": {
+		Required: map[string]string{"key": "string", "state": "string"},
+		Optional: map[string]string{"note": "string", "url": "string"},
+	},
+	"portal.measure": {
+		Required: map[string]string{},
+		Optional: map[string]string{"only": "string"},
+	},
+	"portal.playbook": {
+		Required: map[string]string{"playbook": "string"},
+		Optional: map[string]string{},
+	},
 	"workflow.dispatch": {
 		Required: map[string]string{"workflow": "string", "ref": "string"},
 		Optional: map[string]string{"packages": "int", "plan_sha256": "hex64", "inputs": "strings"},
@@ -111,6 +147,42 @@ func checkType(key, typ string, v any) error {
 	case "bool":
 		if _, ok := v.(bool); !ok {
 			return fmt.Errorf("parameter %q must be true or false", key)
+		}
+	case "number":
+		switch n := v.(type) {
+		case int, int64:
+		case float64:
+			if math.IsNaN(n) || math.IsInf(n, 0) {
+				return fmt.Errorf("parameter %q must be a finite number", key)
+			}
+		default:
+			return fmt.Errorf("parameter %q must be a number", key)
+		}
+	case "list":
+		xs, ok := v.([]any)
+		if !ok {
+			return fmt.Errorf("parameter %q must be a list of strings", key)
+		}
+		for i, x := range xs {
+			if _, ok := x.(string); !ok {
+				return fmt.Errorf("parameter %q[%d] must be a string", key, i)
+			}
+		}
+	case "records":
+		xs, ok := v.([]any)
+		if !ok {
+			return fmt.Errorf("parameter %q must be a list of records", key)
+		}
+		for i, x := range xs {
+			m, ok := x.(map[string]any)
+			if !ok {
+				return fmt.Errorf("parameter %q[%d] must be an object of strings", key, i)
+			}
+			for k, y := range m {
+				if _, ok := y.(string); !ok {
+					return fmt.Errorf("parameter %q[%d].%s must be a string", key, i, k)
+				}
+			}
 		}
 	case "strings":
 		m, ok := v.(map[string]any)
