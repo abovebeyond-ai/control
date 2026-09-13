@@ -391,10 +391,13 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
-	if req.Action.Kind == "branch.push" || req.Action.Kind == "review.publish" {
+	// An expense may carry its invoice (since v0.18.0); it is bound the same way when it does,
+	// and an expense without a file passes without one.
+	expenseWithFile := req.Action.Kind == "portal.expense" && (len(req.Files) > 0 || req.Action.Params["files_sha256"] != nil)
+	if req.Action.Kind == "branch.push" || req.Action.Kind == "review.publish" || expenseWithFile {
 		// A push binds its files, a publication its page, to the judged parameters by
 		// digest before any judgement: what does not match is refused unrecorded.
-		param := map[string]string{"branch.push": "files_sha256", "review.publish": "page_sha256"}[req.Action.Kind]
+		param := map[string]string{"branch.push": "files_sha256", "review.publish": "page_sha256", "portal.expense": "files_sha256"}[req.Action.Kind]
 		want, _ := req.Action.Params[param].(string)
 		got, _ := effects.FilesDigest(req.Files)
 		if len(req.Files) == 0 || want == "" || got != want {

@@ -36,7 +36,8 @@ var Schemas = map[string]Schema{
 	},
 	"portal.expense": {
 		Required: map[string]string{"vendor": "string", "amount": "number"},
-		Optional: map[string]string{"currency": "string", "date": "string", "description": "string", "invoiceNumber": "string", "rebillable": "bool"},
+		// files_sha256 (since v0.18.0): the invoice travels attached, one file, digest bound like a push's files.
+		Optional: map[string]string{"currency": "string", "date": "string", "description": "string", "invoiceNumber": "string", "rebillable": "bool", "files_sha256": "hex64"},
 	},
 	"portal.project.patch": {
 		// Every field is optional and at least one must be present (the adapter checks);
