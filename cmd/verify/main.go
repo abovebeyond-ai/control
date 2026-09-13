@@ -145,7 +145,11 @@ func main() {
 		// September 2026: the watcher moved to v0.16.3 for its checker while the machine
 		// stayed on v0.16.2, and held the machine to the wrong binary).
 		if *releaseSHA384 == "" && !*offline {
-			if tag, sha256Hex := releaseOf(src, agents); tag != "" {
+			tag, sha256Hex := releaseFromAttestation(&rec)
+			if tag == "" {
+				tag, sha256Hex = releaseOf(src, agents)
+			}
+			if tag != "" {
 				sum384, err := releaseAsset(tag, sha256Hex)
 				if err != nil {
 					fmt.Printf("note   gateway: the release %s the records name could not be fetched: %v\n", tag, err)
@@ -547,6 +551,15 @@ func readRef(ref string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s", ref, res.Status)
 	}
 	return io.ReadAll(io.LimitReader(res.Body, 8<<20))
+}
+
+// releaseFromAttestation reads the release the quote itself names (v0.17.2 and later).
+func releaseFromAttestation(rec *attest.Record) (string, string) {
+	tag, rest, ok := strings.Cut(rec.Release, " ")
+	if !ok || !strings.HasPrefix(rest, "sha256:") {
+		return "", ""
+	}
+	return tag, strings.TrimPrefix(rest, "sha256:")
 }
 
 // releaseOf reads "vX.Y.Z sha256:HEX" from the newest record of any chain: what the

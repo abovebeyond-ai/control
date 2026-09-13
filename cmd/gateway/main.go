@@ -236,6 +236,7 @@ func acquire(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 	if measured {
 		r.RTMR3Inputs = inputs
 	}
+	r.Release = cfg.Release
 	r.WithBootLog()
 	raw, _ := json.MarshalIndent(r, "", "  ")
 	if err := os.WriteFile(filepath.Join(cfg.Store, "attestation.json"), append(raw, '\n'), 0o644); err != nil {
