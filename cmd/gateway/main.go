@@ -115,6 +115,7 @@ func main() {
 	}
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets})
+	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.attested, err = attestation(cfg, key)
 	fail(err)
 	// Every agent's chain is opened now, not at its first request: an action the last
@@ -526,6 +527,12 @@ func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Act
 		// and the capability that allowed this change to exist.
 		message, _ := params["message"].(string)
 		params["message"] = message + relying.Footer(relying.EncodeToken(tok), capTok)
+	}
+	if strings.HasPrefix(a.Kind, "portal.") {
+		// Portal takes the record and the capability as headers on the write
+		// (Control-Evidence, Control-Capability); the adapter reads them from here.
+		params["evidence"] = relying.EncodeToken(tok)
+		params["capability"] = capTok
 	}
 	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
 }

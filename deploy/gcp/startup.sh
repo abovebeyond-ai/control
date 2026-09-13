@@ -30,16 +30,20 @@ fetch_secrets() {
   project=$(curl -fsS -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id)
   token=$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
   # No listing (that needs a project-wide right the VM does not have): the names follow
-  # from the policy, one token per repository owner the grants name, plus the client token.
+  # from the policy, one token per repository owner the grants name, plus the client token,
+  # plus Portal's ingest token when a grant names a Portal project (a "portal:<slug>"
+  # resource; the effects package spells the prefix).
   local names="control-client-token"
-  for owner in $(printf '%s' "$(meta control-config)" | python3 -c 'import sys,json
+  for n in $(printf '%s' "$(meta control-config)" | python3 -c 'import sys,json
 try:
     c=json.load(sys.stdin)
 except Exception:
     sys.exit(0)
-owners=sorted({r.split("/")[0].lower() for a in c.get("agents",{}).values() for r in a.get("grant",{}).get("resources",[])})
-print(" ".join(owners))' 2>/dev/null); do
-    names="$names control-github-token-$owner"
+res=[r for a in c.get("agents",{}).values() for r in a.get("grant",{}).get("resources",[])]
+names=sorted({"github-token-"+r.split("/")[0].lower() for r in res if "/" in r})
+if any(r.startswith("portal:") for r in res): names.append("portal-token")
+print(" ".join(names))' 2>/dev/null); do
+    names="$names control-$n"
   done
   for n in $names; do
     local f="${n#control-}"
