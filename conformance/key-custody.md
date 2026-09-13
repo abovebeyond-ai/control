@@ -52,9 +52,17 @@ from A. The software keys that signed versions 4 and 5 were deleted: verificatio
 only the public keys in the log, and a retired private key could only sign a fork.
 Residual: the laptop that runs the ceremony sees the PIN while it is typed; an attacker
 who holds token A and its PIN can sign until B rotates it out; losing A and B together
-ends the identity, since no seed exists off the tokens (a third committed next key on a
-file in a safe would cover that, at a future rotation). Runbook: `scripts/README.md` in
-the site repository, with what the day taught.
+ends the identity, since no seed exists off the tokens. The tokens swap roles at every
+rotation (update on one, the committed successor on the other; twelve versions by 13
+September 2026), and no retired private key is kept anywhere. Decided on 13 September
+2026, after building the alternative: no third successor. A spare as a file in a safe
+(`prepare-spare` in the site's script, rehearsed and kept as an option) puts a copy of the
+update key in software, which is the one property the tokens bought; a third token in a
+safe covers only the case in which both tokens are lost at once. The answer to that case
+is custody, not a key: A and B are kept in two places, never together, and the operator
+writes down where. Should both be lost, the identity ends and a new one begins, with the
+old log readable and every record it covers still verifiable. Runbook: `scripts/README.md`
+in the site repository, with what the day taught.
 
 ## The hands' submission key
 
