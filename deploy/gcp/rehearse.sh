@@ -142,6 +142,23 @@ PYPRIN
 upgrade)
   # A new release: startup.sh pins RELEASE and GATEWAY_SHA; carry the script to the
   # instance and reboot, and the boot installs that release by checksum. No login.
+  #
+  # First: is this checkout the one that holds the newest pin? On 14 September 2026 the pin
+  # for v0.23.0 was merged while `git pull && rehearse.sh upgrade` was already running, so the
+  # pull brought the commit before it, the upgrade carried v0.22.0, and the VM came back on
+  # the release it had. Nothing failed and nothing said so; the drift showed an hour later in
+  # a record. A deploy that silently installs an older version than the repository holds is
+  # worse than one that refuses, so this one refuses.
+  if git -C "$here" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$here" fetch --quiet origin main 2>/dev/null || true
+    theirs="$(git -C "$here" show origin/main:deploy/gcp/startup.sh 2>/dev/null | grep -o 'CONTROL_RELEASE:-v[0-9.]*' || echo '')"
+    ours="$(grep -o 'CONTROL_RELEASE:-v[0-9.]*' "$here/startup.sh" || echo '')"
+    if [ -n "$theirs" ] && [ "$theirs" != "$ours" ]; then
+      echo "this checkout pins ${ours#*:-} and origin/main pins ${theirs#*:-}." >&2
+      echo "git pull first, or carry this one on purpose with CONTROL_PIN_ANYWAY=1." >&2
+      [ "${CONTROL_PIN_ANYWAY:-}" = "1" ] || exit 1
+    fi
+  fi
   $G instances add-metadata "$NAME" --zone "$ZONE" --metadata-from-file startup-script="$here/startup.sh"
   echo "boot script carried: $(grep -o 'CONTROL_RELEASE:-v[0-9.]*' "$here/startup.sh")"
   "$0" reboot
