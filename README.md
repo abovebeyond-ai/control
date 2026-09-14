@@ -77,7 +77,7 @@ for a first deployment beside an existing hand.
 | `GET /v1/checkpoint?agent=` | the signed tree head an anchorer or witness picks up |
 | `GET /v1/records?agent=&from=` | the records, for a verifier |
 | `GET /v1/proof?agent=&step=` | an inclusion proof against the current tree |
-| `GET /v1/agents` | the agents this gateway judges for, the platform, and whether it is dry |
+| `GET /v1/agents` | the agents this gateway judges for, a digest of each grant's kinds and resources, the platform, and whether it is dry |
 | `GET /v1/attachment?agent=&step=&name=` | what was written beside a record: `premises` or `action` |
 | `GET /v1/key` | the public key, issuer and platform |
 | `GET /v1/attestation` | the hardware's record binding the key, or 404 when software attests |

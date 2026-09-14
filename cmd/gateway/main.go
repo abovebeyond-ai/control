@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -598,7 +599,30 @@ func (s *service) agents(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	writeJSON(w, 200, map[string]any{"agents": ids, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()})
+	// And what each one may touch, as a digest. A gateway carries the configuration it was
+	// given until an operator carries over a new one, and nothing told the hands which
+	// version that was: on 14 September 2026 a new project sat in the configuration on the
+	// box for an hour while the VM still served the grant from before it, and the only sign
+	// was a hand being refused with "resource not in grant". A digest per grant is enough to
+	// see the difference and says nothing a reader of the records could not already see.
+	grants := make(map[string]any, len(ids))
+	for _, id := range ids {
+		grants[id] = map[string]any{
+			"kinds":     digestOf(s.cfg.Agents[id].Grant.Kinds),
+			"resources": digestOf(s.cfg.Agents[id].Grant.Resources),
+		}
+	}
+	writeJSON(w, 200, map[string]any{"agents": ids, "grants": grants, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()})
+}
+
+// digestOf names a set without spelling it out: sorted, newline-joined, sha-256. Anyone
+// holding the same list computes the same digest, and nobody learns the list from it.
+func digestOf(values []string) string {
+	sorted := append([]string{}, values...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+
+	return "sha-256:" + hex.EncodeToString(sum[:])
 }
 
 // attachment serves what was written beside a record: the premises material,

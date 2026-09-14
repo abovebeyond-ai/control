@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -725,5 +726,50 @@ func TestASubmissionOverTheLimitIsRefusedByName(t *testing.T) {
 	s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader([]byte("{"))))
 	if rec.Code != 400 || strings.Contains(rec.Body.String(), "larger than") {
 		t.Fatalf("within the limit: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A gateway carries the configuration it was given until an operator carries over a new
+// one, and nothing told the hands which version that was: on 14 September 2026 a new
+// project sat in the configuration on the box while the VM still served the grant from
+// before it, and the only sign was a hand refused with "resource not in grant". So the
+// agents endpoint names each grant by a digest anyone holding the same list can compute.
+func TestAgentsNameEachGrantByADigest(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := log.Open(dir)
+	s := &service{cfg: config{Agents: map[string]struct {
+		Grant policy.Grant `json:"grant"`
+	}{
+		"did:example:ab#agent-elixir": {Grant: policy.Grant{Kinds: []string{"pull.open", "branch.push"}, Resources: []string{"o/b", "o/a"}}},
+	}}, store: store}
+
+	rec := httptest.NewRecorder()
+	s.agents(rec, httptest.NewRequest("GET", "/v1/agents", nil))
+	if rec.Code != 200 {
+		t.Fatalf("agents: %d", rec.Code)
+	}
+	var out struct {
+		Grants map[string]struct {
+			Kinds     string `json:"kinds"`
+			Resources string `json:"resources"`
+		} `json:"grants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	grant := out.Grants["did:example:ab#agent-elixir"]
+
+	// Sorted, newline-joined, sha-256: the order a configuration happens to have does not
+	// change the digest, so a drift means a real difference and never a reshuffle.
+	want := sha256.Sum256([]byte("o/a\no/b"))
+	if grant.Resources != "sha-256:"+hex.EncodeToString(want[:]) {
+		t.Errorf("resources digest: %s", grant.Resources)
+	}
+	if grant.Kinds == grant.Resources || !strings.HasPrefix(grant.Kinds, "sha-256:") {
+		t.Errorf("kinds digest: %s", grant.Kinds)
+	}
+	// The list itself stays out of the answer: a digest names a set without spelling it out.
+	if strings.Contains(rec.Body.String(), "o/a") {
+		t.Errorf("the resources are spelled out: %s", rec.Body.String())
 	}
 }
