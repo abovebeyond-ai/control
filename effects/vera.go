@@ -53,6 +53,26 @@ func ReviewIDOf(resource string) (string, bool) {
 	return parts[2], true
 }
 
+// said turns the app's answer into a sentence a person can act on. Vera answers some
+// refusals without a JSON "error" (a 404 for a review that does not exist has none), and
+// "%v" then printed <nil>: the run was refused and the record said nothing about why, which
+// is the one thing a refusal has to do (13 September 2026, an invitation on a review that
+// was never created).
+func said(status int, res map[string]any) string {
+	for _, key := range []string{"error", "message", "refused"} {
+		if s, ok := res[key].(string); ok && s != "" {
+			return fmt.Sprintf("Vera answered %d: %s", status, s)
+		}
+	}
+	if status == 404 {
+		return fmt.Sprintf("Vera answered %d: no such review", status)
+	}
+	if status == 401 || status == 403 {
+		return fmt.Sprintf("Vera answered %d: the gateway's token does not open this", status)
+	}
+	return fmt.Sprintf("Vera answered %d without saying why", status)
+}
+
 func (v Vera) token() (string, error) {
 	raw, err := os.ReadFile(filepath.Join(v.SecretsDir, "vera-token"))
 	if err != nil {
@@ -150,7 +170,7 @@ func (v Vera) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: err.Error()}
 		}
 		if status != 200 {
-			return Outcome{Error: fmt.Sprintf("Vera answered %d for the root signature: %v", status, res["error"])}
+			return Outcome{Error: said(status, res) + " (the root signature)"}
 		}
 		return Outcome{OK: true, Detail: map[string]any{"review": id, "root": root, "signature": sig, "key": pub, "role": "#vera", "kept": true}}
 	case "review.publish":
@@ -179,7 +199,7 @@ func (v Vera) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: err.Error()}
 		}
 		if status != 200 {
-			return Outcome{Error: fmt.Sprintf("Vera answered %d: %v", status, res["error"])}
+			return Outcome{Error: said(status, res)}
 		}
 		return Outcome{OK: true, Detail: map[string]any{"review": id, "url": res["url"], "page_sha256": want}}
 	case "review.invite":
@@ -192,7 +212,7 @@ func (v Vera) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: err.Error()}
 		}
 		if status != 200 {
-			return Outcome{Error: fmt.Sprintf("Vera answered %d: %v", status, res["error"])}
+			return Outcome{Error: said(status, res)}
 		}
 		return Outcome{OK: true, Detail: map[string]any{"review": id, "email": email, "delivery": res["delivery"]}}
 	}
