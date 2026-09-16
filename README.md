@@ -67,9 +67,14 @@ go build ./cmd/gateway ./cmd/verify
 }
 ```
 
-The signing key is made on first start in the secrets directory, owner-only; GitHub tokens
-live there as `github-token-<owner>`. `dry: true` judges and records but performs nothing,
-for a first deployment beside an existing hand.
+The signing key is made on first start in the secrets directory, owner-only. On GitHub the
+gateway acts as its own **GitHub App** when `github-app-id` and `github-app-key` (the App's
+PEM key) are in that directory: it mints an installation token per owner at the moment of
+the effect, GitHub attributes the work to `<app>[bot]`, and the owner is free to be the
+reviewer branch protection demands. Without the App, or on an owner that has not installed
+it, a token per owner as `github-token-<owner>` carries the effect instead; the refusal
+names both roads when neither is there. `dry: true` judges and records but performs
+nothing, for a first deployment beside an existing hand.
 
 | method | what |
 | --- | --- |
