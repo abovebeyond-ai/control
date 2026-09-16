@@ -157,6 +157,9 @@ func TestTheAppMintsOnceAndLetsGitHubStampTheCommit(t *testing.T) {
 	if author.Load() != false {
 		t.Fatal("under the App the commit must name no author, so GitHub stamps the App")
 	}
+	if out := g.Perform(context.Background(), push("abovebeyond-ai")); out.Detail["via"] != "app" {
+		t.Fatalf("the record must say the App carried the effect, got %v", out.Detail["via"])
+	}
 }
 
 // An owner the App is not installed on still works through that owner's own token, and
@@ -178,6 +181,9 @@ func TestAnOwnerWithoutTheAppFallsBackToItsToken(t *testing.T) {
 	}
 	if author.Load() != true {
 		t.Fatal("under an owner's token the commit must name elixir as author")
+	}
+	if out.Detail["via"] != "owner-token" {
+		t.Fatalf("the record must say the owner's token carried the effect, got %v", out.Detail["via"])
 	}
 	if atomic.LoadInt32(&mints) != 0 {
 		t.Fatal("nothing must be minted for an owner without the App")
