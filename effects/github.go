@@ -43,6 +43,11 @@ type GitHub struct {
 	SecretsDir string
 	Client     *http.Client
 	Base       string // https://api.github.com
+	// Reviewer, when set, is asked to review every pull request the gateway opens or
+	// marks ready. A request, not a permission: it changes who gets notified, nothing
+	// about what may happen, so a failure to request is noted in the outcome and does
+	// not fail the effect.
+	Reviewer string
 }
 
 func (g GitHub) Kinds() []string {
@@ -342,7 +347,11 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if status != 201 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
 		}
-		return done(map[string]any{"url": body["html_url"], "number": body["number"], "draft": draft})
+		detail := map[string]any{"url": body["html_url"], "number": body["number"], "draft": draft}
+		if n, ok := wholeNumber(body["number"]); ok {
+			g.requestReview(call, owner, repo, n, detail)
+		}
+		return done(detail)
 	case "pull.ready":
 		// Only a draft of the gateway's own making: its head is a branch under elixir/
 		// and its body carries the footer the gateway wrote. A person's draft is never
@@ -393,9 +402,32 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 				return Outcome{Error: fmt.Sprintf("GitHub answered %d marking the pull request ready: %v", status, errs)}
 			}
 		}
-		return done(map[string]any{"number": number, "url": body["html_url"], "ready": true})
+		detail := map[string]any{"number": number, "url": body["html_url"], "ready": true}
+		g.requestReview(call, owner, repo, number, detail)
+		return done(detail)
 	}
 	return Outcome{Error: "no adapter for " + a.Kind}
+}
+
+// requestReview asks the configured reviewer to look at a pull request, and writes what
+// GitHub said into the detail. Best effort by design: the proposal exists either way, and
+// a review request that fails (a login that is not a collaborator, say) is a fact for the
+// record, not a reason to undo the effect.
+func (g GitHub) requestReview(call func(method, path string, body any) (int, map[string]any, error), owner, repo string, number int, detail map[string]any) {
+	if g.Reviewer == "" {
+		return
+	}
+	status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, number), map[string]any{"reviewers": []string{g.Reviewer}})
+	switch {
+	case err != nil:
+		detail["review_requested"] = false
+		detail["review_problem"] = err.Error()
+	case status != 201:
+		detail["review_requested"] = false
+		detail["review_problem"] = fmt.Sprintf("GitHub answered %d: %v", status, body["message"])
+	default:
+		detail["review_requested"] = g.Reviewer
+	}
 }
 
 // FooterMark is the line the gateway's pull request footer starts with (relying.FooterMark);

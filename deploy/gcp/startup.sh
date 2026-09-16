@@ -80,6 +80,9 @@ print(" ".join(names))' 2>/dev/null); do
   done
 }
 LISTEN="${CONTROL_LISTEN:-$(meta control-listen)}"; LISTEN="${LISTEN:-127.0.0.1:8471}"
+# The login the gateway asks to review each pull request it opens (v0.24.1): an instance
+# attribute, set once with `gcloud compute instances add-metadata … control-reviewer=<login>`.
+REVIEWER="${CONTROL_REVIEWER:-$(meta control-reviewer)}"
 CLIENT_TOKEN="${CONTROL_CLIENT_TOKEN:-}"
 
 # Every boot runs all of this: it is idempotent, and a boot is how a carried
@@ -116,7 +119,7 @@ if [ -n "$CARRIED" ]; then
   printf '%s' "$CARRIED" | python3 -c "
 import json,sys
 c=json.load(sys.stdin)
-c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','carried_over':True,'release':'$RELEASE sha256:$GATEWAY_SHA','carried_config':'/var/lib/control/carried-config.json'})
+c.update({'listen':'$LISTEN','store':'/var/lib/control/store','secrets':'/var/lib/control/secrets','attestation':'tdx','client_token':'$CLIENT_TOKEN','reviewer':'$REVIEWER','carried_over':True,'release':'$RELEASE sha256:$GATEWAY_SHA','carried_config':'/var/lib/control/carried-config.json'})
 json.dump(c, open('/var/lib/control/config.json','w'), indent=2)
 "
   echo "configuration taken from the instance attribute control-config"

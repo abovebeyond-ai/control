@@ -83,6 +83,12 @@ type config struct {
 	CarriedConfig string `json:"carried_config,omitempty"`
 	// VeraBase is the Vera app the review hand publishes to (default https://vera.abovebeyond.ai).
 	VeraBase string `json:"vera_base,omitempty"`
+	// Reviewer is the GitHub login the gateway asks to review every pull request it opens
+	// (since v0.24.1). With the App as author, a pull request no longer shows under the
+	// owner's own pull requests; on 16 September 2026 two of them sat unnoticed for that
+	// reason. A review request puts them where the owner looks, and it is the form GitHub
+	// gives the person in the loop. Empty means: ask nobody.
+	Reviewer string `json:"reviewer,omitempty"`
 }
 
 type service struct {
@@ -117,7 +123,7 @@ func main() {
 		return
 	}
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
-	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets})
+	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets, Reviewer: cfg.Reviewer})
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.attested, err = attestation(cfg, key)
