@@ -459,5 +459,11 @@ func (r Registry) Add(a Adapter) {
 	}
 }
 
+// GitHub is the registered GitHub adapter, for what is not an effect (the read token).
+func (r Registry) GitHub() (GitHub, bool) {
+	g, ok := r["pull.open"].(GitHub)
+	return g, ok
+}
+
 // ErrNoAdapter: an allowed action nobody can perform is not performed.
 var ErrNoAdapter = errors.New("no effect adapter for this kind")

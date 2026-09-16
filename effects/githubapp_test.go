@@ -257,3 +257,45 @@ func TestHalfAnAppIsRefusedNotIgnored(t *testing.T) {
 		t.Fatalf("an id without a key must refuse naming the key: %v", err)
 	}
 }
+
+// A read token is the App's, downscoped to reading, for an owner the App is installed on;
+// without an App there is nothing to mint from, and the refusal says so.
+func TestAReadTokenIsMintedReadOnlyFromTheApp(t *testing.T) {
+	dir, _ := appDir(t)
+	var scope atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/orgs/abovebeyond-ai/installation":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 77})
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			w.WriteHeader(404)
+		case r.URL.Path == "/app/installations/77/access_tokens":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			scope.Store(body["permissions"])
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_read", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	g := GitHub{SecretsDir: dir, Base: srv.URL, Client: srv.Client()}
+	tok, exp, err := g.ReadToken(context.Background(), "abovebeyond-ai")
+	if err != nil || tok != "ghs_read" || time.Until(exp) < 50*time.Minute {
+		t.Fatalf("a read token must be minted: %q %v %v", tok, exp, err)
+	}
+	perms, _ := scope.Load().(map[string]any)
+	for k, v := range ReadPermissions {
+		if perms[k] != v {
+			t.Fatalf("the token must be downscoped to %v, GitHub was asked for %v", ReadPermissions, perms)
+		}
+	}
+	if _, _, err := g.ReadToken(context.Background(), "nobody"); err == nil || !strings.Contains(err.Error(), "not installed on nobody") {
+		t.Fatalf("an owner without the App must be refused by name: %v", err)
+	}
+	if _, _, err := (GitHub{SecretsDir: t.TempDir()}).ReadToken(context.Background(), "abovebeyond-ai"); err == nil || !strings.Contains(err.Error(), "no GitHub App") {
+		t.Fatalf("without an App there is nothing to mint from: %v", err)
+	}
+}
