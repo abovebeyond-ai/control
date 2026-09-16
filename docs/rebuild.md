@@ -32,7 +32,12 @@ the measurements.
 2. Carry the configuration the box generates (`deploy/gcp/rehearse.sh config <box's
    control/config.json>`) and the tokens (`tokens`; Secret Manager already holds them, this
    only re-adds versions), then `reboot`. The machine installs the pinned release, makes
-   its key, measures itself, attests, serves.
+   its key, measures itself, attests, serves. Since v0.24.0 the GitHub App rides along the
+   same way: `control-github-app-id` and `control-github-app-key` are Secret Manager
+   secrets the boot script fetches when they exist, and the App (`abovebeyond-control`,
+   App ID 4960123) stays installed on the owners whatever machine serves; nothing on
+   GitHub's side changes in a rebuild. The owner tokens remain the fallback for an owner
+   the App is not installed on.
 3. Read the new key: through the tunnel later, or now from the serial log (`serial` prints
    the `/v1/key` line the boot script curls). Verify the fresh machine with
    `verify --gateway` once the tunnel points at it, or with `--key` against its store.
