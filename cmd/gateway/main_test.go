@@ -21,6 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/effects"
 	"github.com/abovebeyond-ai/control/gateway"
@@ -771,5 +775,56 @@ func TestAgentsNameEachGrantByADigest(t *testing.T) {
 	// The list itself stays out of the answer: a digest names a set without spelling it out.
 	if strings.Contains(rec.Body.String(), "o/a") {
 		t.Errorf("the resources are spelled out: %s", rec.Body.String())
+	}
+}
+
+// The read-token door: behind the client token, only for owners the grants name, and
+// what comes back is the App's token downscoped to reading.
+func TestTheReadTokenDoorServesOnlyTheFleetsOwners(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-app-id"), []byte("1"), 0o600)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-app-key"), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600)
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/orgs/x/installation":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 5})
+		case r.URL.Path == "/app/installations/5/access_tokens":
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_read", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer github.Close()
+	s := &service{cfg: config{ClientToken: "secret", Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+		Grant policy.Grant `json:"grant"`
+	}{"a": {Grant: policy.Grant{Kinds: []string{"pull.open"}, Resources: []string{"x/y"}}}}}, effects: effects.Registry{}}
+	s.effects.Add(effects.GitHub{SecretsDir: filepath.Join(dir, "secrets"), Base: github.URL, Client: github.Client()})
+
+	get := func(owner, bearer string) (int, map[string]any) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/v1/github/read-token?owner="+owner, nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		s.authed(s.readToken)(rec, req)
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	if code, _ := get("x", ""); code != 401 {
+		t.Fatalf("without the client token the door stays shut, got %d", code)
+	}
+	if code, out := get("stranger", "secret"); code != 403 || !strings.Contains(fmt.Sprint(out["error"]), "no grant names") {
+		t.Fatalf("an owner no grant names must be refused: %d %v", code, out)
+	}
+	code, out := get("X", "secret")
+	if code != 200 || out["token"] != "ghs_read" || out["owner"] != "x" {
+		t.Fatalf("a fleet owner gets the App's read token: %d %v", code, out)
+	}
+	if perms, _ := out["permissions"].(map[string]any); perms["contents"] != "read" || perms["pull_requests"] != "read" {
+		t.Fatalf("the answer must say the token is read-only: %v", out["permissions"])
 	}
 }

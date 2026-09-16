@@ -138,6 +138,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
+	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
 	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
 	mux.HandleFunc("GET /v1/attachment", s.accessed("attachment", s.attachment))
 	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
@@ -595,6 +596,41 @@ func (s *service) authed(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// readToken hands the box a read-only GitHub token for one owner, minted from the App
+// (effects.GitHub.ReadToken). Behind the client token like a submission; not an effect,
+// so not judged and not recorded. The owner must be one the grants name: the gateway
+// mints for the fleet it serves, not for any account the App happens to be installed on.
+func (s *service) readToken(w http.ResponseWriter, r *http.Request) {
+	owner := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("owner")))
+	if owner == "" {
+		writeJSON(w, 400, map[string]any{"error": "owner is required"})
+		return
+	}
+	known := false
+	for _, a := range s.cfg.Agents {
+		for _, res := range a.Grant.Resources {
+			if o, _, ok := strings.Cut(res, "/"); ok && strings.ToLower(o) == owner && !strings.HasPrefix(res, "vera/") {
+				known = true
+			}
+		}
+	}
+	if !known {
+		writeJSON(w, 403, map[string]any{"error": "no grant names a repository of " + owner})
+		return
+	}
+	gh, ok := s.effects.GitHub()
+	if !ok {
+		writeJSON(w, 501, map[string]any{"error": "no GitHub adapter"})
+		return
+	}
+	token, expires, err := gh.ReadToken(r.Context(), owner)
+	if err != nil {
+		writeJSON(w, 502, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"owner": owner, "token": token, "expires_at": expires.UTC().Format(time.RFC3339), "permissions": effects.ReadPermissions})
 }
 
 // agents lists the agents this gateway judges for, so a verifier that reaches

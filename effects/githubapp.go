@@ -99,15 +99,23 @@ var errNotInstalled = errors.New("the App is not installed on this owner")
 
 // installationToken mints the hour-long token for one owner. Organisations and user
 // accounts have different lookup routes; a 404 on both is errNotInstalled.
-func (a *githubApp) installationToken(ctx context.Context, client *http.Client, base, owner string) (string, time.Time, error) {
+func (a *githubApp) installationToken(ctx context.Context, client *http.Client, base, owner string, permissions map[string]string) (string, time.Time, error) {
 	bearer, err := a.jwt(time.Now())
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	get := func(method, path string) (int, map[string]any, error) {
-		req, err := http.NewRequestWithContext(ctx, method, base+path, nil)
+	get := func(method, path string, send any) (int, map[string]any, error) {
+		var payload io.Reader
+		if send != nil {
+			raw, _ := json.Marshal(send)
+			payload = strings.NewReader(string(raw))
+		}
+		req, err := http.NewRequestWithContext(ctx, method, base+path, payload)
 		if err != nil {
 			return 0, nil, err
+		}
+		if send != nil {
+			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("Authorization", "Bearer "+bearer)
 		req.Header.Set("Accept", "application/vnd.github+json")
@@ -123,7 +131,7 @@ func (a *githubApp) installationToken(ctx context.Context, client *http.Client, 
 	}
 	var id float64
 	for _, path := range []string{"/orgs/" + owner + "/installation", "/users/" + owner + "/installation"} {
-		status, body, err := get("GET", path)
+		status, body, err := get("GET", path, nil)
 		if err != nil {
 			return "", time.Time{}, err
 		}
@@ -138,7 +146,11 @@ func (a *githubApp) installationToken(ctx context.Context, client *http.Client, 
 	if id == 0 {
 		return "", time.Time{}, errNotInstalled
 	}
-	status, body, err := get("POST", fmt.Sprintf("/app/installations/%d/access_tokens", int64(id)))
+	var scope any
+	if permissions != nil {
+		scope = map[string]any{"permissions": permissions}
+	}
+	status, body, err := get("POST", fmt.Sprintf("/app/installations/%d/access_tokens", int64(id)), scope)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -178,7 +190,7 @@ func (g GitHub) appToken(ctx context.Context, app *githubApp, client *http.Clien
 	if c, ok := appTokens.m[key]; ok && time.Until(c.expires) > 5*time.Minute {
 		return c.token, nil
 	}
-	token, expires, err := app.installationToken(ctx, client, base, owner)
+	token, expires, err := app.installationToken(ctx, client, base, owner, nil)
 	if err != nil {
 		return "", err
 	}
@@ -187,4 +199,42 @@ func (g GitHub) appToken(ctx context.Context, app *githubApp, client *http.Clien
 		expires time.Time
 	}{token, expires}
 	return token, nil
+}
+
+// ReadPermissions is the downscope a read token carries: what Elixir's measurements need
+// to see a repository and nothing that changes one.
+var ReadPermissions = map[string]string{"contents": "read", "metadata": "read", "actions": "read", "pull_requests": "read"}
+
+// ReadToken mints a read-only installation token for an owner (since v0.25.0), the road
+// by which the measuring side stops holding GitHub tokens of its own.
+//
+// Until then Elixir read with six fine-grained personal tokens, no expiry, the same values
+// the gateway used to write with; retiring the gateway's copies (v0.24.x) left the read
+// side holding the very thing that had just been removed from the write side. A token
+// minted here lives an hour, carries read permissions only, and stops the moment the App
+// is uninstalled from the owner: reads become as revocable as writes, and the App key is
+// the one GitHub credential in the system. Not an effect, so not judged and not recorded:
+// nothing changes on GitHub when a repository is read. Authenticated all the same: the
+// endpoint stands behind the client token, so only the box asks.
+func (g GitHub) ReadToken(ctx context.Context, owner string) (token string, expires time.Time, err error) {
+	app, ok, err := g.appOf()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if !ok {
+		return "", time.Time{}, errors.New("no GitHub App is configured, so there is no key to mint a read token from")
+	}
+	base := g.Base
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	client := g.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	token, expires, err = app.installationToken(ctx, client, base, owner, ReadPermissions)
+	if errors.Is(err, errNotInstalled) {
+		return "", time.Time{}, fmt.Errorf("the App is not installed on %s", owner)
+	}
+	return token, expires, err
 }
