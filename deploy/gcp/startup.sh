@@ -9,8 +9,8 @@
 # verifier reading attestation.json deserves to know which build made it.
 set -euo pipefail
 
-RELEASE="${CONTROL_RELEASE:-v0.23.0}"
-GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-de79b9d087580e0fb2eba6aa2b6f076be37cf590df4be9e7826562cc3508eda2}"
+RELEASE="${CONTROL_RELEASE:-v0.24.0}"
+GATEWAY_SHA="${CONTROL_GATEWAY_SHA:-4daddd2a6bb3a483886d9658c034fb88c3b7dccf63d4c35c16703f597f8cd71f}"
 ISSUER="${CONTROL_ISSUER:-https://abovebeyond.ai/control/rehearsal}"
 # The rehearsal's own identity, overridden by the carried configuration on a real boot. It
 # names the successor since 13 September 2026; the first identifier (QmdUpq…) is final at
