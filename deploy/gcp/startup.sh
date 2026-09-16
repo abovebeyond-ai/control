@@ -50,6 +50,9 @@ if any(r.startswith("vera/") for r in res): names.append("vera-token")
 print(" ".join(names))' 2>/dev/null); do
     names="$names control-$n"
   done
+  # The GitHub App, when the operator has carried it (v0.24.0): fetched like the rest,
+  # and simply absent until then, in which case the owner tokens carry the effects.
+  names="$names control-github-app-id control-github-app-key"
   for n in $names; do
     local f="${n#control-}"
     curl -fsS -H "Authorization: Bearer $token" "https://secretmanager.googleapis.com/v1/projects/$project/secrets/$n/versions/latest:access" \

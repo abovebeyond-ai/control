@@ -35,8 +35,10 @@ type Adapter interface {
 	Perform(ctx context.Context, a policy.Action) Outcome
 }
 
-// GitHub performs workflow.dispatch and pull.open on owner/repo resources with
-// a token per owner read from the secrets directory as github-token-<owner>.
+// GitHub performs workflow.dispatch and pull.open on owner/repo resources, as the
+// gateway's GitHub App when github-app-id and github-app-key are in the secrets
+// directory (see githubapp.go), else with a token per owner read from the secrets
+// directory as github-token-<owner>.
 type GitHub struct {
 	SecretsDir string
 	Client     *http.Client
@@ -118,14 +120,37 @@ func (g GitHub) token(owner string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+// credential is the token an effect on this owner is sent with, and whether it is the
+// App's (see githubapp.go). The App first when it is configured and installed on the
+// owner; the owner's own token when the App is not installed there; a refusal naming
+// both roads when neither is there.
+func (g GitHub) credential(ctx context.Context, client *http.Client, base, owner string) (token string, asApp bool, err error) {
+	app, ok, err := g.appOf()
+	if err != nil {
+		return "", false, err
+	}
+	if ok {
+		token, err := g.appToken(ctx, app, client, base, owner)
+		if err == nil {
+			return token, true, nil
+		}
+		if !errors.Is(err, errNotInstalled) {
+			return "", false, err
+		}
+		token, fileErr := g.token(owner)
+		if fileErr != nil {
+			return "", false, fmt.Errorf("the App is not installed on %s and there is no github-token-%s either", owner, strings.ToLower(owner))
+		}
+		return token, false, nil
+	}
+	token, err = g.token(owner)
+	return token, false, err
+}
+
 func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 	owner, repo, ok := strings.Cut(a.Resource, "/")
 	if !ok || owner == "" || repo == "" {
 		return Outcome{Error: "resource is not owner/repo"}
-	}
-	token, err := g.token(owner)
-	if err != nil {
-		return Outcome{Error: err.Error()}
 	}
 	base := g.Base
 	if base == "" {
@@ -134,6 +159,10 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 	client := g.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	token, asApp, err := g.credential(ctx, client, base, owner)
+	if err != nil {
+		return Outcome{Error: err.Error()}
 	}
 	call := func(method, path string, body any) (int, map[string]any, error) {
 		var buf bytes.Buffer
@@ -248,10 +277,14 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the tree: %v", status, body["message"])}
 		}
 		newTree, _ := body["sha"].(string)
-		status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/commits", owner, repo), map[string]any{
-			"message": message, "tree": newTree, "parents": []string{baseSHA},
-			"author": map[string]any{"name": "elixir", "email": "elixir@abovebeyond.ai"},
-		})
+		commitBody := map[string]any{"message": message, "tree": newTree, "parents": []string{baseSHA}}
+		if !asApp {
+			// Under an owner's token GitHub would stamp the owner as author; say who it
+			// really was. Under the App, say nothing: GitHub then stamps <app>[bot] as
+			// author and committer, which is the attribution this whole file is for.
+			commitBody["author"] = map[string]any{"name": "elixir", "email": "elixir@abovebeyond.ai"}
+		}
+		status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/commits", owner, repo), commitBody)
 		if err != nil {
 			return Outcome{Error: err.Error()}
 		}

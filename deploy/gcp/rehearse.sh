@@ -95,12 +95,16 @@ tokens)
   # Since 13 September 2026 also portal-token, Portal's ingest token for the Portal adapter,
   # when the operator has placed it there: what a hand writes to Portal goes through the
   # gateway like a push, and the token stays where the pushes' tokens are.
-  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^portal-token$|^vera-token$"'); do
+  # Since v0.24.0 also the GitHub App (github-app-id and github-app-key): the gateway's
+  # own identity on GitHub, minting a token per owner at the moment of the effect. The
+  # key is PEM and keeps its newlines; a token is one line and loses its trailing one.
+  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^github-app-(id|key)$|^portal-token$|^vera-token$"'); do
     n="control-$f"
+    strip="tr -d '\n'"; [ "$f" = github-app-key ] && strip=cat
     if gcloud --project="$PROJECT" secrets describe "$n" >/dev/null 2>&1; then
-      ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | tr -d '\n' | gcloud --project="$PROJECT" secrets versions add "$n" --data-file=- >/dev/null && echo "updated $n"
+      ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | eval "$strip" | gcloud --project="$PROJECT" secrets versions add "$n" --data-file=- >/dev/null && echo "updated $n"
     else
-      ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | tr -d '\n' | gcloud --project="$PROJECT" secrets create "$n" --data-file=- --replication-policy=user-managed --locations="${ZONE%-*}" >/dev/null && echo "created $n"
+      ssh "$BOX" "cat /home/elixir/elixir-secrets/control/$f" | eval "$strip" | gcloud --project="$PROJECT" secrets create "$n" --data-file=- --replication-policy=user-managed --locations="${ZONE%-*}" >/dev/null && echo "created $n"
       gcloud --project="$PROJECT" secrets add-iam-policy-binding "$n" --member "serviceAccount:control-gateway-vm@$PROJECT.iam.gserviceaccount.com" --role roles/secretmanager.secretAccessor >/dev/null
     fi
   done
