@@ -164,6 +164,18 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 	if err != nil {
 		return Outcome{Error: err.Error()}
 	}
+	// Which road carried the effect, in the record. On 16 September 2026 the first effect
+	// after the App went live still went out on an owner's token, because one of the two
+	// App secrets had no version; the fallback did what it should, and nothing said so
+	// except a serial log nobody reads. The road belongs beside the result.
+	via := "owner-token"
+	if asApp {
+		via = "app"
+	}
+	done := func(detail map[string]any) Outcome {
+		detail["via"] = via
+		return Outcome{OK: true, Detail: detail}
+	}
 	call := func(method, path string, body any) (int, map[string]any, error) {
 		var buf bytes.Buffer
 		if body != nil {
@@ -218,7 +230,7 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if status != 204 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"status": status, "evidence_carried": carried}}
+		return done(map[string]any{"status": status, "evidence_carried": carried})
 	case "branch.push":
 		branch, _ := a.Params["branch"].(string)
 		baseSHA, _ := a.Params["base_sha"].(string)
@@ -299,7 +311,7 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if status != 201 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"branch": branch, "commit": commit, "base": baseSHA, "files": len(files)}}
+		return done(map[string]any{"branch": branch, "commit": commit, "base": baseSHA, "files": len(files)})
 	case "branch.delete":
 		branch, _ := a.Params["branch"].(string)
 		if branch == "" || !strings.HasPrefix(branch, "elixir/") {
@@ -313,7 +325,7 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if status != 204 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"branch": branch, "deleted": true}}
+		return done(map[string]any{"branch": branch, "deleted": true})
 	case "pull.open":
 		head, _ := a.Params["branch"].(string)
 		basis, _ := a.Params["base"].(string)
@@ -330,7 +342,7 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		if status != 201 {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"url": body["html_url"], "number": body["number"], "draft": draft}}
+		return done(map[string]any{"url": body["html_url"], "number": body["number"], "draft": draft})
 	case "pull.ready":
 		// Only a draft of the gateway's own making: its head is a branch under elixir/
 		// and its body carries the footer the gateway wrote. A person's draft is never
@@ -381,7 +393,7 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 				return Outcome{Error: fmt.Sprintf("GitHub answered %d marking the pull request ready: %v", status, errs)}
 			}
 		}
-		return Outcome{OK: true, Detail: map[string]any{"number": number, "url": body["html_url"], "ready": true}}
+		return done(map[string]any{"number": number, "url": body["html_url"], "ready": true})
 	}
 	return Outcome{Error: "no adapter for " + a.Kind}
 }
