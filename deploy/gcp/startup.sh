@@ -69,8 +69,15 @@ print(" ".join(names))' 2>/dev/null); do
           && mv "/var/lib/control/secrets/$f.tmp" "/var/lib/control/secrets/$f" && chmod 600 "/var/lib/control/secrets/$f" && chown control:control "/var/lib/control/secrets/$f" \
           || rm -f "/var/lib/control/secrets/$f.tmp"
         ;;
-      404)
-        [ -e "/var/lib/control/secrets/$f" ] && { rm -f "/var/lib/control/secrets/$f"; echo "secret $n is gone; removed $f from disk"; }
+      403|404)
+        # Secret Manager answers 403, not 404, for a secret that no longer exists when the
+        # caller has no project-wide view right (the six owner tokens, 16 September 2026:
+        # deleted, and still on disk after the boot that was meant to shed them). A
+        # credential the machine can no longer fetch is one the operator can no longer
+        # rotate or revoke along the normal road, so a copy the control plane does not
+        # know about goes. If it was an IAM slip instead, the next effect fails naming the
+        # missing token, and the binding plus a reboot bring it back: loud, and recoverable.
+        [ -e "/var/lib/control/secrets/$f" ] && { rm -f "/var/lib/control/secrets/$f"; echo "secret $n is gone ($code); removed $f from disk"; }
         ;;
       *)
         echo "secret $n: $code; whatever is on disk stays"
