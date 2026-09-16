@@ -162,6 +162,56 @@ func TestTheAppMintsOnceAndLetsGitHubStampTheCommit(t *testing.T) {
 	}
 }
 
+// The gateway asks the configured reviewer to look at what it opened, and the record says
+// so; without a reviewer it asks nobody and says nothing.
+func TestTheOwnerIsAskedToReview(t *testing.T) {
+	dir, _ := appDir(t)
+	var asked atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/orgs/abovebeyond-ai/installation":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 77})
+		case r.URL.Path == "/app/installations/77/access_tokens":
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_minted", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls"):
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"html_url": "https://github.com/o/r/pull/9", "number": 9})
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls/9/requested_reviewers"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			asked.Store(body["reviewers"])
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			w.WriteHeader(404)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "unexpected " + r.URL.Path})
+		}
+	}))
+	defer srv.Close()
+	appTokens.Lock()
+	appTokens.m = map[string]struct {
+		token   string
+		expires time.Time
+	}{}
+	appTokens.Unlock()
+
+	open := policy.Action{Kind: "pull.open", Resource: "abovebeyond-ai/repo", Params: map[string]any{"branch": "elixir/x", "base": "main", "title": "t", "body": "b"}}
+	out := GitHub{SecretsDir: dir, Base: srv.URL, Client: srv.Client(), Reviewer: "ShaneDeconinck"}.Perform(context.Background(), open)
+	if !out.OK || out.Detail["review_requested"] != "ShaneDeconinck" {
+		t.Fatalf("the reviewer must be asked and recorded: %+v", out)
+	}
+	if got, _ := asked.Load().([]any); len(got) != 1 || got[0] != "ShaneDeconinck" {
+		t.Fatalf("GitHub must be asked for exactly the reviewer, got %v", asked.Load())
+	}
+
+	asked.Store([]any{})
+	out = GitHub{SecretsDir: dir, Base: srv.URL, Client: srv.Client()}.Perform(context.Background(), open)
+	if got, _ := asked.Load().([]any); !out.OK || out.Detail["review_requested"] != nil || len(got) != 0 {
+		t.Fatalf("without a reviewer nobody is asked and nothing is said: %+v", out)
+	}
+}
+
 // An owner the App is not installed on still works through that owner's own token, and
 // then the commit does name its author, because the token's owner would be stamped.
 func TestAnOwnerWithoutTheAppFallsBackToItsToken(t *testing.T) {
