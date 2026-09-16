@@ -53,12 +53,30 @@ print(" ".join(names))' 2>/dev/null); do
   # The GitHub App, when the operator has carried it (v0.24.0): fetched like the rest,
   # and simply absent until then, in which case the owner tokens carry the effects.
   names="$names control-github-app-id control-github-app-key"
+  # Three answers, three outcomes. 200: the secret lands on disk. 404: the operator has
+  # removed it, so the copy on disk goes too; until 16 September 2026 a removed secret
+  # left its old value on the VM for as long as the disk lived ("whatever is on disk
+  # stays"), which is the wrong default for a credential someone meant to retire. Anything
+  # else (a timeout, a 5xx) keeps what is there: an outage must not strip the machine.
   for n in $names; do
-    local f="${n#control-}"
-    curl -fsS -H "Authorization: Bearer $token" "https://secretmanager.googleapis.com/v1/projects/$project/secrets/$n/versions/latest:access" \
-      | python3 -c 'import sys,json,base64; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["payload"]["data"]).decode())' > "/var/lib/control/secrets/$f.tmp" \
-      && mv "/var/lib/control/secrets/$f.tmp" "/var/lib/control/secrets/$f" && chmod 600 "/var/lib/control/secrets/$f" && chown control:control "/var/lib/control/secrets/$f" \
-      || rm -f "/var/lib/control/secrets/$f.tmp"
+    local f="${n#control-}" code
+    code=$(curl -sS -o "/var/lib/control/secrets/$f.json" -w '%{http_code}' -H "Authorization: Bearer $token" \
+      "https://secretmanager.googleapis.com/v1/projects/$project/secrets/$n/versions/latest:access" || echo 000)
+    case "$code" in
+      200)
+        python3 -c 'import sys,json,base64; sys.stdout.write(base64.b64decode(json.load(sys.stdin)["payload"]["data"]).decode())' \
+          < "/var/lib/control/secrets/$f.json" > "/var/lib/control/secrets/$f.tmp" \
+          && mv "/var/lib/control/secrets/$f.tmp" "/var/lib/control/secrets/$f" && chmod 600 "/var/lib/control/secrets/$f" && chown control:control "/var/lib/control/secrets/$f" \
+          || rm -f "/var/lib/control/secrets/$f.tmp"
+        ;;
+      404)
+        [ -e "/var/lib/control/secrets/$f" ] && { rm -f "/var/lib/control/secrets/$f"; echo "secret $n is gone; removed $f from disk"; }
+        ;;
+      *)
+        echo "secret $n: $code; whatever is on disk stays"
+        ;;
+    esac
+    rm -f "/var/lib/control/secrets/$f.json"
   done
 }
 LISTEN="${CONTROL_LISTEN:-$(meta control-listen)}"; LISTEN="${LISTEN:-127.0.0.1:8471}"
