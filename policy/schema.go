@@ -101,14 +101,17 @@ var Schemas = map[string]Schema{
 	// The preview (17 September 2026): a pull request put on a preview site through the
 	// gateway, in one run of two steps. preview.push sets the one branch a preview site
 	// tracks, named "preview" and no other (the policy holds it to that name), to the head
-	// of the pull request; the number and the head are in the record. forge.deploy then
+	// of the pull request; the number and the head are in the record, and since v0.27.0
+	// optionally the base (params.base): the preview then shows GitHub's test merge of
+	// the pull request onto that commit, what one gets after merging, and the record says
+	// onto what. forge.deploy then
 	// asks Forge to deploy that site, on the resource forge:<slug>, with the tokenless
 	// trigger URL Forge gives per site, held in the gateway's secrets as forge-deploy-<slug>.
 	// Until then the design had a Forge API token on the operator's laptop, which is the
 	// one place a session's credential may not be.
 	PreviewPushKind: {
 		Required: map[string]string{"branch": "string", "sha": "hex40"},
-		Optional: map[string]string{"pull": "int", "head": "string"},
+		Optional: map[string]string{"pull": "int", "head": "string", "base": "hex40"},
 	},
 	ForgeDeployKind: {
 		Required: map[string]string{},

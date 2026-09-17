@@ -25,6 +25,15 @@ func TestParametersAreHeldToTheSchema(t *testing.T) {
 			t.Errorf("%s: must be refused", name)
 		}
 	}
+	// preview.push may say onto which base the previewed commit was merged, a full id or nothing.
+	withBase := Action{Kind: PreviewPushKind, Resource: "o/r", Params: map[string]any{"branch": "preview", "sha": strings.Repeat("b", 40), "pull": float64(7), "base": strings.Repeat("c", 40)}}
+	if err := Validate(withBase); err != nil {
+		t.Fatal(err)
+	}
+	withBase.Params["base"] = "main"
+	if err := Validate(withBase); err == nil {
+		t.Error("a base that is not a full commit id must be refused")
+	}
 	p := Policy{Grant: Grant{Kinds: []string{"pull.open"}, Resources: []string{"o/r"}, MaxPerKind: 1}, PathAware: true}
 	if v, r := p.Evaluate(cases["unknown key"], PathSummary{PerKind: map[string]int{}}); v != "DENY" || !strings.Contains(r, "out of schema") {
 		t.Fatalf("%s %s", v, r)

@@ -11,7 +11,7 @@ in one run of two steps.
 
 | kind | resource | what | credential |
 | --- | --- | --- | --- |
-| `preview.push` | `owner/repo` | set the branch named `preview` to a commit (`params.sha`, the full id; `params.pull` and `params.head` say which pull request and which branch that was) | the GitHub App, or `github-token-<owner>` |
+| `preview.push` | `owner/repo` | set the branch named `preview` to a commit (`params.sha`, the full id; `params.pull` and `params.head` say which pull request and which branch that was; `params.base`, since v0.27.0, the commit of the base it was test-merged onto when the client previews the merge result rather than the head) | the GitHub App, or `github-token-<owner>` |
 | `forge.deploy` | `forge:<slug>` | call the preview site's deployment trigger URL on Forge | `forge-deploy-<slug>` in the secrets: the URL itself |
 
 The preview site on Forge tracks the fixed branch `preview`, quick deploy off. A forced
