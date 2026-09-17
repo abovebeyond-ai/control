@@ -98,7 +98,9 @@ tokens)
   # Since v0.24.0 also the GitHub App (github-app-id and github-app-key): the gateway's
   # own identity on GitHub, minting a token per owner at the moment of the effect. The
   # key is PEM and keeps its newlines; a token is one line and loses its trailing one.
-  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^github-app-(id|key)$|^portal-token$|^vera-token$"'); do
+  # Since v0.26.0 also forge-deploy-<slug>: the tokenless deploy trigger URL of a project's
+  # preview site on Forge (the URL is the secret), for the forge.deploy kind.
+  for f in client-token $(ssh "$BOX" 'ls /home/elixir/elixir-secrets/control/ | grep -E "^github-token-|^github-app-(id|key)$|^portal-token$|^vera-token$|^forge-deploy-"'); do
     n="control-$f"
     strip="tr -d '\n'"; [ "$f" = github-app-key ] && strip=cat
     if gcloud --project="$PROJECT" secrets describe "$n" >/dev/null 2>&1; then

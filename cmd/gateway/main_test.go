@@ -828,3 +828,100 @@ func TestTheReadTokenDoorServesOnlyTheFleetsOwners(t *testing.T) {
 		t.Fatalf("the answer must say the token is read-only: %v", out["permissions"])
 	}
 }
+
+// A pull request on the preview, end to end: one run, the preview branch set to its head
+// with the App's credential, then Forge asked to deploy with the trigger URL from the
+// secrets. A deploy before the push in a run is refused with Forge untouched; a second
+// push in the run is refused; both refusals are records.
+func TestAPullRequestIsPutOnThePreviewInOneRunOfTwoSteps(t *testing.T) {
+	calls := []string{}
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/git/ref/heads/preview"):
+			_, _ = w.Write([]byte(`{"object":{"sha":"oldoldoldoldoldoldoldoldoldoldoldoldoldo"}}`))
+		case r.Method == "PATCH":
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer github.Close()
+	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, "forge "+r.Method+" "+r.URL.Path)
+		w.WriteHeader(200)
+	}))
+	defer forge.Close()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "github-token-x"), []byte("tok-x\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "secrets", effects.ForgeSecret("demo")), []byte(forge.URL+"/servers/1/sites/2/deploy/http?token=s3cret\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("39", 32))
+	agent := "did:webvh:QmTest:example.org#agent-workbench"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"branch.push", "pull.open", policy.PreviewPushKind, policy.ForgeDeployKind}, Resources: []string{"x/y", "portal:demo", "forge:demo"}, MaxPerKind: 1}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.GitHub{SecretsDir: filepath.Join(dir, "secrets"), Base: github.URL})
+	s.effects.Add(effects.Forge{SecretsDir: filepath.Join(dir, "secrets"), Base: forge.URL + "/"})
+	post := func(body any) (int, map[string]any) {
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	push := policy.Action{Kind: policy.PreviewPushKind, Resource: "x/y", Params: map[string]any{"branch": "preview", "sha": sha, "pull": 511, "head": "workbench/ui"}}
+	deploy := policy.Action{Kind: policy.ForgeDeployKind, Resource: "forge:demo", Params: map[string]any{"sha": sha, "pull": 511}}
+
+	// Deploy first: refused, nothing reached.
+	if code, out := post(submitRequest{Run: "r0", Agent: agent, Action: deploy}); code != 200 || out["verdict"] != "DENY" || !strings.Contains(fmt.Sprint(out["reason"]), "before a preview.push") {
+		t.Fatalf("deploy first: %d %v", code, out)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("something was reached before any judgement: %v", calls)
+	}
+
+	code, out := post(submitRequest{Run: "r1", Agent: agent, Action: push})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("push: %d %v", code, out)
+	}
+	detail := out["effect"].(map[string]any)["detail"].(map[string]any)
+	if detail["commit"] != sha || detail["pull"] != 511.0 || detail["previous"] != "oldoldoldoldoldoldoldoldoldoldoldoldoldo" {
+		t.Errorf("push detail: %v", detail)
+	}
+	code, out = post(submitRequest{Run: "r1", Agent: agent, Action: deploy})
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true {
+		t.Fatalf("deploy: %d %v", code, out)
+	}
+	if got := out["effect"].(map[string]any)["detail"].(map[string]any); got["project"] != "demo" || got["commit"] != sha || got["accepted"] != true {
+		t.Errorf("deploy detail: %v", got)
+	}
+	if strings.Join(calls, ", ") != "GET /repos/x/y/git/ref/heads/preview, PATCH /repos/x/y/git/refs/heads/preview, forge POST /servers/1/sites/2/deploy/http" {
+		t.Errorf("the far ends saw %v", calls)
+	}
+	// The secret never leaves: not in the answer, not in a record.
+	raw, _ := json.Marshal(out)
+	records, _ := store.Records(agent)
+	all, _ := json.Marshal(records)
+	if strings.Contains(string(raw), "s3cret") || strings.Contains(string(all), "s3cret") {
+		t.Fatal("the trigger URL leaked into the answer or the records")
+	}
+	// A second push in the same run moves the preview under the reviewer: refused.
+	if code, out := post(submitRequest{Run: "r1", Agent: agent, Action: push}); code != 200 || out["verdict"] != "DENY" {
+		t.Fatalf("second push: %d %v", code, out)
+	}
+	// Any other branch is refused by the policy, before the adapter.
+	other := policy.Action{Kind: policy.PreviewPushKind, Resource: "x/y", Params: map[string]any{"branch": "main", "sha": sha}}
+	if code, out := post(submitRequest{Run: "r2", Agent: agent, Action: other}); code != 200 || out["verdict"] != "DENY" || !strings.Contains(fmt.Sprint(out["reason"]), "named preview and no other") {
+		t.Fatalf("another branch: %d %v", code, out)
+	}
+	if len(calls) != 3 {
+		t.Errorf("a refusal reached a far end: %v", calls)
+	}
+}

@@ -126,6 +126,7 @@ func main() {
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets, Reviewer: cfg.Reviewer})
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
+	s.effects.Add(effects.Forge{SecretsDir: cfg.Secrets})
 	s.attested, err = attestation(cfg, key)
 	fail(err)
 	// Every agent's chain is opened now, not at its first request: an action the last
