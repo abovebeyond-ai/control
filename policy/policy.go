@@ -13,6 +13,16 @@ import (
 
 const Version = "control-1"
 
+// The preview kinds and the one branch the first of them may set. A preview site on Forge
+// tracks a fixed branch; a hand moves that branch to a pull request's head and asks Forge
+// to deploy. The branch is named here and nowhere else, so a grant cannot widen it: a
+// forced update of any other branch would be a push without a pull request.
+const (
+	PreviewPushKind = "preview.push"
+	ForgeDeployKind = "forge.deploy"
+	PreviewBranch   = "preview"
+)
+
 // Action is a proposed effect at the interception point.
 type Action struct {
 	Kind           string         `json:"kind"`
@@ -289,7 +299,32 @@ func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 	if p.PathAware && p.Grant.MaxPerKind > 0 && phi.PerKind[a.Kind]+1 > p.Grant.MaxPerKind {
 		return "DENY", "a second " + a.Kind + " in one run: the first already ran"
 	}
+	if verdict, reason, held := previewRule(a, phi); held {
+		return verdict, reason
+	}
 	return "ALLOW", "within grant"
+}
+
+// previewRule is the path-aware rule of the preview kinds, over and above the grant's
+// counts: preview.push sets the branch named preview and no other, once per run (a second
+// would move the preview under a reviewer's feet, whatever max_per_kind says); forge.deploy
+// follows a preview.push in the same run, since a deploy of what was not set is a deploy
+// of whatever the branch held. Deterministic over (action, path summary) like the rest.
+func previewRule(a Action, phi PathSummary) (string, string, bool) {
+	switch a.Kind {
+	case PreviewPushKind:
+		if branch, _ := a.Params["branch"].(string); branch != PreviewBranch {
+			return "DENY", PreviewPushKind + " sets the branch named " + PreviewBranch + " and no other", true
+		}
+		if phi.PerKind[PreviewPushKind] >= 1 {
+			return "DENY", "a second " + PreviewPushKind + " in one run: the preview was already set", true
+		}
+	case ForgeDeployKind:
+		if phi.PerKind[PreviewPushKind] == 0 {
+			return "DENY", ForgeDeployKind + " before a " + PreviewPushKind + " in this run: nothing was set to deploy", true
+		}
+	}
+	return "", "", false
 }
 
 // RequiresPremises says whether a kind must carry a certificate.

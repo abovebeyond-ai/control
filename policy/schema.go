@@ -17,9 +17,10 @@ type Schema struct {
 	Optional map[string]string `json:"optional"`
 }
 
-// Types: "string", "hex64" (a sha-256 in hex), "int" (a whole number), "number" (any
-// finite number), "bool", "strings" (an object whose values are strings), "list" (an
-// array of strings), "records" (an array of objects whose values are strings).
+// Types: "string", "hex64" (a sha-256 in hex), "hex40" (a git commit id in hex), "int" (a
+// whole number), "number" (any finite number), "bool", "strings" (an object whose values
+// are strings), "list" (an array of strings), "records" (an array of objects whose values
+// are strings).
 var Schemas = map[string]Schema{
 	// The Portal kinds (since v0.17.0): what a hand writes to the operator's dashboard,
 	// on the resource portal:<slug>. Every field Portal's ingest validation accepts is
@@ -97,6 +98,22 @@ var Schemas = map[string]Schema{
 		Required: map[string]string{"root": "string"},
 		Optional: map[string]string{"readings": "int", "judged": "int"},
 	},
+	// The preview (17 September 2026): a pull request put on a preview site through the
+	// gateway, in one run of two steps. preview.push sets the one branch a preview site
+	// tracks, named "preview" and no other (the policy holds it to that name), to the head
+	// of the pull request; the number and the head are in the record. forge.deploy then
+	// asks Forge to deploy that site, on the resource forge:<slug>, with the tokenless
+	// trigger URL Forge gives per site, held in the gateway's secrets as forge-deploy-<slug>.
+	// Until then the design had a Forge API token on the operator's laptop, which is the
+	// one place a session's credential may not be.
+	PreviewPushKind: {
+		Required: map[string]string{"branch": "string", "sha": "hex40"},
+		Optional: map[string]string{"pull": "int", "head": "string"},
+	},
+	ForgeDeployKind: {
+		Required: map[string]string{},
+		Optional: map[string]string{"sha": "hex40", "pull": "int"},
+	},
 	"pull.ready": {
 		// A draft the gateway opened, marked ready for review once the pull request's
 		// checks went green, with the body rewritten to say so; the footer the draft was
@@ -107,6 +124,8 @@ var Schemas = map[string]Schema{
 }
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+var hex40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // Validate holds an action's parameters to the schema of its kind.
 func Validate(a Action) error {
@@ -150,6 +169,11 @@ func checkType(key, typ string, v any) error {
 		s, ok := v.(string)
 		if !ok || !hex64.MatchString(s) {
 			return fmt.Errorf("parameter %q must be a sha-256 in lowercase hex", key)
+		}
+	case "hex40":
+		s, ok := v.(string)
+		if !ok || !hex40.MatchString(s) {
+			return fmt.Errorf("parameter %q must be a git commit id in lowercase hex", key)
 		}
 	case "int":
 		switch n := v.(type) {

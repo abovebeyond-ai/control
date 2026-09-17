@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,7 +36,8 @@ type Adapter interface {
 	Perform(ctx context.Context, a policy.Action) Outcome
 }
 
-// GitHub performs workflow.dispatch and pull.open on owner/repo resources, as the
+// GitHub performs workflow.dispatch, branch.push, branch.delete, pull.open, pull.ready and
+// preview.push on owner/repo resources, as the
 // gateway's GitHub App when github-app-id and github-app-key are in the secrets
 // directory (see githubapp.go), else with a token per owner read from the secrets
 // directory as github-token-<owner>.
@@ -51,7 +53,7 @@ type GitHub struct {
 }
 
 func (g GitHub) Kinds() []string {
-	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open", "pull.ready"}
+	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open", "pull.ready", policy.PreviewPushKind}
 }
 
 // FileChange is one file of a branch.push: the path and the full new content. The runner
@@ -317,6 +319,57 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
 		}
 		return done(map[string]any{"branch": branch, "commit": commit, "base": baseSHA, "files": len(files)})
+	case policy.PreviewPushKind:
+		// The one branch a preview site tracks, set to a pull request's head. A forced
+		// update, because the preview moves from one pull request to the next and their
+		// heads share no history; forced on this branch only, which the adapter holds to
+		// as the policy does, so no grant and no parameter can turn this into a push
+		// elsewhere. The previous head is in the record: what the preview showed until now.
+		branch, _ := a.Params["branch"].(string)
+		sha, _ := a.Params["sha"].(string)
+		if branch != policy.PreviewBranch {
+			return Outcome{Error: policy.PreviewPushKind + " sets the branch named " + policy.PreviewBranch + " and no other"}
+		}
+		if !commitID.MatchString(sha) {
+			return Outcome{Error: policy.PreviewPushKind + " needs params.sha, the full commit id"}
+		}
+		detail := map[string]any{"branch": branch, "commit": sha}
+		if n, ok := wholeNumber(a.Params["pull"]); ok {
+			detail["pull"] = n
+		}
+		if head, _ := a.Params["head"].(string); head != "" {
+			detail["head"] = head
+		}
+		status, body, err := call("GET", fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, branch), nil)
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		switch status {
+		case 200:
+			object, _ := body["object"].(map[string]any)
+			detail["previous"] = object["sha"]
+			status, body, err = call("PATCH", fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, branch), map[string]any{"sha": sha, "force": true})
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+			if status != 200 {
+				return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
+			}
+			detail["created"] = false
+		case 404:
+			// The site's first preview: the branch does not exist yet and is made here.
+			status, body, err = call("POST", fmt.Sprintf("/repos/%s/%s/git/refs", owner, repo), map[string]any{"ref": "refs/heads/" + branch, "sha": sha})
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+			if status != 201 {
+				return Outcome{Error: fmt.Sprintf("GitHub answered %d for the branch: %v", status, body["message"])}
+			}
+			detail["created"] = true
+		default:
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d reading the branch: %v", status, body["message"])}
+		}
+		return done(detail)
 	case "branch.delete":
 		branch, _ := a.Params["branch"].(string)
 		if branch == "" || !strings.HasPrefix(branch, "elixir/") {
@@ -433,6 +486,10 @@ func (g GitHub) requestReview(call func(method, path string, body any) (int, map
 // FooterMark is the line the gateway's pull request footer starts with (relying.FooterMark);
 // spelled here so the effects package does not import the relying party.
 const FooterMark = "<!-- proof-of-control -->"
+
+// commitID is a full git commit id, the only form preview.push sets a branch to: a short
+// id or a branch name would let the far end resolve it to something else than what was judged.
+var commitID = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // wholeNumber reads a JSON number that must be an integer.
 func wholeNumber(v any) (int, bool) {

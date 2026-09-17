@@ -36,7 +36,8 @@ fetch_secrets() {
   # No listing (that needs a project-wide right the VM does not have): the names follow
   # from the policy, one token per repository owner the grants name, plus the client token,
   # plus Portal's ingest token when a grant names a Portal project (a "portal:<slug>"
-  # resource; the effects package spells the prefix).
+  # resource; the effects package spells the prefix), plus one Forge deploy trigger per
+  # project a grant names as "forge:<slug>" (control-forge-deploy-<slug>, since v0.26.0).
   local names="control-client-token"
   for n in $(printf '%s' "$(meta control-config)" | python3 -c 'import sys,json
 try:
@@ -46,6 +47,7 @@ except Exception:
 res=[r for a in c.get("agents",{}).values() for r in a.get("grant",{}).get("resources",[])]
 names=sorted({"github-token-"+r.split("/")[0].lower() for r in res if "/" in r and not r.startswith("vera/")})
 if any(r.startswith("portal:") for r in res): names.append("portal-token")
+names+=sorted({"forge-deploy-"+r[len("forge:"):] for r in res if r.startswith("forge:")})
 if any(r.startswith("vera/") for r in res): names.append("vera-token")
 print(" ".join(names))' 2>/dev/null); do
     names="$names control-$n"
