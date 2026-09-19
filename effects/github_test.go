@@ -3,6 +3,7 @@ package effects
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -40,5 +41,26 @@ func TestADeletionCarriesNoContentAndDigestsAsADeletion(t *testing.T) {
 	empty, _ := FilesDigest([]FileChange{{Path: "a.md"}})
 	if del == empty {
 		t.Fatal("deleting a.md and writing an empty a.md must not digest alike")
+	}
+}
+
+// Every kind the adapter answers is a kind it claims: a case in the switch that the registry
+// never routes to is dead, and on 19 September 2026 issue.open was exactly that for one release
+// (the gateway said "no effect adapter for this kind" on an action its grant allowed).
+func TestEveryHandledKindIsClaimed(t *testing.T) {
+	claimed := map[string]bool{}
+	for _, k := range (GitHub{}).Kinds() {
+		claimed[k] = true
+	}
+
+	source, err := os.ReadFile("github.go")
+	if err != nil {
+		t.Fatalf("read github.go: %v", err)
+	}
+
+	for _, m := range regexp.MustCompile(`(?m)^\tcase "([a-z.]+)":`).FindAllStringSubmatch(string(source), -1) {
+		if !claimed[m[1]] {
+			t.Errorf("the adapter answers %q but does not name it in Kinds()", m[1])
+		}
 	}
 }

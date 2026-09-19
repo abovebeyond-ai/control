@@ -53,7 +53,7 @@ type GitHub struct {
 }
 
 func (g GitHub) Kinds() []string {
-	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open", "pull.ready", policy.PreviewPushKind}
+	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open", "pull.ready", "issue.open", policy.PreviewPushKind}
 }
 
 // FileChange is one file of a branch.push: the path and the full new content. The runner
