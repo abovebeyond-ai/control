@@ -575,6 +575,11 @@ func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Act
 		// and the capability that allowed this change to exist.
 		message, _ := params["message"].(string)
 		params["message"] = message + relying.Footer(relying.EncodeToken(tok), capTok)
+	case "issue.open":
+		// An issue the gateway opened says so, like a pull request does: the record and the
+		// capability in the footer, so a reader can tell a mirrored finding from a human one.
+		body, _ := params["body"].(string)
+		params["body"] = body + relying.Footer(relying.EncodeToken(tok), capTok)
 	}
 	if strings.HasPrefix(a.Kind, "portal.") {
 		// Portal takes the record and the capability as headers on the write

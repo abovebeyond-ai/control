@@ -405,6 +405,35 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			g.requestReview(call, owner, repo, n, detail)
 		}
 		return done(detail)
+	case "issue.open":
+		// An issue is a finding that wants a person's attention: title, body, labels. The
+		// finding itself lives in the repository (docs/bedrijfsregels/bevindingen); this is
+		// its mirror, so the body carries the path and the record like a pull request does.
+		title, _ := a.Params["title"].(string)
+		text, _ := a.Params["body"].(string)
+		if title == "" {
+			return Outcome{Error: "issue.open needs params.title"}
+		}
+		payload := map[string]any{"title": title, "body": text}
+		if raw, ok := a.Params["labels"].([]any); ok && len(raw) > 0 {
+			labels := []string{}
+			for _, v := range raw {
+				if s, ok := v.(string); ok && s != "" {
+					labels = append(labels, s)
+				}
+			}
+			if len(labels) > 0 {
+				payload["labels"] = labels
+			}
+		}
+		status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/issues", owner, repo), payload)
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status != 201 {
+			return Outcome{Error: fmt.Sprintf("GitHub answered %d: %v", status, body["message"])}
+		}
+		return done(map[string]any{"url": body["html_url"], "number": body["number"]})
 	case "pull.ready":
 		// Only a draft of the gateway's own making: its head is a branch under elixir/
 		// and its body carries the footer the gateway wrote. A person's draft is never
