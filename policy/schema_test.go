@@ -42,3 +42,34 @@ func TestParametersAreHeldToTheSchema(t *testing.T) {
 		t.Fatal(m)
 	}
 }
+
+// issue.open (19 September 2026): the mirror of a finding. A title is required, labels are a
+// short list of words, and anything else is refused like every other kind.
+func TestIssueOpenSchema(t *testing.T) {
+	ok := Action{Kind: "issue.open", Resource: "owner/repo", Params: map[string]any{
+		"title":   "Conceptfiche schrijft 48.500 km terug als 48,5",
+		"body":    "docs/bedrijfsregels/bevindingen/2026-09-16-conceptfiche-herladen-schrijft-48500-als-48-5.md",
+		"labels":  []any{"bevinding", "deze week"},
+		"finding": "2026-09-16-conceptfiche-herladen-schrijft-48500-als-48-5",
+	}}
+	if err := Validate(ok); err != nil {
+		t.Fatalf("a complete issue is refused: %v", err)
+	}
+
+	if err := Validate(Action{Kind: "issue.open", Resource: "owner/repo", Params: map[string]any{"body": "x"}}); err == nil {
+		t.Fatal("an issue without a title is accepted")
+	}
+
+	bad := Action{Kind: "issue.open", Resource: "owner/repo", Params: map[string]any{"title": "t", "labels": []any{"a", 2}}}
+	if err := Validate(bad); err == nil {
+		t.Fatal("a label that is not a word is accepted")
+	}
+
+	many := make([]any, 11)
+	for i := range many {
+		many[i] = "label"
+	}
+	if err := Validate(Action{Kind: "issue.open", Resource: "owner/repo", Params: map[string]any{"title": "t", "labels": many}}); err == nil {
+		t.Fatal("eleven labels are accepted")
+	}
+}

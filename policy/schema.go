@@ -81,6 +81,13 @@ var Schemas = map[string]Schema{
 		Required: map[string]string{"branch": "string", "base": "string"},
 		Optional: map[string]string{"title": "string", "body": "string", "packages": "int", "draft": "bool"},
 	},
+	// issue.open (19 September 2026): the mirror of a finding that lives in the repository.
+	// Labels are optional and free text; the body carries the path of the finding, so the
+	// issue can never become a second truth beside the file.
+	"issue.open": {
+		Required: map[string]string{"title": "string"},
+		Optional: map[string]string{"body": "string", "labels": "[]string", "finding": "string"},
+	},
 	// The review hand (13 September 2026): a page published, a person invited, a root
 	// sealed. The page travels attached and digest-bound like a push's files; the root is
 	// a sha-256 tag; a judgement is never a verb.
@@ -192,6 +199,25 @@ func checkType(key, typ string, v any) error {
 	case "bool":
 		if _, ok := v.(bool); !ok {
 			return fmt.Errorf("parameter %q must be true or false", key)
+		}
+	case "[]string":
+		// A list of short words (labels on an issue): every element a string, and the list
+		// bounded, because a parameter that can grow without end is a parameter nobody reads.
+		list, ok := v.([]any)
+		if !ok {
+			return fmt.Errorf("parameter %q must be a list of words", key)
+		}
+		if len(list) > 10 {
+			return fmt.Errorf("parameter %q takes at most ten words", key)
+		}
+		for _, item := range list {
+			s, ok := item.(string)
+			if !ok || s == "" {
+				return fmt.Errorf("parameter %q must be a list of words", key)
+			}
+			if len(s) > 50 {
+				return fmt.Errorf("parameter %q has a word longer than fifty characters", key)
+			}
 		}
 	case "number":
 		switch n := v.(type) {
