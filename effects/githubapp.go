@@ -202,8 +202,18 @@ func (g GitHub) appToken(ctx context.Context, app *githubApp, client *http.Clien
 }
 
 // ReadPermissions is the downscope a read token carries: what Elixir's measurements need
-// to see a repository and nothing that changes one.
-var ReadPermissions = map[string]string{"contents": "read", "metadata": "read", "actions": "read", "pull_requests": "read"}
+// to see a repository and nothing that changes one. Every value is "read", and that is the
+// line this downscope holds: it guards against writing, not against seeing.
+//
+// administration is here for one measurement, protection, which reads whether the main
+// branch is guarded. GitHub has no narrower right for it, so the whole administration
+// bundle comes along: collaborators and teams, the webhook list, the public half of deploy
+// keys, runner and Actions settings. Weighed on 2026-09-19 against contents, which this
+// same token already carries: a leaked read token hands over the source of the whole
+// fleet, next to which a repository's configuration is small. Without it protection
+// answered 403 on 20 of 24 measured projects, and twenty silent blind spots read as a
+// fault rather than as a choice.
+var ReadPermissions = map[string]string{"contents": "read", "metadata": "read", "actions": "read", "pull_requests": "read", "administration": "read"}
 
 // ReadToken mints a read-only installation token for an owner (since v0.25.0), the road
 // by which the measuring side stops holding GitHub tokens of its own.

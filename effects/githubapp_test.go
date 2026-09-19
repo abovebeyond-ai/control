@@ -292,6 +292,13 @@ func TestAReadTokenIsMintedReadOnlyFromTheApp(t *testing.T) {
 			t.Fatalf("the token must be downscoped to %v, GitHub was asked for %v", ReadPermissions, perms)
 		}
 	}
+	// The downscope may widen in what it sees; it may never widen in what it does. A
+	// "write" here would pass the loop above and quietly hand the measuring side a hand.
+	for k, v := range ReadPermissions {
+		if v != "read" {
+			t.Fatalf("a read token carries read rights only, %q asks for %q", k, v)
+		}
+	}
 	if _, _, err := g.ReadToken(context.Background(), "nobody"); err == nil || !strings.Contains(err.Error(), "not installed on nobody") {
 		t.Fatalf("an owner without the App must be refused by name: %v", err)
 	}
