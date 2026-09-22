@@ -172,25 +172,50 @@ repository's code. CI runs both.
 
 ## What it is, no larger than the evidence supports
 
-Software attestation, today. The standard's own validator says it on every token: platform
-SOFTWARE, Tier 2 at most. The records prove they were not altered after the gateway wrote
-them, that the chain is whole, and that a stranger can replay every judgement; they do not
-yet prove the operator could not have written them differently.
+Hardware attestation, on a machine nobody can log into. The gateway asks Intel TDX for a
+quote at start and refuses to run without one; REPORTDATA is SHA-512 of
+`poc-evidence-key\0` and the public key, so the hardware's signature covers both the code
+that runs and the key it holds. Every token says platform INTEL_TDX. Measured on
+22 September 2026:
 
-The move to Tier 3 is built and waits for a machine. The `attest` package binds the
-evidence key to an Intel TDX quote the way the standard's reference does: REPORTDATA is
-SHA-512 of `poc-evidence-key\0` and the public key, so the hardware's signature covers
-both the code that runs and the key it holds. With `"attestation": "tdx"` in its
-configuration the gateway asks the hardware for that quote at start, refuses to run
-without one, writes the record as `attestation.json` beside the store and serves it at
-`/v1/attestation`; every token then says platform INTEL_TDX with the MRTD, a sha-384
-digest, as its measurement. `verify --attestation attestation.json` checks the quote under
-Intel's roots (collateral from Intel's provisioning service unless `--offline`), that it
-binds the key given, and that every record carries that MRTD. Tested against the quote
-Google ships with go-tdx-guest: it parses, verifies at the date its certificates were
-valid, and a copy with our key's digest written into REPORTDATA binds the key and fails
-Intel's signature, which is the two checks being separate on purpose. What remains is a
-confidential VM to run it on, and the disclosure page saying so.
+```
+release     v0.30.0 sha256:e0106215f9ef8919a2d51980b876ee21c96aa263e2d22aa73952c7c15accf044
+platform    INTEL_TDX (configfs-tsm)
+mrtd        c1ee9c16e3afc506cfe042c5b846a368...
+rtmr3       28e1098712a03dade4878ed2ad2970f0...
+  input     control-gateway-linux-amd64  sha-384:02694066e9075eb5...
+  input     carried-config               sha-384:3e1db14d33738dd2...
+```
+
+**The measurement in a token is the MRTD, and the MRTD is not the binary.** It is a
+SHA-384 of the initial contents of the trust domain, so it does not move when the pinned
+release does, which is what lets a chain survive an upgrade instead of demanding a
+rotation. The binary and the operator's carried configuration are extended into RTMR3
+instead, and the record names both with their digests; `verify --release-sha384` holds
+RTMR3 to the published release asset. On the record above that digest matches the
+`control-gateway-linux-amd64` asset of v0.30.0 exactly.
+
+The records are Tier 3: hash chained, an RFC 6962 tree, the head posted daily to Hedera
+mainnet topic 0.0.10856156 by an anchorer trusted with nothing else, mirrored publicly at
+`abovebeyond-ai/control-evidence`, with the keys in the DID log and `cmd/verify` usable
+without any credential of ours. Nobody has to take our word for a judgement; they replay
+it.
+
+Two Tier 4 rows hold as well, since v0.30.0. Before it judges anything the gateway holds
+the tail of its own log against the head it carries, and it verifies every record of that
+log under its own key; when those disagree it answers FAIL_CLOSED and stops, which is
+C7.6.3 and C8.3.3. The halt conditions, the recovery and the tolerable outage are in
+[docs/the-halt.md](docs/the-halt.md); there is no override flag.
+
+**What still caps the claim.** C8.3.2 grades a chain by the weakest interaction it shares,
+and the admission is the weak one: a capability is normally signed by `#portal`, an Ed25519
+key in the environment of an ordinary server, so whoever holds that server can mint one.
+Signing it on the operator's token instead (`hand.mjs admit`, `#operator`) is the move that
+lifts that interaction, and until it is the rule rather than the alternative, a claim about
+a whole run is Tier 2 even though the records are Tier 3. Also missing for Tier 4: the
+interaction inventory of C8.3.1, enforcement at the far end in C8.3.5, which GitHub will
+not do for us, the per-record validator of C10.3.3, and the third-party reassessment of
+C10.3.5.
 
 Apache-2.0. Offered to the Advanced AI Society as a lab project beside the
 reason-as-evidence profile.
