@@ -134,6 +134,13 @@ func Open(cfg Config) (*Gateway, error) {
 	}
 	for i, tok := range records {
 		c := tok.Claims()
+		// The link alone is not the proof. Until 22 September 2026 this replay checked
+		// the measurement, the sequence and the chain link but not the signature, so a
+		// log rewritten with recomputed links opened as if it held: the one thing an
+		// attacker cannot forge is exactly the one thing that was not read.
+		if !evidence.Verify(tok, g.cfg.Key.Public().(ed25519.PublicKey)) {
+			return nil, fmt.Errorf("record %d of the evidence log for %s is not signed by this gateway's key; refusing to act on top of it", i, cfg.Agent)
+		}
 		if i == 0 {
 			// A chain judged under another measurement is another environment's
 			// chain: appending to it would hand the verifier a break at this
@@ -173,6 +180,34 @@ func Open(cfg Config) (*Gateway, error) {
 	// has its three and a verifier reads an interruption instead of a gap.
 	g.closeInterrupted(records)
 	return g, nil
+}
+
+// tailHolds reads the last record in the store and holds it to what this gateway believes:
+// the same step, the same chain head, and a signature by this gateway's key. It is the
+// per-action half of the fail-closed rule; Open is the once-per-start half that replays
+// everything. A store that cannot be read is a halt as well, because a gateway that cannot
+// see its own evidence cannot promise that the next record follows the last one.
+//
+// Called with g.mu held.
+func (g *Gateway) tailHolds() (string, bool) {
+	tail, count, err := g.cfg.Store.Tail(g.cfg.Agent)
+	if err != nil {
+		return "the evidence log cannot be read: " + err.Error(), false
+	}
+	if count != g.step {
+		return fmt.Sprintf("the evidence log holds %d records where this gateway stands at step %d; refusing to act until it is replayed", count, g.step), false
+	}
+	if g.step == 0 {
+		return "", true
+	}
+	if !evidence.Verify(tail, g.cfg.Key.Public().(ed25519.PublicKey)) {
+		return "the last record in the evidence log is not signed by this gateway's key; refusing to act on top of it", false
+	}
+	head, err := canonical.Untag(str(tail.Claims()["chain_head"]))
+	if err != nil || head != g.head {
+		return "the last record in the evidence log does not carry the chain head this gateway holds; refusing to act on top of it", false
+	}
+	return "", true
 }
 
 // Interrupted is the outcome written for an action whose effect the gateway never recorded.
@@ -405,6 +440,16 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 			merged[k] = v
 		}
 		extension = merged
+	}
+
+	// The halt, mechanically (row 8.3.3 of the standard). Open replays the whole chain and
+	// refuses to start on a break, but while running the gateway trusted its own memory: a
+	// log rewritten under a live gateway was only caught by the next restart or by the
+	// daily replay, and in between every action went through. So before each judgement the
+	// tail of the store has to still be the head we hold, and that reads one record and
+	// not the whole log.
+	if reason, ok := g.tailHolds(); !ok {
+		return Verdict{Verdict: "FAIL_CLOSED", Reason: reason}
 	}
 
 	snapshot := map[string]any{"agent_id": g.cfg.Agent, "action": action.ToMap(), "path_summary": phi.Digest(), "step_index": g.step}

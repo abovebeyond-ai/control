@@ -31,7 +31,11 @@ attackers are built, and it is what the standard's rows on independent monitors 
 3. **Chain, tree, token.** The snapshot is committed to a hash chain and an RFC 6962 tree;
    the token is the standard's claim set, EdDSA over its canonical form (RFC 8785).
 4. **Written before released.** The record is fsynced under a lock before the answer;
-   an unwritable store answers FAIL_CLOSED and nothing leaves.
+   an unwritable store answers FAIL_CLOSED and nothing leaves. Since 22 September 2026 the
+   chain is held to itself before every judgement as well: the tail of the store has to
+   still carry the head this gateway holds, signed by its key, and if it does not, the
+   action is refused rather than recorded. See `docs/the-halt.md` for the halt conditions
+   and how to recover.
 5. **The effect**, by an adapter holding the credential. Three adapters: GitHub
    (`workflow.dispatch`, `branch.push`, `branch.delete`, `pull.open`, `pull.ready`, since
    v0.26.0 `preview.push` and since v0.28.0 `issue.open` on `owner/repo`, one token per owner or the App), since 13 September

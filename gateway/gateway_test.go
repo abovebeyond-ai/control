@@ -3,6 +3,7 @@ package gateway
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/capability"
@@ -109,8 +110,76 @@ func TestTheChainPersistsAndABrokenLogRefusesToOpen(t *testing.T) {
 	file := filepath.Join(store.Dir, strings.NewReplacer(":", "_", "#", "_").Replace(g.cfg.Agent)+".jsonl")
 	raw, _ := os.ReadFile(file)
 	os.WriteFile(file, []byte(strings.Replace(string(raw), `"verdict":"ALLOW"`, `"verdict":"DENY"`, 1)), 0o640)
-	if _, err := Open(g.cfg); err == nil || !strings.Contains(err.Error(), "breaks at record 0") {
+	// Since 22 September 2026 the replay checks the signature before the link, so a
+	// rewritten verdict is refused as an unsigned record rather than as a broken chain.
+	// Either way it names the record it refuses on, and that is what this pins.
+	if _, err := Open(g.cfg); err == nil || !strings.Contains(err.Error(), "record 0") {
 		t.Errorf("a rewritten log opened: %v", err)
+	}
+}
+
+// A log whose records are consistent among themselves but not signed by this gateway is
+// the interesting rewrite: an attacker who cannot sign can still recompute every chain
+// head, and until 22 September 2026 that opened as if it held, because the replay read
+// the links and not the signatures.
+func TestALogWithRecomputedLinksButNoSignatureRefusesToOpen(t *testing.T) {
+	g, store := fixture(t)
+	g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil)
+
+	file := filepath.Join(store.Dir, strings.NewReplacer(":", "_", "#", "_").Replace(g.cfg.Agent)+".jsonl")
+	raw, _ := os.ReadFile(file)
+
+	var tok evidence.Token
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(raw))), &tok); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	// The record is left intact except for its signature: every link still checks out.
+	tok["signature"] = strings.Repeat("00", 64)
+	line, _ := json.Marshal(tok)
+	os.WriteFile(file, append(line, '\n'), 0o640)
+
+	if _, err := Open(g.cfg); err == nil || !strings.Contains(err.Error(), "not signed by this gateway's key") {
+		t.Errorf("a log with a forged signature opened: %v", err)
+	}
+}
+
+// The halt while running (row 8.3.3): rewriting the log under a live gateway used to go
+// unnoticed until the next restart or the daily replay, and every action in between went
+// through. Now each judgement first holds the tail of the store to the head it carries.
+func TestRewritingTheLogUnderALiveGatewayHaltsIt(t *testing.T) {
+	g, store := fixture(t)
+	first := g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil)
+	if !first.Allowed() {
+		t.Fatalf("the first action should stand: %+v", first)
+	}
+
+	file := filepath.Join(store.Dir, strings.NewReplacer(":", "_", "#", "_").Replace(g.cfg.Agent)+".jsonl")
+	raw, _ := os.ReadFile(file)
+	os.WriteFile(file, []byte(strings.Replace(string(raw), `"verdict":"ALLOW"`, `"verdict":"DENY"`, 1)), 0o640)
+
+	// Another kind, so that without the halt this action would have been ALLOW: the test
+	// has to show the halt stopping something that would otherwise have gone through.
+	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
+	if v.Verdict != "FAIL_CLOSED" || v.Token != nil {
+		t.Errorf("a rewritten log did not halt the gateway: %+v", v)
+	}
+	if !strings.Contains(v.Reason, "not signed by this gateway's key") && !strings.Contains(v.Reason, "chain head") {
+		t.Errorf("the halt does not say why: %q", v.Reason)
+	}
+}
+
+// A store that cannot be read is a halt too: a gateway that cannot see its own evidence
+// cannot promise that the next record follows the last one.
+func TestAnUnreadableStoreHaltsTheGateway(t *testing.T) {
+	g, store := fixture(t)
+	g.Submit(policy.Action{Kind: "pull.open", Resource: "x/y", Params: map[string]any{"branch": "b", "base": "main"}}, "p", nil, nil)
+
+	file := filepath.Join(store.Dir, strings.NewReplacer(":", "_", "#", "_").Replace(g.cfg.Agent)+".jsonl")
+	os.WriteFile(file, []byte("this is not a record\n"), 0o640)
+
+	v := g.Submit(policy.Action{Kind: "workflow.dispatch", Resource: "x/y", Params: map[string]any{"workflow": "w", "ref": "main"}}, "p", nil, nil)
+	if v.Verdict != "FAIL_CLOSED" {
+		t.Errorf("an unreadable store did not halt the gateway: %+v", v)
 	}
 }
 
