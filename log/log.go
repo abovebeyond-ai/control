@@ -101,6 +101,39 @@ func (s *Store) Records(agent string) ([]evidence.Token, error) {
 	return out, nil
 }
 
+// Tail is the last record and how many there are, without parsing the ones before it.
+// The gateway asks this before every judgement (the fail-closed check), and parsing five
+// thousand records to read the last one would put the whole log in the path of every
+// action. One read, one parse.
+func (s *Store) Tail(agent string) (evidence.Token, int, error) {
+	raw, err := os.ReadFile(s.file(agent))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	count, last := 0, ""
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		count++
+		last = line
+	}
+	if count == 0 {
+		return nil, 0, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(last))
+	dec.UseNumber()
+	var tok evidence.Token
+	if err := dec.Decode(&tok); err != nil {
+		return nil, count, fmt.Errorf("the last line of the evidence log for %s is not a record: %v", agent, err)
+	}
+	return tok, count, nil
+}
+
 // Agents that have a log here.
 func (s *Store) Agents() ([]string, error) {
 	entries, err := os.ReadDir(s.Dir)
