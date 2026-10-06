@@ -27,6 +27,7 @@ import (
 	"encoding/pem"
 	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/effects"
+	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
 	"github.com/abovebeyond-ai/control/policy"
@@ -923,5 +924,18 @@ func TestAPullRequestIsPutOnThePreviewInOneRunOfTwoSteps(t *testing.T) {
 	}
 	if len(calls) != 3 {
 		t.Errorf("a refusal reached a far end: %v", calls)
+	}
+}
+
+// An action on a running system carries the record and the capability to the system, as a
+// Portal write does: the system verifies both before it acts (docs/mandates.md).
+func TestASystemActionCarriesItsEvidence(t *testing.T) {
+	a := policy.Action{Kind: "stocklist.photos_repair", Resource: "stocklist:platform", Params: map[string]any{"vehicle": float64(23312)}}
+	got := withEvidence(a, evidence.Token{"iss": "https://gateway.example"}, "cap.tok")
+	if got.Params["capability"] != "cap.tok" || got.Params["evidence"] == nil || got.Params["evidence"] == "" {
+		t.Fatalf("a system action must carry its evidence: %+v", got.Params)
+	}
+	if _, touched := a.Params["evidence"]; touched {
+		t.Fatal("the hand's own parameters must stay as they were")
 	}
 }
