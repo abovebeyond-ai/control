@@ -89,6 +89,10 @@ type config struct {
 	// reason. A review request puts them where the owner looks, and it is the form GitHub
 	// gives the person in the loop. Empty means: ask nobody.
 	Reviewer string `json:"reviewer,omitempty"`
+	// Systems maps a running system's resource to its base URL ("stocklist:platform":
+	// "https://traders.stocklistdealer.eu"): where an action on it is carried, its evidence
+	// attached, for the system to verify itself (docs/mandates.md). An address, not a secret.
+	Systems map[string]string `json:"systems,omitempty"`
 }
 
 type service struct {
@@ -127,6 +131,7 @@ func main() {
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.Forge{SecretsDir: cfg.Secrets})
+	s.effects.Add(effects.System{Bases: cfg.Systems})
 	s.attested, err = attestation(cfg, key)
 	fail(err)
 	// Every agent's chain is opened now, not at its first request: an action the last
@@ -581,9 +586,9 @@ func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Act
 		body, _ := params["body"].(string)
 		params["body"] = body + relying.Footer(relying.EncodeToken(tok), capTok)
 	}
-	if strings.HasPrefix(a.Kind, "portal.") {
-		// Portal takes the record and the capability as headers on the write
-		// (Control-Evidence, Control-Capability); the adapter reads them from here.
+	if strings.HasPrefix(a.Kind, "portal.") || effects.IsSystemKind(a.Kind) {
+		// Portal and a running system take the record and the capability as headers on the
+		// write (Control-Evidence, Control-Capability); the adapter reads them from here.
 		params["evidence"] = relying.EncodeToken(tok)
 		params["capability"] = capTok
 	}

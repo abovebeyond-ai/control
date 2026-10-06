@@ -27,6 +27,12 @@ var Schemas = map[string]Schema{
 	// named here with its type, and nothing else: the adapter forwards a kind's own
 	// parameters only, so a key outside the schema is refused here rather than dropped
 	// there while the record says it was written.
+	// Actions on a running system (docs/mandates.md), one kind per action. The photo repair
+	// of one car on Stocklist: without apply it only reports what it would write (B2).
+	"stocklist.photos_repair": {
+		Required: map[string]string{"vehicle": "int"},
+		Optional: map[string]string{"apply": "bool"},
+	},
 	"portal.update": {
 		Required: map[string]string{"title": "string"},
 		Optional: map[string]string{"date": "string", "clientVisible": "bool", "body": "list"},
