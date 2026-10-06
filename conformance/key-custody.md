@@ -95,15 +95,36 @@ works. Custody is the operator's person. Residual: a stolen token with its PIN s
 the fragment is removed from the log (one update signed with the other token), and the
 grant bounds what any signature can allow; a token cannot display what it signs, so the
 tool that shows the payload before the touch (`hand.mjs admit`) must be the tool the
-operator ran. What is left as a file, and said so: the identity's own key `#key-1`
-(`~/.config/proveml/abovebeyond-signing.jwk`), which signs credentials and vouches for a
-successor document; its move to a token is the next step.
+operator ran.
+
+## The identity's own key
+
+Signs the credentials over the site's posts, the sign-offs of reviews and the
+proof-of-control mappings, published as `#key-1`. Until 5 October 2026 a file on the
+operator's laptop (`~/.config/proveml/abovebeyond-signing.jwk`). Since that day (successor
+log, version 4): an Ed25519 key in PIV slot 9e of token A (serial 39780281), generated on
+the token by `ykman` with `--pin-policy once --touch-policy always`, non-exportable, a touch
+on every signature and the PIN per session. Every script that signs with it opens it through
+`scripts/key-1.mjs` in the site repository, which reads the descriptor
+`~/.config/proveml/abovebeyond-key-1.key.json`. The file was deleted from the laptop and was
+never on the workbench. Residual: a stolen token A with its PIN signs until token B replaces
+the key in the log; the old key stays valid for good under `did:web:abovebeyond.ai`
+(`/.well-known/did.json`) and in the first log, final at version 14, where no version can
+retire it, so a surviving copy of the old file would still sign under those names. Whether
+`/.well-known/did.json` drops it is open: dropping it also ends the verification of what was
+issued under that name.
+
+Until 6 October 2026 the key also linked the successor to the first identifier: the evidence
+check started at `/.well-known/did.json` and accepted a document under `/id` only while it
+carried the same `#key-1`. Moving the key broke that link, and every hand's pull request was
+refused until the check started at `/id/did.json` (control-verify-action#2). `relying` still
+compares `#key-1` for a document that claims to succeed the one it starts from.
 
 ## The identity's update keys and the spare
 
-Sign the DID log itself, never a record or a capability. Since the successor: the update
-key in PIV slot 9d of the token that signed last, the next key in slot 9d of the other,
-and a spare in slot 9a of the signing token, all generated on the tokens; every version
+Sign the DID log itself, never a record or a capability. Since the successor, all generated
+on the tokens; at version 4 (5 October 2026) the update key in slot 9a of token A, the next
+key in slot 9e of token B and the spare in slot 9a of token B. Every version
 commits two next-key hashes, the next key's and the spare's, so one destroyed slot never
 ends the log (the first identifier ended that way on 13 September 2026: one committed
 hash, and a key generation on the wrong token). Both tokens lost ends the identity; a
