@@ -292,6 +292,10 @@ func TestAReadTokenIsMintedReadOnlyFromTheApp(t *testing.T) {
 			t.Fatalf("the token must be downscoped to %v, GitHub was asked for %v", ReadPermissions, perms)
 		}
 	}
+	// A mail session checks the open issues before it opens one (v0.31.0).
+	if perms["issues"] != "read" {
+		t.Fatalf("a read token reads issues, GitHub was asked for %v", perms)
+	}
 	// The downscope may widen in what it sees; it may never widen in what it does. A
 	// "write" here would pass the loop above and quietly hand the measuring side a hand.
 	for k, v := range ReadPermissions {

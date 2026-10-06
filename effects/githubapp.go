@@ -213,7 +213,13 @@ func (g GitHub) appToken(ctx context.Context, app *githubApp, client *http.Clien
 // fleet, next to which a repository's configuration is small. Without it protection
 // answered 403 on 20 of 24 measured projects, and twenty silent blind spots read as a
 // fault rather than as a choice.
-var ReadPermissions = map[string]string{"contents": "read", "metadata": "read", "actions": "read", "pull_requests": "read", "administration": "read"}
+//
+// issues is here since v0.31.0 for the workbench's mail sessions: each request in a
+// forwarded mail becomes an issue (issue.open, a judged write), and a session has to see
+// the open issues to tell whether a request is already tracked. The token could open an
+// issue it could not read; reading issues adds no more than the pull requests it already
+// reads, which carry the same discussions.
+var ReadPermissions = map[string]string{"contents": "read", "metadata": "read", "actions": "read", "pull_requests": "read", "administration": "read", "issues": "read"}
 
 // ReadToken mints a read-only installation token for an owner (since v0.25.0), the road
 // by which the measuring side stops holding GitHub tokens of its own.
