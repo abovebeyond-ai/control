@@ -4,25 +4,95 @@
   "claim_date": "2026-09-09",
   "stage": "self-declared",
   "system": {
-    "name": "Elixir repair hands with the control gateway",
+    "name": "Elixir's hands, the workbench and the review hand, with the control gateway",
     "operator": "Above Beyond",
-    "operator_did": "did:webvh:QmdUpqNoPqt9txAjZbzUSshra31zYiTM8JebuN1uSzh5ZY:abovebeyond.ai",
+    "operator_did": "did:webvh:Qmb8LWd9DWcCY9KxESX69Dfkgf4n1LXtGeje6Hn9647yxD:abovebeyond.ai:id",
     "components": [
-      {"name": "abovebeyond-ai/elixir", "version": "deployed commit", "environment": "Hetzner, 167.233.221.164"},
-      {"name": "abovebeyond-ai/control", "version": "v0.4.0", "environment": "Google Cloud europe-west4, Intel TDX, shadow (dry)"}
+      {
+        "name": "abovebeyond-ai/elixir",
+        "version": "deployed commit",
+        "environment": "Hetzner, 167.233.221.164"
+      },
+      {
+        "name": "abovebeyond-ai/control",
+        "version": "v0.32.0",
+        "environment": "Google Cloud europe-west4, Intel TDX, service"
+      }
     ],
     "boundary": {
-      "inside": ["gateway process", "policy", "premises verifier", "chain and tree", "signing key", "evidence log", "effect adapters", "configuration", "secrets"],
-      "outside": ["Portal", "hands", "anchorer", "verifier", "DigiCert TSA", "Hedera", "Intel PCS", "did:webvh log", "GitHub"]
+      "inside": [
+        "gateway process",
+        "policy",
+        "premises verifier",
+        "chain and tree",
+        "signing key",
+        "evidence log",
+        "effect adapters",
+        "configuration",
+        "secrets"
+      ],
+      "outside": [
+        "Portal",
+        "hands",
+        "anchorer",
+        "verifier",
+        "DigiCert TSA",
+        "Hedera",
+        "Intel PCS",
+        "did:webvh log",
+        "GitHub",
+        "the Stocklist platform (verifies the record and the capability itself)"
+      ]
     },
-    "in_scope_actions": ["workflow.dispatch", "branch.push", "pull.open"],
+    "in_scope_actions": [
+      "workflow.dispatch",
+      "branch.push",
+      "branch.delete",
+      "pull.open",
+      "pull.ready",
+      "issue.open",
+      "preview.push",
+      "forge.deploy",
+      "review.publish",
+      "review.invite",
+      "review.sign",
+      "portal.update",
+      "portal.time_entry",
+      "portal.expense",
+      "portal.project.patch",
+      "portal.task",
+      "portal.measure",
+      "portal.playbook",
+      "stocklist.photos_repair"
+    ],
     "excluded_actions": [
-      {"class": "pull.merge", "rationale": "no hand holds a grant for it; a person merges, or the ledger rung outside this claim"},
-      {"class": "reads", "rationale": "measurements change nothing"},
-      {"class": "manual use of the same tokens by a person", "rationale": "not an agent action"}
+      {
+        "class": "pull.merge",
+        "rationale": "no hand holds a grant for it; a person merges, or the ledger rung outside this claim"
+      },
+      {
+        "class": "reads",
+        "rationale": "measurements change nothing"
+      },
+      {
+        "class": "manual use of the same tokens by a person",
+        "rationale": "not an agent action"
+      }
+    ],
+    "agents": [
+      "#agent-elixir",
+      "#agent-workbench",
+      "#agent-workbench-shed",
+      "#agent-vera"
     ]
   },
-  "domains_claimed": ["C4", "C5", "C7", "C8", "C10"],
+  "domains_claimed": [
+    "C4",
+    "C5",
+    "C7",
+    "C8",
+    "C10"
+  ],
   "claims": "register.json",
   "anchoring_interval": "P1D",
   "attestation_refresh_interval": "P1D",
@@ -30,6 +100,7 @@
   "verification": {
     "tooling": "https://github.com/abovebeyond-ai/control",
     "evidence": "https://github.com/abovebeyond-ai/control-evidence",
-    "key": "https://abovebeyond.ai/.well-known/did.jsonl"
-  }
+    "key": "https://abovebeyond.ai/id/did.jsonl"
+  },
+  "updated": "2026-10-06"
 }

@@ -80,13 +80,14 @@
       "id": "task-authorized",
       "statement": "every action was performed on a capability the principal signed for that task, narrowing the standing grant",
       "domain": "C4",
-      "mechanism": "Ed25519 token over RFC 8785 canonical payload (iss #portal, sub the hand, aud the gateway, task, kinds, resources, exp), verified by the gateway, digest and task on the record",
+      "mechanism": "Ed25519 token over RFC 8785 canonical payload (iss #portal, sub the hand, aud the gateway, task, kinds, resources, exp), verified by the gateway, digest and task on the record; since 6 October 2026 a capability may name a layer of blast radius (task.layer, B2 for repair on a running system), admitted apart from proposals, and the running system re-verifies the capability itself",
       "fact_evidenced": "which signed task each action was performed under, and that the action lay within it",
       "tier": 2,
       "trust_analysis": [
         "Portal's capability key custody: Google Cloud KMS since 11 September 2026, a sign-only service account on the Portal server, every use audit-logged (published as #portal, log version 7)",
         "Google (KMS)",
-        "the attested gateway"
+        "the attested gateway",
+        "for a workbench admission by passkey, and for every capability carried to the shed: Portal's verification of the WebAuthn assertion, which the gateway does not repeat (statement.md, the passkey row)"
       ],
       "rows_open_for_tier_3": [
         "8.1.5"
