@@ -4,6 +4,8 @@
 **Standard:** Advanced AI Society, Proof-of-Control, draft v0.1. **Date of claim:** 9 September 2026. (10.1.5)
 **Machine-readable form:** `statement.json` beside this file, same content. (10.1.7)
 **Claims review:** `claims-review.md`, signed off by the operator. (7.5.2)
+**Brought up to date:** 6 October 2026, for control v0.32.0; what changed since 13 September
+is in *Since 13 September 2026* below, and where it changes a claim the table says so.
 
 ## System (10.1.4, 10.1.6)
 
@@ -85,7 +87,8 @@ today:
 | the agent is who the record says | did:webvh with a signed key history; the agent is a fragment of it; the update key on a hardware token since 11 September 2026; every version of the log pinned at DigiCert and on Hedera, and the ledger's first posting per version compared with the log (control v0.10.0, `anchor identity check`) | 3 | none since 12 September 2026: all twelve versions of the log are on Hedera mainnet, topic 0.0.10856156, and the ledger's first posting per version matches the log, as for the chain claim above. The witness of the did:webvh format was not added: a named witness is a single trusted party (8.1.2); the public ledger answers the same question, one history, with no party to trust |
 | the gateway's key was made inside the sealed machine | TDX quote binding the key (REPORTDATA = SHA-512 of the key), MRTD as the record's measurement, refreshed daily; the quote's digest anchored with every checkpoint | 2 | 8.1.5 |
 | every action was performed on a ticket the principal signed for that task | Ed25519 capability (issuer #portal, subject the hand, audience the gateway, task, kinds, resources, expiry), verified by the gateway, intersected with the grant; digest and task on the record | 2 | 8.1.5 (the ticket key is in Cloud KMS since 11 September 2026; Google is on the trust list) |
-| every workbench action was admitted by the operator in person | the capability signed by `#operator` or `#operator-2` on a YubiKey, verified against the DID log, kept beside the record, re-verified by `verify` and by the far end | 3 | none: the key never left the token; what is trusted is on the disclosure list |
+| a workbench action admitted on the token was admitted by the operator in person | the capability signed by `#operator` or `#operator-2` on a YubiKey, verified against the DID log, kept beside the record, re-verified by `verify` and by the far end | 3 | none: the key never left the token; what is trusted is on the disclosure list |
+| a workbench action admitted by passkey, or carried to the shed, was admitted by the operator | the capability signed by `#portal` after Portal verified the operator's WebAuthn assertion; its digest (`admission.assertion_sha256`) and the credential id ride in the capability and so on the record | 2 | the gateway does not verify the assertion itself; the chain ends at Portal's key (Google KMS), not at a person's. Since 5 October 2026 this is the usual path, not the fallback: the shed always acts on a capability `#portal` signs |
 
 Since 10 September 2026 14:20 UTC the attested gateway is the production gateway: the hands
 propose through the tunnel with a signed submission and a client token, the gateway judges,
@@ -185,6 +188,63 @@ after name the successor's. A verifier configured with the first identifier acce
 agent of the successor only when the successor's document names the predecessor in
 `alsoKnownAs` and carries the same `#key-1`, the identity's own key.
 
+## Since 13 September 2026 (as of 6 October 2026)
+
+What runs today, set beside what the sections above describe. The claim date stays 9
+September; these are changes to the system the claims are about, disclosed as they are.
+
+**Gateway.** `abovebeyond-ai/control` v0.32.0 on the same confidential VM, pinned by version
+and checksum in `deploy/gcp/startup.sh`.
+
+**Hands.** Four agents, each a fragment of the DID with its own key:
+
+- `#agent-elixir`, the repair hands as tasks (security-fix, maintenance, major-upgrade,
+  headers);
+- `#agent-workbench`, the session on the operator's laptop;
+- `#agent-workbench-shed`, since 5 October 2026: an always-on machine at the operator's home
+  with its own key, sealed to its TPM, under the same grant as `#agent-workbench`, so a record
+  says which machine proposed;
+- `#agent-vera`, the review hand.
+
+A hand is in the configuration only while the box knows its key. On 6 October 2026 it knows
+two, `#agent-elixir` and `#agent-workbench-shed`: the laptop holds no key since 5 October, and
+Vera's key is not set, so neither `#agent-workbench` nor `#agent-vera` holds a grant in the
+configuration the box writes, and neither can act once it is carried over.
+
+**In-scope action classes, added.** Beside the classes under *System*:
+
+- for the workbench: `issue.open`, `preview.push` and `forge.deploy` (a pull request on the
+  preview site, once per run, on the `preview` branch only), and the writes to Portal
+  (`portal.update`, `portal.time_entry`, `portal.expense`, `portal.project.patch`,
+  `portal.task`, `portal.measure`, `portal.playbook`), performed by the gateway with
+  Portal's hand token, which only it holds;
+- since 6 October 2026, the first action on a running system: `stocklist.photos_repair` on
+  `stocklist:platform` (one car's derived photo sizes, a dry run unless `apply` is set). Its
+  effect lands outside GitHub, at the Stocklist platform, which is outside the boundary and
+  verifies for itself: the gateway's signed request record (signature against the DID
+  document, ALLOW, request phase, this resource and kind, the digest of these exact
+  parameters, an agent under the DID, fresh, judged on INTEL_TDX, used once) and the
+  operator's capability (an owner key, this gateway and this agent, unexpired, covering the
+  kind, the jti the gateway judged under). The platform holds no credential of the gateway's
+  and the gateway none of the platform's (`docs/mandates.md`).
+
+**Layers of blast radius.** A capability may name a layer (`task.layer`, "B2" for repair on a
+running system). The operator admits a layer apart from the period for proposals, until
+midnight at most; a capability for one never carries the other's kinds. The layer is part
+of the signed payload and so of the record.
+
+**A disclosed gap: the grant the gateway serves can lag.** Elixir writes the grants from
+Portal every minute; the operator carries them to the gateway by hand (`rehearse.sh config`,
+then a stop and start), because the policy of an attested gateway is not something a client
+rewrites. Until then the gateway serves the previous grant. Where that grant is narrower, a
+hand is refused with "not in grant", which is safe. Where it is wider, which happens when a
+project or a repository is removed from Portal, the gateway still allows what was removed
+until the carry-over. A capability still narrows every action to what the operator admitted
+for that project, so a removed project needs a standing admission to be acted on; but the
+grant alone no longer bounds it. Elixir compares the digests the gateway publishes with what
+it wrote and reports each hand's state to Portal (`/portal/grants`, since 6 October 2026);
+the digests say that the grants differ, not in which direction.
+
 ## Trust-assumption disclosure (7.4.1, C10.2)
 
 | mechanism | what must be trusted |
@@ -192,10 +252,11 @@ agent of the successor only when the successor's document names the predecessor 
 | Ed25519 signatures, SHA-256, RFC 6962 tree, RFC 8785 canonical form | the mathematics |
 | the gateway's key | Intel's attestation chain, Google's hypervisor and disk encryption, and that no project owner snapshotted the disk (the one path left; audit-logged; `key-custody.md`) |
 | the anchors | DigiCert as a timestamp authority; Hedera's consensus and its mirror nodes |
-| the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry; a successor is trusted on the shared `#key-1`, which is a file on the operator's machine until it moves to a token |
-| the operator's word | Yubico's key generation and PIN/touch enforcement; that the tool showing the payload before the touch (`hand.mjs`) is the tool the operator ran, since a token cannot display what it signs; the grant bounds what a wrong touch can allow |
+| the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry; a successor is trusted on the shared `#key-1`, on a hardware token since 5 October 2026 (`key-custody.md`), while the old key stays valid under the first identifier, where no version can retire it |
+| the operator's word | on the token: Yubico's key generation and PIN/touch enforcement; that the tool showing the payload before the touch (`hand.mjs`) is the tool the operator ran, since a token cannot display what it signs. By passkey: Portal, which verifies the assertion and signs with `#portal`, and Google's KMS. Either way the grant bounds what a wrong word can allow |
+| the grant | the configuration the operator carried to the gateway: it is measured into RTMR3, so what the gateway serves is attested, but it can be older than what Elixir writes until the operator carries the next one over (see *Since 13 September 2026*) |
 | the premises | the OSV advisory data the hands read, graded as inferred or gateway in the provenance |
-| the effect | GitHub honours a token; it verifies nothing about the evidence |
+| the effect | GitHub honours a token; it verifies nothing about the evidence. A running system (`stocklist.photos_repair`) holds no token for the gateway: it verifies the record and the capability itself, against the DID document, and refuses what neither allows |
 
 ## Anchoring interval and attestation refresh (7.6.6, 7.2.3)
 
@@ -242,7 +303,9 @@ ours. The recorded run by a party outside Above Beyond is still to come.
 
 Tooling: `github.com/abovebeyond-ai/control`, `cmd/verify`, `tools/crosscheck.py`, and the
 standard's own validator. Evidence: mirrored daily to `github.com/abovebeyond-ai/control-evidence`.
-The key: the did:webvh log at `https://abovebeyond.ai/.well-known/did.jsonl`.
+The key: the did:webvh log at `https://abovebeyond.ai/id/did.jsonl` (the successor, since 13
+September 2026); the first identifier's log, final at version 14, stays at
+`https://abovebeyond.ai/.well-known/did.jsonl`.
 
 ## Towards Tier 4: the far end (8.3.5, 8.3.2, 8.3.3)
 
