@@ -87,31 +87,89 @@ steal, nothing written.
 - **Per actie** (B3): nothing up front. When an agent needs one, the owner is asked to sign that
   one action, with its parameters shown before the passkey, in Portal or the Claude app.
 
-## Stocklist, first set
+## Commands, modelled on blast radius
 
-| Kind | Params | Layer | Reversal | Autonomy at start |
+An agent does not use screens. It uses commands: a name, typed parameters, the system's own
+business logic behind it, and a blast radius that decides the approval. The owner no longer
+decides about permissions, only about the actions that matter; the radius of a command says
+which those are. A command is designed to keep its radius as low as it can be:
+
+- **Narrow.** One car, one dealer, one source, one run. A bulk version is a command of its
+  own, one layer higher, and most of them are not mandated at all.
+- **A dry run by default.** The dry run sits in the lower layer; only `apply` carries the
+  command's radius, and the owner decides on what the dry run showed.
+- **Reversible where it can be.** A write that keeps its undo (the pipeline's `*_undo` tables)
+  is B2; the same write without one is B3 or not mandated.
+- **Read or write, never both.** A read is B1 and can go anywhere, the car included.
+- **Through the app, not the database.** A read calls the system's own logic (Stocklist's
+  `Measures`, the pipeline's `mix` and taxonomy), never free SQL: "handlings" or a cohort
+  mean what the code says they mean.
+- **Personal data is its own command.** An aggregate is B1. Rows that name people (a lead's
+  phone, a reader's email, a login account) are not in the B1 set; when needed they get their
+  own command, B3, and never through the voice, which speaks through a third party.
+- **Answers stay with the owner.** A session that read a system's data has no write channel
+  outside it in the same run (no pull request body, issue, Portal note or mail carrying it).
+  What it found starts a new task, and the owner sees what that task takes along.
+
+### The layers
+
+| Layer | What it is | The owner's approval | From the car |
+|---|---|---|---|
+| B1 | a read; nothing changes | a mandate for 30 days | yes |
+| B2 | a change that is redone or reversed, one item | for the rest of the day | starts it; `apply` waits |
+| B3 | goes out at once and cannot be called back | per action, parameters shown | no, it waits for the owner |
+| B4 | broad: many items at once | per action, after a dry run | no |
+| B5 | irreversible | not mandated; make it reversible first | no |
+
+## Stocklist
+
+Behind each command: the existing service or artisan command. `ActionController::KINDS` and
+the gateway's schema name the same parameters; a read calls the Support class directly.
+
+| Command | Params | Layer | Behind it | Notes |
 |---|---|---|---|---|
-| `stocklist.insights` (read) | measure, period, garage | B1 | nothing to reverse | A4 |
-| `stocklist.photos_repair` | `vehicle` (int), `apply` (bool, default false) | B2 | regenerating again; the dry run shows what `apply` writes | A2: the agent shows the dry run, the owner approves `apply` |
-| `stocklist.transport_price` | `transport` (int), `amount` (number, ≤ bound) | B3 | none: the dealer gets the price by mail at once | A2, per action |
+| `stocklist.insights` | `garage`, `window` (30d, 90d, 12m) | B1 | `DealerInsights` | views per channel, top cars, leads counted per source, stock age, days to sell, price drops, portals; no personal data |
+| `stocklist.measures` | `measure` (handlings, edits, views, signins, ...), `from`, `to`, `by` (day, weekday, hour, channel) | B1 | `Measures::total/series/weekdays/matrix/channels` | the platform-wide numbers; `dealerTable` only with garage names, no people |
+| `stocklist.stock` | `from`, `to` | B1 | `StockInsights` | age, selling time, prices; aggregates |
+| `stocklist.shared_stock` | `date` | B1 | `stocklist_daily` (read, not the command that writes it) | shared stock per garage |
+| `stocklist.checks` | `check` (transactions, duplicates, photos_missing), `days` | B1 | `check-transactions`, `duplicates`, `fotos-afgeleid --missing` without apply | counts only |
+| `stocklist.photos_repair` | `vehicle`, `apply` | B2 | `fotos-afgeleid --missing --wagen` | built; additive, regenerating again is harmless |
+| `stocklist.module` | `garage`, `module`, `on` | B2 | `update_module` | flip back to reverse; nothing is sent |
+| `stocklist.resend` | `vehicle`, `to` (removals, updates, accident_flag), `apply` | B3 | the `resend-*` commands, one car | a partner receives it at once |
+| `stocklist.transport_price` | `transport`, `amount` (≤ bound) | B3 | `TransportController::price` | the dealer is mailed at once |
 
-Not mandated: switching modules, garages or users, payments, and any free command or query.
+Not mandated: users and invites (mail a person), API token rotation (breaks a partner), the
+bulk resends and forced updates without a dry run (`forceUpdateWebhook`, `forceUpdateCarpass`,
+`resendAllVehiclesToNederlandMobiel`, ...), deleting photo rows, catalogue merges and imports,
+and the admin insights that return dealer names, emails and phone numbers
+(`InsightsRepository::profiles`, `topDealers`, `dealersInBucket`). Those stay with a person.
+Before any of them is ever mandated it needs a one-item form with a dry run.
 
-The platform verifies in PHP. Portal already checks DID signatures (`hand-read`, the admitted
-capability), so that code is the model; the platform's endpoint runs the existing command or
-service behind the check (`stocklist:fotos-afgeleid --missing --wagen=<id> [--apply]`; the
-transport's `price_received` step).
+## Gentells pipeline (the Observatory)
 
-## Gentells Observatory, first set
+The reads exist already, behind a read-only door: the server's probe scope (a JWT that allows
+GET and the named queries of `POST /store/query`, nothing else) and the Observatory MCP
+(`bin/observatory-mcp.mjs`, read-only, `cohorts`, `signals`, `query`). A B1 mandate maps onto
+that scope; the server verifies the mandate where it verifies a probe token today.
 
-| Kind | Params | Layer | Reversal | Autonomy at start |
+| Command | Params | Layer | Behind it | Notes |
 |---|---|---|---|---|
-| reads (runs, supervisor, budget) | | B1 | | A4 |
-| `observatory.retry_report` | `sourceId` | B2 | a retry of a retry is harmless | A2 |
-| `observatory.cron` | `id`, `enabled` | B2 | switch it back | A2 |
+| `observatory.status` | | B1 | `/pipeline-stats`, `/status`, `/workers`, `/supervisor`, `/monitor`, `/crons` | the last 24 hours, what runs, the judged whole, cron drift |
+| `observatory.mix` | `by` (platform, source, region, cohort, ...), `days` | B1 | `/mix`, `core/mix.mjs` | intake, kept and cited per axis: "signals per source this week" |
+| `observatory.cost` | | B1 | `/budget`, `/usage`, `/llm-health`, `/rate-limit` | spend and whether calls produce output; not `/accounts` (login emails) |
+| `observatory.ask` | `tool` (cohorts, signals, query), its arguments | B1 | the Observatory MCP | the business logic of the taxonomy (`canonicalCohort`, `regionAndBelow`) |
+| `observatory.retry_report` | `sourceId` | B2 | `POST /retry-report` | one report; a retry of a retry is harmless |
+| `observatory.cron` | `id`, `enabled` | B2 | `POST /crons` | one job; switch it back, `crontab-install --apply` restores the file |
+| `observatory.stop` | `phase` | B2 | `POST /stop/:phase` | stops one running phase; start it again to reverse |
+| `observatory.run` | `phase` (collect, classify, enrich, promote, stats) | B2 | `POST /run/:phase` | one phase, refused while it runs; the dry phases (`enrich-dry`, `scout-list`) are B1 |
+| `observatory.undo` | `script`, `ids` | B2 | the `--undo` of `plain-edit`, `widen-evidence`, `apply-ready`, `standard-migrate` | an undo is itself a narrow write |
+| `observatory.edit` | `script`, `ids`, `apply` | B2 | `plain-edit`, `widen-evidence`, `apply-ready` | only scripts that keep an undo table; dry run first |
+| `observatory.patch` | `record`, `fields` | B3 | `POST /store/patch` | one record, logged, but no undo |
 
-The Observatory is Node; it can run the pinned `control-relying` binary of a release, verified
-by sha256 like the gateway's own.
+Not mandated: model and plan configuration (every phase at once, plans push to the site),
+deleting records, scripts that write without an undo (`link-trends`, `concept-fold`,
+`fold-twins`, ...), deploys, and everything that touches people: reader accounts on the site,
+team users, conversations, the login accounts behind `/accounts` and `/health`.
 
 ## What changes where
 
@@ -147,5 +205,6 @@ by sha256 like the gateway's own.
 1. Stocklist B1 reads and B2 `photos_repair` at A2, end to end: control kinds and effect, Portal
    admission per layer, the platform's endpoint, the agent command. That builds the whole
    mechanism at low risk.
-2. The Observatory's set, on the same mechanism.
+2. The B1 reads of both systems, so a conversation (the car included) can ask what it needs;
+   then the Observatory's B2 set, on the same mechanism.
 3. B3 per-action signing (`stocklist.transport_price`), once the layers stand.
