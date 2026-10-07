@@ -226,9 +226,11 @@ func VerifyRTMR3(r *Record) error {
 }
 
 // ExtendRTMR3 measures the inputs into RTMR3 through the kernel's sysfs door
-// (Linux 6.16 and later), unless the register already holds their fold: a retake
-// of the quote on a running machine must not extend twice. A register that holds
-// something else is left alone and reported, so the record never claims an input
+// (Linux 6.16 and later), extending only what the register does not hold yet: a
+// retake of the quote on a running machine must not extend twice, and a policy
+// version applied since boot (docs/working-set.md) is extended on top of the inputs
+// before it. A register that holds something other than the fold of a leading part
+// of the inputs is left alone and reported, so the record never claims an input
 // that is not in the chip.
 func ExtendRTMR3(inputs []Input) error {
 	current, err := os.ReadFile(rtmr3Path)
@@ -238,18 +240,11 @@ func ExtendRTMR3(inputs []Input) error {
 	if len(current) != sha512.Size384 {
 		return fmt.Errorf("RTMR3 reads %d bytes, not a SHA-384", len(current))
 	}
-	have := hex.EncodeToString(current)
-	want, err := FoldRTMR3(inputs)
+	from, err := ExtendFrom(hex.EncodeToString(current), inputs)
 	if err != nil {
 		return err
 	}
-	if have == want {
-		return nil
-	}
-	if have != strings.Repeat("0", 96) {
-		return fmt.Errorf("RTMR3 already holds %s, not zero and not the fold of the inputs", have[:16])
-	}
-	for _, in := range inputs {
+	for _, in := range inputs[from:] {
 		d, _ := hex.DecodeString(in.SHA384)
 		if err := os.WriteFile(rtmr3Path, d, 0); err != nil {
 			return fmt.Errorf("extending RTMR3 with %s: %w", in.Name, err)
@@ -259,10 +254,37 @@ func ExtendRTMR3(inputs []Input) error {
 	if err != nil {
 		return err
 	}
+	want, err := FoldRTMR3(inputs)
+	if err != nil {
+		return err
+	}
 	if hex.EncodeToString(after) != want {
 		return errors.New("RTMR3 after extending is not the fold of the inputs")
 	}
 	return nil
+}
+
+// ExtendFrom says how many of the inputs the register already holds: the length of
+// the longest leading part whose fold is what it reads (zero for a fresh register),
+// so only the rest is extended. An error when no leading part folds to it.
+func ExtendFrom(have string, inputs []Input) (int, error) {
+	for n := len(inputs); n >= 0; n-- {
+		fold := strings.Repeat("0", 96)
+		if n > 0 {
+			var err error
+			if fold, err = FoldRTMR3(inputs[:n]); err != nil {
+				return 0, err
+			}
+		}
+		if have == fold {
+			return n, nil
+		}
+	}
+	short := have
+	if len(short) > 16 {
+		short = short[:16]
+	}
+	return 0, fmt.Errorf("RTMR3 already holds %s, not the fold of any leading part of the inputs", short)
 }
 
 // InputOf names a file and its SHA-384 for RTMR3.

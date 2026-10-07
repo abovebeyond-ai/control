@@ -212,8 +212,34 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
+# The policy log (docs/working-set.md): every minute the gateway asks Portal for the signed
+# versions after the one it serves and keeps those that hold. When one was applied (exit 3) it
+# restarts, and the restart's ExecStartPre measures the version into RTMR3 and takes a fresh
+# quote before the first action under it (row 6.1.3). Only the gateway reaches out; nothing
+# comes in. A configuration without policy_log makes this a no-op.
+cat > /etc/systemd/system/control-policy.service <<'UNIT'
+[Unit]
+Description=control gateway: read the signed policy versions after the one served
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/local/bin/control-gateway --config /var/lib/control/config.json --pull-policy; s=$?; if [ $s -eq 3 ]; then systemctl restart control-gateway; exit 0; fi; exit $s'
+UNIT
+cat > /etc/systemd/system/control-policy.timer <<'UNIT'
+[Unit]
+Description=read the control gateway's policy log every minute
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
 systemctl enable --now control-attest.timer
+systemctl enable --now control-policy.timer
 # The gateway is started here, by this script, after the release check, and not by
 # systemd at boot. On the first stop-and-start upgrade (12 September 2026, v0.15.1) the
 # unit came up before this script ran: the old binary measured itself into RTMR3, the

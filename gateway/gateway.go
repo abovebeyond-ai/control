@@ -62,10 +62,13 @@ type Config struct {
 	Policy      policy.Policy
 	Store       *log.Store
 	Key         ed25519.PrivateKey
-	AgbomDigest string           // digest of the agent bill of materials when the hand submits none; the deployed commit is honest for deterministic hands
-	Release     string           // the gateway's own release and checksum, named in every record as control_gateway
-	Platform    string           // SOFTWARE until an enclave attests
-	Clock       func() time.Time // injectable for reproducible records
+	AgbomDigest string // digest of the agent bill of materials when the hand submits none; the deployed commit is honest for deterministic hands
+	Release     string // the gateway's own release and checksum, named in every record as control_gateway
+	// PolicyVersion names the version of the policy log served ("v3 sha-256:…"), in every
+	// record as control_policy; empty when the gateway reads no policy log.
+	PolicyVersion string
+	Platform      string           // SOFTWARE until an enclave attests
+	Clock         func() time.Time // injectable for reproducible records
 	// Attestation, when present, is the hardware's word: the platform becomes
 	// INTEL_TDX and the measurement the MRTD from the quote, which must bind
 	// this gateway's key. Without it the measurement is the software one, the
@@ -507,6 +510,9 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 		g.agboms = map[string]string{}
 	}
 	g.agboms[actionID] = agbom
+	if g.cfg.PolicyVersion != "" {
+		extension["control_policy"] = g.cfg.PolicyVersion
+	}
 	if g.cfg.Release != "" {
 		extension["control_gateway"] = g.cfg.Release
 	}
@@ -604,6 +610,9 @@ func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, prin
 	}
 	if run != "" {
 		claims["control_run"] = run
+	}
+	if g.cfg.PolicyVersion != "" {
+		claims["control_policy"] = g.cfg.PolicyVersion
 	}
 	if g.cfg.Release != "" {
 		claims["control_gateway"] = g.cfg.Release

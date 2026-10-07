@@ -109,3 +109,30 @@ func mustHex(s string) []byte {
 	b, _ := hex.DecodeString(s)
 	return b
 }
+
+func TestExtendFromExtendsOnlyWhatTheRegisterLacks(t *testing.T) {
+	boot := []Input{InputOf("control-gateway-linux-amd64", []byte("binary")), InputWithContent("carried-config", []byte(`{"agents":{}}`))}
+	withPolicy := append(append([]Input{}, boot...), InputWithContent("policy-version-1", []byte("v1")))
+	zero := strings.Repeat("0", 96)
+	atBoot, _ := FoldRTMR3(boot)
+	afterPolicy, _ := FoldRTMR3(withPolicy)
+
+	for _, c := range []struct {
+		name string
+		have string
+		want int
+	}{
+		{"a fresh register holds nothing yet", zero, 0},
+		{"after boot it holds the binary and the configuration", atBoot, 2},
+		{"after the policy version it holds all three", afterPolicy, 3},
+	} {
+		got, err := ExtendFrom(c.have, withPolicy)
+		if err != nil || got != c.want {
+			t.Errorf("%s: from %d (%v), want %d", c.name, got, err, c.want)
+		}
+	}
+	other, _ := FoldRTMR3([]Input{InputWithContent("something-else", []byte("x"))})
+	if _, err := ExtendFrom(other, withPolicy); err == nil {
+		t.Error("a register holding something else must be reported, not extended")
+	}
+}
