@@ -33,6 +33,14 @@ var Schemas = map[string]Schema{
 		Required: map[string]string{"vehicle": "int"},
 		Optional: map[string]string{"apply": "bool"},
 	},
+	// A research brief set out for the Gentells desk, often from a conversation: what to find
+	// out, the context and the sources mentioned ({url, label} or {type, id, label}). The
+	// pipeline bounds the lengths and refuses an agent's draft that says approved; only an
+	// editor approves, in the Studio.
+	"studio.research_draft": {
+		Required: map[string]string{"title": "string", "description": "string"},
+		Optional: map[string]string{"context": "string", "sources": "records", "status": "string"},
+	},
 	"portal.update": {
 		Required: map[string]string{"title": "string"},
 		Optional: map[string]string{"date": "string", "clientVisible": "bool", "body": "list"},

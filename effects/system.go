@@ -15,8 +15,10 @@ import (
 
 // SystemKinds are the actions on a running system (docs/mandates.md): one kind per action,
 // never a generic command, each with its own schema and its own blast radius. The first is
-// Stocklist's photo repair (B2: it writes derived sizes a later run can write again).
-var SystemKinds = []string{"stocklist.photos_repair"}
+// Stocklist's photo repair (B2: it writes derived sizes a later run can write again). The second
+// is a research draft on the Gentells pipeline (B2: one brief for the desk, ready for review,
+// which any editor edits, approves or dismisses; nothing is published).
+var SystemKinds = []string{"stocklist.photos_repair", "studio.research_draft"}
 
 // System carries an action to the control endpoint of a running system, the evidence
 // attached. It holds no credential: the system verifies the owner's capability and this

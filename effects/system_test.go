@@ -84,4 +84,18 @@ func TestEverySystemKindHasASchema(t *testing.T) {
 	if err := policy.Validate(policy.Action{Kind: "stocklist.photos_repair", Resource: "stocklist:platform", Params: map[string]any{"apply": true}}); err == nil {
 		t.Fatal("a repair without a car must be refused")
 	}
+	brief := map[string]any{"title": "Refurbished phones", "description": "What drives it?", "context": "From a call.",
+		"sources": []any{map[string]any{"url": "https://example.com/r", "label": "Report"}, map[string]any{"type": "insight", "id": "ins-1"}}}
+	if err := policy.Validate(policy.Action{Kind: "studio.research_draft", Resource: "observatory:pipeline", Params: brief}); err != nil {
+		t.Fatalf("a brief with its sources must pass: %v", err)
+	}
+	if err := policy.Validate(policy.Action{Kind: "studio.research_draft", Resource: "observatory:pipeline", Params: map[string]any{"title": "No question"}}); err == nil {
+		t.Fatal("a brief without a description must be refused")
+	}
+	if err := policy.Validate(policy.Action{Kind: "studio.research_draft", Resource: "observatory:pipeline", Params: map[string]any{"title": "t", "description": "d", "publish": true}}); err == nil {
+		t.Fatal("a parameter outside the schema must be refused")
+	}
+	if err := policy.Validate(policy.Action{Kind: "studio.research_draft", Resource: "observatory:pipeline", Params: map[string]any{"title": "t", "description": "d", "sources": []any{map[string]any{"id": float64(3)}}}}); err == nil {
+		t.Fatal("a source that is not an object of strings must be refused")
+	}
 }
