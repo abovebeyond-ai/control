@@ -63,9 +63,9 @@
     },
     {
       "id": "gateway-attested",
-      "statement": "the production gateway's key was generated inside an Intel TDX trust domain, is bound in the hardware quote, the quote's digest is anchored with every checkpoint, and the quote's registers are held to published references: Google's signed firmware endorsement, the replayed boot event log of the pinned public image, and the gateway's own binary and carried configuration in RTMR3",
+      "statement": "the production gateway's key was generated inside an Intel TDX trust domain, is bound in the hardware quote, the quote's digest is anchored with every checkpoint, and the quote's registers are held to published references: Google's signed firmware endorsement, the replayed boot event log of the pinned public image, and the gateway's own binary, its carried configuration and every policy version applied since in RTMR3",
       "domain": "C7",
-      "mechanism": "TDX quote with REPORTDATA = SHA-512('poc-evidence-key\\0' || key); MRTD held to Google's launch endorsement under Google's pinned root; RTMR0-2 replayed from the CCEL event log carried in the record; RTMR3 = fold(SHA-384 of the release binary, SHA-384 of the carried configuration), extended by the gateway before the quote; daily refresh",
+      "mechanism": "TDX quote with REPORTDATA = SHA-512('poc-evidence-key\\0' || key); MRTD held to Google's launch endorsement under Google's pinned root; RTMR0-2 replayed from the CCEL event log carried in the record; RTMR3 = fold(SHA-384 of the release binary, SHA-384 of the carried configuration, SHA-384 of each applied policy version in order), extended by the gateway before the quote; daily refresh and a refresh on every applied policy version",
       "fact_evidenced": "that the signer of shadow records runs inside the measured domain",
       "tier": 2,
       "trust_analysis": [
