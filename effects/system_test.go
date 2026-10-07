@@ -98,4 +98,10 @@ func TestEverySystemKindHasASchema(t *testing.T) {
 	if err := policy.Validate(policy.Action{Kind: "studio.research_draft", Resource: "observatory:pipeline", Params: map[string]any{"title": "t", "description": "d", "sources": []any{map[string]any{"id": float64(3)}}}}); err == nil {
 		t.Fatal("a source that is not an object of strings must be refused")
 	}
+	if err := policy.Validate(policy.Action{Kind: "observatory.trend_edit", Resource: "observatory:pipeline", Params: map[string]any{"trend": "insight-1", "field": "headline", "text": "Sharper"}}); err != nil {
+		t.Fatalf("a trend edit must pass: %v", err)
+	}
+	if err := policy.Validate(policy.Action{Kind: "observatory.trend_site", Resource: "observatory:pipeline", Params: map[string]any{"trend": "insight-1"}}); err == nil {
+		t.Fatal("a site decision without an action must be refused")
+	}
 }
