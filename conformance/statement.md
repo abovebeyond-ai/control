@@ -4,7 +4,7 @@
 **Standard:** Advanced AI Society, Proof-of-Control, draft v0.1. **Date of claim:** 9 September 2026. (10.1.5)
 **Machine-readable form:** `statement.json` beside this file, same content. (10.1.7)
 **Claims review:** `claims-review.md`, signed off by the operator. (7.5.2)
-**Brought up to date:** 6 October 2026, for control v0.32.0; what changed since 13 September
+**Brought up to date:** 7 October 2026, for control v0.33.0; what changed since 13 September
 is in *Since 13 September 2026* below, and where it changes a claim the table says so.
 
 ## System (10.1.4, 10.1.6)
@@ -129,6 +129,19 @@ refused, and the validated parameter digest is a claim (4.1.4); evaluation is pa
 per run (4.1.7); no tool output can raise the authorization state, the grant is standing
 configuration (4.1.8); every record carries the agent and the principal (5.1.1).
 
+Met since v0.33.0 (7 October 2026), for the grant itself: the grant moves only forward,
+through policy versions the gateway reads and judges (`docs/working-set.md`, *The policy log
+as built*). Each version names the hash of the one before it, back to the carried
+configuration, and is signed by a key the carried configuration names: the operator's token
+keys for any change, Elixir's key only for a change the gateway itself finds narrower (no new
+hand, kind, resource, task, system or accepted judgement, no higher count, no certificate or
+per-action word dropped). So the grant is no longer raised by anything but the operator's
+token (4.1.8, 4.2.3); every record names the version it was judged under, `control_policy`,
+beside `policy_bundle_hash` (4.1.1); and the approval of a policy change is the signed
+version itself: its payload the exact change in the words the signer was shown, its issuer
+the authenticated key, its `iat` the time, kept whole in the attestation record that measured
+it (4.1.6).
+
 Met since service mode (10 September 2026): the agent holds no standing token for the
 effects the gateway performs, the gateway does (4.1.5); the record signer's key is bound to
 the attested environment (5.1.4); the hand signs every submission with its own key, named
@@ -188,12 +201,12 @@ after name the successor's. A verifier configured with the first identifier acce
 agent of the successor only when the successor's document names the predecessor in
 `alsoKnownAs` and carries the same `#key-1`, the identity's own key.
 
-## Since 13 September 2026 (as of 6 October 2026)
+## Since 13 September 2026 (as of 7 October 2026)
 
 What runs today, set beside what the sections above describe. The claim date stays 9
 September; these are changes to the system the claims are about, disclosed as they are.
 
-**Gateway.** `abovebeyond-ai/control` v0.32.0 on the same confidential VM, pinned by version
+**Gateway.** `abovebeyond-ai/control` v0.33.0 on the same confidential VM, pinned by version
 and checksum in `deploy/gcp/startup.sh`.
 
 **Hands.** Four agents, each a fragment of the DID with its own key:
@@ -233,17 +246,26 @@ running system). The operator admits a layer apart from the period for proposals
 midnight at most; a capability for one never carries the other's kinds. The layer is part
 of the signed payload and so of the record.
 
-**A disclosed gap: the grant the gateway serves can lag.** Elixir writes the grants from
-Portal every minute; the operator carries them to the gateway by hand (`rehearse.sh config`,
-then a stop and start), because the policy of an attested gateway is not something a client
-rewrites. Until then the gateway serves the previous grant. Where that grant is narrower, a
-hand is refused with "not in grant", which is safe. Where it is wider, which happens when a
-project or a repository is removed from Portal, the gateway still allows what was removed
-until the carry-over. A capability still narrows every action to what the operator admitted
-for that project, so a removed project needs a standing admission to be acted on; but the
-grant alone no longer bounds it. Elixir compares the digests the gateway publishes with what
-it wrote and reports each hand's state to Portal (`/portal/grants`, since 6 October 2026);
-the digests say that the grants differ, not in which direction.
+**The grant the gateway serves no longer lags (since 7 October 2026).** Until v0.33.0 Elixir
+wrote the grants from Portal every minute and the operator carried them to the gateway by
+hand, so the gateway could serve an older grant, and a wider one when a project or a
+repository had been removed. Now a root timer on the VM asks Portal every minute for the
+policy versions after the one served, judges each (signer, number, predecessor, and for
+Elixir's key that the change only takes away) and keeps those that hold; the gateway then
+restarts, measures each kept version into RTMR3 after the binary and the carried
+configuration, and takes a fresh quote before the first action under it. A narrowing (a
+project or repository removed) reaches the gateway within the minute without the operator;
+a widening waits for the operator's signature on the token (`hand.mjs policy sign`), shown
+first as the change in words in Portal. Only the gateway reaches out; nothing comes in, and
+the configuration is carried over again only for a new release or new signers.
+
+What remains, disclosed: a version the gateway refuses blocks every later one until one
+that follows the served version arrives (Elixir does not sign a narrowing whose key the DID
+log does not name for it, and Portal keeps only versions whose signature and place hold, so
+this is the case of a wrong signer key, not of a malformed version); when Portal does not
+answer, the gateway keeps the last version it verified; and a widening approved by passkey
+inside a working set is not offered, since the set names Portal projects and which
+repository belongs to which project is Portal's own data.
 
 ## Trust-assumption disclosure (7.4.1, C10.2)
 
@@ -254,15 +276,16 @@ the digests say that the grants differ, not in which direction.
 | the anchors | DigiCert as a timestamp authority; Hedera's consensus and its mirror nodes |
 | the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry; a successor is trusted on the shared `#key-1`, on a hardware token since 5 October 2026 (`key-custody.md`), while the old key stays valid under the first identifier, where no version can retire it |
 | the operator's word | on the token: Yubico's key generation and PIN/touch enforcement; that the tool showing the payload before the touch (`hand.mjs`) is the tool the operator ran, since a token cannot display what it signs. By passkey: Portal, which verifies the assertion and signs with `#portal`, and Google's KMS. Either way the grant bounds what a wrong word can allow |
-| the grant | the configuration the operator carried to the gateway: it is measured into RTMR3, so what the gateway serves is attested, but it can be older than what Elixir writes until the operator carries the next one over (see *Since 13 September 2026*) |
+| the grant | the configuration the operator carried to the gateway, then each policy version the gateway applied since: all measured into RTMR3 in order, so what the gateway serves is attested. A widening rests on the operator's token as a capability does; a narrowing signed by Elixir rests on the gateway's own check that it only takes away, and on the carried configuration naming Elixir's key (see *Since 13 September 2026*) |
 | the premises | the OSV advisory data the hands read, graded as inferred or gateway in the provenance |
 | the effect | GitHub honours a token; it verifies nothing about the evidence. A running system (`stocklist.photos_repair`) holds no token for the gateway: it verifies the record and the capability itself, against the DID document, and refuses what neither allows |
 
 ## Anchoring interval and attestation refresh (7.6.6, 7.2.3)
 
 Chain heads are anchored at least once a day (07:25 UTC); a missed anchor is an alert in
-Portal. The hardware quote is retaken daily (05:50 UTC); a retake that fails stops the
-gateway.
+Portal. The hardware quote is retaken daily (05:50 UTC), and, since v0.33.0, on every policy
+version the gateway applies, before the first action under it (6.1.3); a retake that fails
+stops the gateway.
 
 ## Retention and access (7.6.5, 7.6.4)
 

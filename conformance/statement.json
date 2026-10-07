@@ -15,7 +15,7 @@
       },
       {
         "name": "abovebeyond-ai/control",
-        "version": "v0.32.0",
+        "version": "v0.33.0",
         "environment": "Google Cloud europe-west4, Intel TDX, service"
       }
     ],
@@ -102,5 +102,5 @@
     "evidence": "https://github.com/abovebeyond-ai/control-evidence",
     "key": "https://abovebeyond.ai/id/did.jsonl"
   },
-  "updated": "2026-10-06"
+  "updated": "2026-10-07"
 }
