@@ -151,6 +151,18 @@ widening approved by passkey and bounded by the set would still rest on Portal f
 Until that is settled, a widening is signed on the token. The owner's token over NFC on the
 phone is the way to make that a tap anywhere.
 
+## Ending a word early, as built (7 October 2026)
+
+A capability is a signed token the gateway checks on its own, so ending an admission at Portal
+used to stop only new tokens: one the hand held stood until its expiry, up to the end of a
+working set. Now the gateway reads Portal's list of capabilities ended before they expired
+(`revocations.url` in the carried configuration, `GET` with the gateway's Portal token, every 30
+seconds, in memory, `cmd/gateway/revoked.go`) and refuses an action under one, with the moment it
+was ended in the record. The list only takes away, so it needs no signature: a Portal that lies
+in it can stop work, which it already can by issuing nothing. A read that fails keeps the last
+list; an entry leaves only at the capability's own expiry. Between the end at Portal and the
+next read, at most 30 seconds, the token still acts.
+
 ## Open questions
 
 1. **The strong key on a phone.** Can the YubiKey sign the working set over NFC from the phone

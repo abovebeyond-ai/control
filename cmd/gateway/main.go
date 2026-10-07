@@ -97,6 +97,9 @@ type config struct {
 	// this configuration (docs/working-set.md): forward only, a widening on the owner's token, a
 	// narrowing from Elixir, each measured into RTMR3 before it is served.
 	PolicyLog *policyLogConfig `json:"policy_log,omitempty"`
+	// Revocations, when set, is where the gateway reads the capabilities the owner ended
+	// before they expired (revoked.go); an action under one is refused.
+	Revocations *revokedConfig `json:"revocations,omitempty"`
 
 	// The versions applied since this configuration, and the head they lead to; read at start.
 	applied []policy.SignedVersion
@@ -111,6 +114,7 @@ type service struct {
 	effects  effects.Registry
 	mu       sync.Mutex
 	gateways map[string]*gateway.Gateway
+	revoked  *revokedList
 }
 
 func main() {
@@ -161,6 +165,10 @@ func main() {
 		return
 	}
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
+	if cfg.Revocations != nil {
+		s.revoked = newRevokedList(time.Now)
+		s.revoked.follow(*cfg.Revocations, portalToken(cfg.Secrets))
+	}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets, Reviewer: cfg.Reviewer})
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
@@ -391,7 +399,11 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 	if s.cfg.head != nil {
 		served = policyClaim(*s.cfg.head)
 	}
-	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served})
+	gcfg := gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served}
+	if s.revoked != nil {
+		gcfg.Revoked = s.revoked.Revoked
+	}
+	g, err := gateway.Open(gcfg)
 	if err != nil {
 		return nil, err
 	}
