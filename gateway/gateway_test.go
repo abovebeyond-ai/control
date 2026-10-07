@@ -812,3 +812,34 @@ func TestAWordForOneActIsRequiredAndSpent(t *testing.T) {
 		t.Fatalf("publish again on the same period: %v", v.Reason)
 	}
 }
+
+// A capability the owner ended at Portal before it expired is refused, and the refusal is
+// recorded with when it was ended; another capability under the same grant still acts.
+func TestACapabilityTheOwnerEndedIsRefused(t *testing.T) {
+	principal := ed25519.NewKeyFromSeed([]byte("principal-seed-principal-seed-32"))
+	store, _ := log.Open(t.TempDir())
+	seed, _ := hex.DecodeString(strings.Repeat("11", 32))
+	now := time.Unix(1_800_000_000, 0)
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:ab#agent-workbench",
+		Policy: policy.Policy{Grant: policy.Grant{Principal: "did:example:ab", Kinds: []string{"pull.open"}, Resources: []string{"o/r"}, MaxPerKind: 5, PrincipalKey: hex.EncodeToString(principal.Public().(ed25519.PublicKey))}, PathAware: true},
+		Store:  store, Key: ed25519.NewKeyFromSeed(seed), Clock: func() time.Time { return now },
+		Revoked: func(jti string) (string, bool) { return "2026-10-07T14:00:00+00:00", jti == "ended" }}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	word := func(jti string) string {
+		tok, _ := capability.Issue(capability.Payload{Issuer: "did:example:ab#portal", Subject: cfg.Agent, Audience: cfg.Issuer,
+			Task: capability.Task{Playbook: "workbench", Project: "demo"}, Kinds: []string{"pull.open"}, Resources: []string{"o/r"},
+			IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix(), ID: jti}, principal)
+		return tok
+	}
+	a := policy.Action{Kind: "pull.open", Resource: "o/r", Params: map[string]any{"branch": "b", "base": "main"}}
+	v := g.SubmitWith("r1", a, "did:example:ab", nil, nil, nil, nil, word("ended"))
+	if v.Allowed() || v.Token == nil || !strings.Contains(v.Reason, "the owner ended this capability at 2026-10-07T14:00:00+00:00") {
+		t.Fatalf("ended: %v", v)
+	}
+	if v := g.SubmitWith("r2", a, "did:example:ab", nil, nil, nil, nil, word("standing")); !v.Allowed() {
+		t.Fatalf("standing: %v", v.Reason)
+	}
+}

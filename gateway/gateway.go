@@ -75,6 +75,11 @@ type Config struct {
 	// digest of the engine and the policy bundle, and nobody but the operator
 	// vouches for it.
 	Attestation *attest.Record
+	// Revoked, when set, says whether the owner ended a capability before it expired, and
+	// since when: Portal's list of words withdrawn early (cmd/gateway/revoked.go). A
+	// capability holds to its signature and expiry on its own; this is what lets ending a
+	// word at Portal reach an action the hand already holds a token for.
+	Revoked func(jti string) (since string, revoked bool)
 }
 
 // Gateway holds the chain state of one agent. One instance is one path.
@@ -356,6 +361,12 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 			}
 			merged["control_capability"] = capability.Digest(token)
 			merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires, "iss": p.Issuer}
+			if g.cfg.Revoked != nil && p.ID != "" {
+				if since, ended := g.cfg.Revoked(p.ID); ended {
+					capReason = "the owner ended this capability at " + since + ", before it expired"
+					break
+				}
+			}
 			if !p.Covers(action.Kind, action.Resource) {
 				capReason = "the capability does not cover " + action.Kind + " on " + action.Resource
 				break
