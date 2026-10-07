@@ -164,6 +164,7 @@ that scope; the server verifies the mandate where it verifies a probe token toda
 | `observatory.run` | `phase` (collect, classify, enrich, promote, stats) | B2 | `POST /run/:phase` | one phase, refused while it runs; the dry phases (`enrich-dry`, `scout-list`) are B1 |
 | `observatory.undo` | `script`, `ids` | B2 | the `--undo` of `plain-edit`, `widen-evidence`, `apply-ready`, `standard-migrate` | an undo is itself a narrow write |
 | `observatory.edit` | `script`, `ids`, `apply` | B2 | `plain-edit`, `widen-evidence`, `apply-ready` | only scripts that keep an undo table; dry run first |
+| `studio.research_draft` | `title`, `description`, `context`, `sources`, `status` | B2 | `POST /control/act`, `research-drafts-store.mjs` | built; one brief for Studio › Write, ready for review; an editor edits, approves or dismisses it, nothing is published or deleted; never arrives approved |
 | `observatory.patch` | `record`, `fields` | B3 | `POST /store/patch` | one record, logged, but no undo |
 
 Not mandated: model and plan configuration (every phase at once, plans push to the site),
