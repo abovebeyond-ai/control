@@ -18,7 +18,7 @@ import (
 // Stocklist's photo repair (B2: it writes derived sizes a later run can write again). The second
 // is a research draft on the Gentells pipeline (B2: one brief for the desk, ready for review,
 // which any editor edits, approves or dismisses; nothing is published).
-var SystemKinds = []string{"stocklist.photos_repair", "studio.research_draft"}
+var SystemKinds = []string{"stocklist.photos_repair", "studio.research_draft", "observatory.trend_edit", "observatory.trend_site"}
 
 // System carries an action to the control endpoint of a running system, the evidence
 // attached. It holds no credential: the system verifies the owner's capability and this

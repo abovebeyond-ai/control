@@ -41,6 +41,15 @@ var Schemas = map[string]Schema{
 		Required: map[string]string{"title": "string", "description": "string"},
 		Optional: map[string]string{"context": "string", "sources": "records", "status": "string"},
 	},
+	// One trend of the Gentells pipeline (docs/mandates.md): its headline or reading rewritten
+	// (the pipeline keeps the text before, so one step undoes it), or put on or taken off
+	// gentells.com (approve, skip, hide; deciding again reverses it). Both B2.
+	"observatory.trend_edit": {
+		Required: map[string]string{"trend": "string", "field": "string", "text": "string"},
+	},
+	"observatory.trend_site": {
+		Required: map[string]string{"trend": "string", "action": "string"},
+	},
 	"portal.update": {
 		Required: map[string]string{"title": "string"},
 		Optional: map[string]string{"date": "string", "clientVisible": "bool", "body": "list"},
