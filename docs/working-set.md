@@ -88,6 +88,69 @@ chain heads (DigiCert and Hedera), so nobody can rewrite the history unseen.
 - **The voice:** says what waits for a touch and whether it is inside the set; never asks for the
   touch itself.
 
+## The policy log as built (7 October 2026)
+
+The gateway half is in the code: `policy/log.go`, `cmd/gateway/policylog.go`, the RTMR3
+extension in `attest/boot.go` and the `control-policy` timer in `deploy/gcp/startup.sh`.
+
+**A version** is a token in the working set's form, `base64url(payload).base64url(Ed25519
+signature)`, with the payload:
+
+| field | meaning |
+|---|---|
+| `type` | `policy-version`, so a working set or a capability signed by the same key is never read as a policy |
+| `iss` | the signer's DID URL |
+| `version` | one more than the version served |
+| `prev` | `sha-256:` of the previous token, or of the carried configuration for version 1 |
+| `iat` | when it was signed; not more than five minutes ahead of the gateway's clock |
+| `agents` | every hand's grant, in the shape `config.json` gives it |
+| `systems` | the running systems' addresses |
+| `change` | the change in the words the signer was shown before signing (row 4.1.6) |
+
+**Who signs.** The carried configuration names the keys under `policy_log.signers`, and is
+measured into RTMR3 with them. `widen` keys (the owner's tokens, `#operator`, `#operator-2`)
+may sign any version. `narrow` keys (Elixir) may sign a version only if the gateway itself finds
+it narrower: no new hand, kind, resource, task, system or accepted judgement; no higher count;
+no certificate or per-action word dropped; no change to who speaks for a hand; no system moved
+to another address. Anything else from a narrowing key is refused, by name.
+
+**Forward only.** A version must carry the very next number and name the hash of the version
+served. A replayed older version, a skipped number or a fork is refused. A refused version is not
+kept, and every later version waits behind it until one that follows the served version arrives.
+
+**How it is applied.** A root timer runs `control-gateway --pull-policy` every minute: it asks
+`policy_log.url?after=<version>` with the gateway's Portal token (grants name client
+repositories, so the log is not public), judges each version, and keeps those that hold in
+`/var/lib/control/policy-log.json`. When it kept one it exits 3, and the unit restarts the
+gateway. The restart's `--attest` extends RTMR3 with each applied version after the binary and
+the carried configuration, in order (`attest.ExtendFrom` extends only what the register does not
+hold yet), and takes a fresh quote before the first action under the version: an attestation on
+every configuration change, held to the versions the owner signed (row 6.1.3). A verifier folds
+RTMR3 from the record's named inputs, as it does today.
+
+**On the record.** Every record carries `control_policy`, `v<n> sha-256:<hash>` (the carried
+configuration is v0), beside `policy_bundle_hash`, and `/v1/agents` names the version served so
+Elixir drafts the next one on it. A new carry-over starts the chain again at v0: the kept versions
+follow the older configuration and are set aside.
+
+**Still to build.**
+
+- **Portal:** keep the versions and serve them to the gateway (`GET` with the hand token); show a
+  draft as the difference in words before it is signed, and keep those words in the version.
+- **Elixir:** draft the next version from Portal's grants on the version the gateway names; sign a
+  narrowing itself; leave a widening for the owner.
+- **hand.mjs:** `policy sign`, on the token, showing the change in words before the touch (and,
+  later, the phone app over NFC, so widening needs no laptop either).
+- **The carried configuration:** `policy_log` with the URL and the keys, carried over once.
+- **The conformance statement:** the disclosed gap on a lagging grant closes; the passkey row and
+  the grant rows change.
+
+**The passkey inside a working set: still open.** The working set names Portal projects; the
+gateway knows repositories. Which repository belongs to which project is Portal's own data, so a
+widening approved by passkey and bounded by the set would still rest on Portal for that mapping.
+Until that is settled, a widening is signed on the token. The owner's token over NFC on the
+phone is the way to make that a tap anywhere.
+
 ## Open questions
 
 1. **The strong key on a phone.** Can the YubiKey sign the working set over NFC from the phone

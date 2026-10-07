@@ -93,6 +93,14 @@ type config struct {
 	// "https://traders.stocklistdealer.eu"): where an action on it is carried, its evidence
 	// attached, for the system to verify itself (docs/mandates.md). An address, not a secret.
 	Systems map[string]string `json:"systems,omitempty"`
+	// PolicyLog, when set, is where the gateway reads the signed versions of its grants after
+	// this configuration (docs/working-set.md): forward only, a widening on the owner's token, a
+	// narrowing from Elixir, each measured into RTMR3 before it is served.
+	PolicyLog *policyLogConfig `json:"policy_log,omitempty"`
+
+	// The versions applied since this configuration, and the head they lead to; read at start.
+	applied []policy.SignedVersion
+	head    *policy.Head
 }
 
 type service struct {
@@ -108,11 +116,37 @@ type service struct {
 func main() {
 	path := flag.String("config", "config.json", "configuration file")
 	attestOnly := flag.Bool("attest", false, "acquire the hardware quote binding the key, write attestation.json beside the store, and exit; run as root before the service drops to its own user")
+	pullOnly := flag.Bool("pull-policy", false, "read the policy versions after the one served, keep those that hold, and exit 3 when one was applied (the unit then restarts the gateway)")
 	flag.Parse()
 	raw, err := os.ReadFile(*path)
 	fail(err)
 	var cfg config
 	fail(json.Unmarshal(raw, &cfg))
+	if cfg.PolicyLog != nil {
+		carried, err := carriedBytes(cfg, *path)
+		fail(err)
+		if *pullOnly {
+			took, err := pullPolicy(cfg, carried, &http.Client{Timeout: 30 * time.Second}, portalToken(cfg.Secrets), time.Now())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "policy log: %v\n", err)
+			}
+			if took > 0 {
+				fmt.Fprintf(os.Stderr, "policy log: applied %d version(s)\n", took)
+				os.Exit(pulledExit)
+			}
+			return
+		}
+		// A kept version that no longer holds stops the replay there: the gateway serves the
+		// last version that did, and says why.
+		head, applied, err := loadChain(cfg, carried, time.Now())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "policy log: %v\n", err)
+		}
+		cfg = withHead(cfg, head)
+		cfg.applied, cfg.head = applied, &head
+	} else if *pullOnly {
+		return
+	}
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:8471"
 	}
@@ -146,6 +180,7 @@ func main() {
 	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
 	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
 	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
+	mux.HandleFunc("GET /v1/policy", s.accessed("policy", s.policy))
 	mux.HandleFunc("GET /v1/attachment", s.accessed("attachment", s.attachment))
 	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
 	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
@@ -202,7 +237,9 @@ func rtmr3Inputs(cfg config) []attest.Input {
 			inputs = append(inputs, attest.InputWithContent("carried-config", raw))
 		}
 	}
-	return inputs
+	// Then every policy version applied since, in order: the quote taken after a new version
+	// covers what the gateway serves, not only what it booted with (row 6.1.3).
+	return append(inputs, policyInputs(cfg.applied)...)
 }
 
 func stored(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
@@ -350,7 +387,11 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 	if !ok {
 		return nil, errors.New("unknown agent: no grant configured")
 	}
-	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release})
+	served := ""
+	if s.cfg.head != nil {
+		served = policyClaim(*s.cfg.head)
+	}
+	g, err := gateway.Open(gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served})
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +706,12 @@ func (s *service) agents(w http.ResponseWriter, r *http.Request) {
 			"resources": digestOf(s.cfg.Agents[id].Grant.Resources),
 		}
 	}
-	writeJSON(w, 200, map[string]any{"agents": ids, "grants": grants, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()})
+	out := map[string]any{"agents": ids, "grants": grants, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()}
+	// The version served, so Elixir drafts the next one on it and a reader sees which it is.
+	if s.cfg.head != nil {
+		out["policy"] = map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash}
+	}
+	writeJSON(w, 200, out)
 }
 
 // digestOf names a set without spelling it out: sorted, newline-joined, sha-256. Anyone
