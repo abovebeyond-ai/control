@@ -151,6 +151,28 @@ widening approved by passkey and bounded by the set would still rest on Portal f
 Until that is settled, a widening is signed on the token. The owner's token over NFC on the
 phone is the way to make that a tap anywhere.
 
+## The owner's key on the phone, as built (7 and 8 October 2026)
+
+Everything the token signs at the laptop can now be signed on the phone, with the same YubiKey
+held to its back over NFC (portal-android `docs/yubikey.md`, Portal `SignOnKey`): a working set,
+a widening of the policy, and an admission of one workbench on one project, reading for 30 days
+included. The bytes are the same RFC 8785 form under the same operator key, so the gateway checks
+them as it checks the laptop's and needed no change: an admission names its operator issuer, which
+`principal_keys` already verifies, and the workbench carries the key's own signature, not one
+Portal made.
+
+PIV signs whatever bytes it is given and binds no origin, unlike a passkey. Two checks take that
+place. The app holds Portal's offer against what the owner chose before the PIN is asked (the
+projects, hand, layer and end; a read word names read verbs on running systems only; the audience
+is the gateway under the app's own Portal), so a Portal that was broken into cannot put a wider
+word under a narrow sentence. Portal keeps a token only when it is its offer exactly plus an
+operator issuer, once, for the session that asked. The PIN and the tap are the step-up on every
+signature. Without NFC or without the key, the passkey and the laptop remain.
+
+Not yet: PIV attestation of slot 9c published beside each operator key, so the gateway itself can
+tell that the slot demands a touch (today the app reads it off the key and refuses a slot that does
+not); and a run on a real phone with a real key.
+
 ## Ending a word early, as built (7 October 2026)
 
 A capability is a signed token the gateway checks on its own, so ending an admission at Portal
