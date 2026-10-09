@@ -1,0 +1,42 @@
+{
+  "id": "aais-poc-1.0-draft",
+  "title": "Advanced AI Society Proof-of-Control Standard, Working Draft v1.0 (companion v0.1.5)",
+  "about": "The Google Doc open for comment until 30 October 2026. Six named domains, no row ids; tiers in Section 6, conformance stages and disclosure in Section 7. References quote the text, since the draft's numbering still moves.",
+  "source": "https://docs.google.com/document/d/1EiiGDwLXvMxoSHp3Ru56AhR2u9gNd-6Fjs_CKZ4kU-w",
+  "read": "2026-10-09",
+  "poc_threshold": 3,
+  "poc_threshold_ref": "Section 6: only Tiers 3 and 4 are Proof-of-Control; \"A signed operator log is Tier 2. This is not Proof-of-Control.\"",
+  "caps": {
+    "mathematics": { "tier": 3 },
+    "hardware-vendor-attestation": { "tier": 2, "why": "a chip vendor's attestation service is named as a single trusted party (Section 6)" },
+    "cloud-provider": { "tier": 2, "why": "a single trusted party (Section 6)" },
+    "software-vendor-word": { "tier": 2, "why": "a single trusted party (Section 6)" },
+    "operator-service-key": { "tier": 2, "why": "\"A signed operator log is Tier 2\" (Section 6)" },
+    "operator-service": { "tier": 2, "why": "\"A signed operator log is Tier 2\" (Section 6)" },
+    "data-source": { "tier": 2, "why": "a single trusted party (Section 6)" },
+    "timestamp-authority": { "tier": 2, "why": "a certificate authority is named as a single trusted party (Section 6)" },
+    "governed-ledger": { "tier": 2, "unsure": true, "why": "\"a permissioned or consortium blockchain\" whose validators are controlled is Tier 2 (Section 6); whether a council-run public ledger counts is a reading, not settled" },
+    "dns-domain": { "tier": 2, "unsure": true, "why": "a domain and its DNS are a single party; the draft does not name them" },
+    "operator-hardware-key": { "tier": 3, "unsure": true, "why": "the draft keeps human authorization outside the root of trust as an open question (Section 6, Tier 4 open item 2)" }
+  },
+  "independent_parties": {
+    "status": "proposed",
+    "tier": 3,
+    "ref": "comment [ai] on Section 6: allow an explicit threshold of a set of independent parties"
+  },
+  "map": {
+    "judged-before-effect": { "domain": "Authorization" },
+    "reason-verified": { "domain": "Provenance" },
+    "history-anchored": { "domain": "Security", "note": "evidence property: tamper-evident (Section 6)" },
+    "agent-identified": { "domain": "Identity" },
+    "gateway-attested": { "domain": "Security" },
+    "task-authorized": { "domain": "Authorization" },
+    "admitted-on-token": { "domain": "Authorization" },
+    "admitted-by-passkey": { "domain": "Authorization" },
+    "policy-versioned": { "domain": "Authorization" },
+    "revocable": { "domain": "Authorization", "note": "Tier 4 open item 5: key revocation, missing by acknowledgment" },
+    "far-end-verified": { "domain": "Authorization", "note": "Tier 4 asks every system in the chain to attest the interactions they share" },
+    "halts-on-mismatch": { "domain": "Security", "note": "Tier 4: \"no proof, no write\"; the system fails closed" },
+    "bounded-by-working-set": { "domain": "Authorization" }
+  }
+}

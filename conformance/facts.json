@@ -1,0 +1,140 @@
+{
+  "about": "What this system does, in its own words and under ids it owns. A fact changes when the system changes, never when a standard does. How a fact lands on a standard, and at which tier, lives in conformance/standards/<standard>.json and is computed by cmd/conformance.",
+  "parties": {
+    "mathematics": { "kind": "mathematics", "what": "Ed25519, SHA-256, SHA-384, the RFC 6962 tree, RFC 8785 canonical form" },
+    "intel": { "kind": "hardware-vendor-attestation", "what": "Intel's TDX attestation chain, the root of the quote" },
+    "google-cloud": { "kind": "cloud-provider", "what": "Google's hypervisor, disk encryption and signed firmware endorsement; a project owner can snapshot the disk (audit-logged)" },
+    "google-kms": { "kind": "cloud-provider", "what": "Google Cloud KMS holding #portal at software protection level" },
+    "canonical": { "kind": "software-vendor-word", "what": "Canonical's word for the contents of the public image the boot log names" },
+    "portal-key": { "kind": "operator-service-key", "what": "Portal's capability key #portal, used by a sign-only service account on the Portal server" },
+    "portal-webauthn": { "kind": "operator-service", "what": "Portal verifying the operator's WebAuthn assertion; the gateway does not repeat it" },
+    "osv": { "kind": "data-source", "what": "the OSV advisory data the hands read" },
+    "digicert": { "kind": "timestamp-authority", "what": "DigiCert as RFC 3161 timestamp authority" },
+    "hedera": { "kind": "governed-ledger", "what": "Hedera consensus and mirror nodes; a public ledger whose nodes are run by a governing council" },
+    "domain": { "kind": "dns-domain", "what": "the domain abovebeyond.ai and its DNS, for the did:webvh log" },
+    "operator-token": { "kind": "operator-hardware-key", "what": "the operator's YubiKeys (PIV 9c, PIN and touch), Yubico's key generation, and that hand.mjs is the tool the operator ran" }
+  },
+  "facts": [
+    {
+      "id": "judged-before-effect",
+      "says": "Every in-scope action was judged by the gateway and recorded before its effect was released.",
+      "how": "Signed evidence token per action, hash chain, RFC 6962 tree, record fsynced before the effect; FAIL_CLOSED when the store cannot be written.",
+      "evidence": ["gateway/gateway.go", "evidence/evidence.go", "merkle", "cmd/verify"],
+      "check": "go run ./cmd/verify --gateway https://portal.abovebeyond.ai/elixir/control",
+      "trust": ["mathematics", "intel", "google-cloud", "portal-key"],
+      "enforces": true,
+      "status": "live"
+    },
+    {
+      "id": "reason-verified",
+      "says": "Each repository-changing action carried a certificate of premises that verifies against the material beside the record.",
+      "how": "ProveML certificate checked by the gateway before the grant is read; replayable by three independent verifiers.",
+      "evidence": ["premises"],
+      "trust": ["osv", "intel", "google-cloud"],
+      "enforces": true,
+      "status": "live"
+    },
+    {
+      "id": "history-anchored",
+      "says": "The chain head existed by the anchored time and has not been rewritten below the anchored size.",
+      "how": "Daily signed checkpoint, timestamped by DigiCert (RFC 3161) and posted to Hedera mainnet topic 0.0.10856156 by a keyless anchorer.",
+      "evidence": ["anchor/anchor.go", "cmd/anchor"],
+      "trust": ["mathematics"],
+      "independent": [["digicert", "hedera"]],
+      "status": "live"
+    },
+    {
+      "id": "agent-identified",
+      "says": "The record names the agent by a fragment of a DID whose key history is signed.",
+      "how": "did:webvh log with pre-rotation, update key on a hardware token, every version pinned at DigiCert and on Hedera and compared back (anchor identity check).",
+      "evidence": ["anchor/identity.go", "conformance/key-custody.md"],
+      "trust": ["mathematics", "domain", "operator-token"],
+      "independent": [["digicert", "hedera"]],
+      "status": "live"
+    },
+    {
+      "id": "gateway-attested",
+      "says": "The gateway's key was generated inside an Intel TDX trust domain and bound in the quote; the quote's registers are held to published references, including every applied policy version in RTMR3.",
+      "how": "REPORTDATA binds the key; MRTD against Google's endorsement; RTMR0-2 replayed from the event log; RTMR3 folds the binary, the carried configuration and each policy version.",
+      "evidence": ["attest/attest.go", "attest/boot.go", "conformance/machine-image.md"],
+      "trust": ["intel", "google-cloud", "canonical"],
+      "status": "live"
+    },
+    {
+      "id": "task-authorized",
+      "says": "Every action was performed on a capability the principal signed for that task, narrowing the standing grant.",
+      "how": "Ed25519 token over RFC 8785 payload, verified by the gateway and intersected with the grant; its digest and task on the record.",
+      "evidence": ["capability/capability.go", "gateway/gateway.go"],
+      "trust": ["portal-key", "google-kms", "intel", "google-cloud"],
+      "enforces": true,
+      "status": "live"
+    },
+    {
+      "id": "admitted-on-token",
+      "says": "A workbench action admitted on the token was admitted by the operator in person.",
+      "how": "Capability signed by #operator or #operator-2 on a YubiKey, verified against the DID log, re-verified by verify and by the far end.",
+      "evidence": ["capability/capability.go", "conformance/key-custody.md"],
+      "trust": ["mathematics", "operator-token", "domain"],
+      "enforces": true,
+      "status": "live"
+    },
+    {
+      "id": "admitted-by-passkey",
+      "says": "A workbench action admitted by passkey was admitted by the operator.",
+      "how": "Portal verifies the WebAuthn assertion and signs the capability with #portal; the assertion's digest and credential id ride in the capability.",
+      "evidence": ["capability/capability.go"],
+      "trust": ["portal-webauthn", "portal-key", "google-kms"],
+      "status": "live"
+    },
+    {
+      "id": "policy-versioned",
+      "says": "The rules the gateway judges by are a signed, numbered, forward-only log, and every record names the version it ran under.",
+      "how": "Versions signed by the operator's token (widen) or Elixir (narrow, only when the gateway finds it narrower); each applied version extended into RTMR3 before the first action under it.",
+      "evidence": ["policy/log.go", "cmd/gateway/policylog.go"],
+      "trust": ["mathematics", "operator-token", "intel", "google-cloud"],
+      "enforces": true,
+      "status": "live",
+      "since": "v0.33.0"
+    },
+    {
+      "id": "revocable",
+      "says": "A capability the operator ends early is refused by the gateway within 30 seconds.",
+      "how": "The gateway polls Portal's list of capabilities ended early every 30 s; the list is unsigned because it can only take away.",
+      "evidence": ["cmd/gateway/revoked.go"],
+      "trust": ["portal-webauthn", "intel", "google-cloud"],
+      "enforces": true,
+      "status": "live",
+      "since": "v0.35.0",
+      "open": "Reads on a B1 mandate go direct to the system and cannot be ended early; the systems do not read the list."
+    },
+    {
+      "id": "far-end-verified",
+      "says": "A running system carries out an action only after verifying the gateway's record and the mandate itself, holding no credential of the gateway.",
+      "how": "Stocklist and the Gentells pipeline check the record's signature against the DID document, verdict, target, parameter digest, freshness, nonce and the mandate's jti.",
+      "evidence": ["effects/system.go", "relying/relying.go"],
+      "trust": ["mathematics", "domain", "intel", "google-cloud"],
+      "enforces": true,
+      "status": "live",
+      "open": "The systems read the TDX platform as a field in the signed record; they do not verify the quote."
+    },
+    {
+      "id": "halts-on-mismatch",
+      "says": "Before judging, the gateway holds the tail of its own log against the head it carries and stops on any disagreement; there is no override.",
+      "how": "FAIL_CLOSED on tail or head mismatch, recovery in docs/the-halt.md.",
+      "evidence": ["gateway/gateway.go", "docs/the-halt.md"],
+      "trust": ["mathematics", "intel", "google-cloud"],
+      "enforces": true,
+      "status": "live",
+      "since": "v0.30.0"
+    },
+    {
+      "id": "bounded-by-working-set",
+      "says": "A passkey approval can only fall inside a working set the operator signed on the token.",
+      "how": "Working set signed on the YubiKey; Portal refuses a passkey approval outside it.",
+      "evidence": ["docs/working-set.md"],
+      "trust": ["portal-webauthn", "operator-token"],
+      "status": "designed",
+      "open": "The gateway does not check the working set yet; only Portal enforces the bound."
+    }
+  ]
+}
