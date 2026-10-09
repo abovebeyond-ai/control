@@ -1,7 +1,14 @@
 # The working set: one strong word, then a passkey wherever you are
 
-Status: design note, 6 October 2026. Nothing here is built yet. It builds on `mandates.md`
-(commands modelled on blast radius) and changes how the owner approves, not what a hand may do.
+Status: designed on 6 October 2026, largely built by 9 October. The owner signs a working set on
+the token (`hand.mjs workingset`, or the phone over NFC), Portal keeps it and admits every project
+in it until its end with one passkey touch, and it can be ended in one tap. The gateway reads a
+signed policy log, a repair widening goes through on a passkey, and capabilities ended early are
+refused. What is not built: the gateway and the systems do not check a working set themselves (it
+bounds what Portal admits, not what the gateway accepts), and a passkey widening is bounded by the
+repair rule, not by the set. The sections marked *as built* say exactly what runs; the ones before
+them are the design they came from. It builds on `mandates.md` (commands modelled on blast radius)
+and changes how the owner approves, not what a hand may do.
 
 ## Why
 
@@ -134,17 +141,12 @@ configuration is v0), beside `policy_bundle_hash`, and `/v1/agents` names the ve
 Elixir drafts the next one on it. A new carry-over starts the chain again at v0: the kept versions
 follow the older configuration and are set aside.
 
-**Still to build.**
-
-- **Portal:** keep the versions and serve them to the gateway (`GET` with the hand token); show a
-  draft as the difference in words before it is signed, and keep those words in the version.
-- **Elixir:** draft the next version from Portal's grants on the version the gateway names; sign a
-  narrowing itself; leave a widening for the owner.
-- **hand.mjs:** `policy sign`, on the token, showing the change in words before the touch (and,
-  later, the phone app over NFC, so widening needs no laptop either).
-- **The carried configuration:** `policy_log` with the URL and the keys, carried over once.
-- **The conformance statement:** the disclosed gap on a lagging grant closes; the passkey row and
-  the grant rows change.
+**Built since** (checked 9 October 2026): Portal keeps the versions and serves them to the
+gateway (`/api/control/policy`) and shows a draft in words before it is signed; Elixir drafts the
+next version on the one the gateway names, signs a narrowing itself and leaves a widening for the
+owner (`App\Control\PolicyLog`); `hand.mjs policy sign` signs on the token, and the phone app does
+the same over NFC; Elixir writes `policy_log` into the configuration it carries; the conformance
+statement describes grants changing through policy versions.
 
 **The passkey inside a working set: still open.** The working set names Portal projects; the
 gateway knows repositories. Which repository belongs to which project is Portal's own data, so a
