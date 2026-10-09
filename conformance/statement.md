@@ -269,8 +269,9 @@ log does not name for it, and Portal keeps only versions whose signature and pla
 this is the case of a wrong signer key, not of a malformed version); when Portal does not
 answer, the gateway keeps the last version it verified; and a widening approved by passkey
 rests on Portal: the gateway bounds it to reversible kinds and to hands that exist, but which
-repository a new resource names, and that the owner's passkey stood behind `#portal`'s
-signature, it takes from Portal (the version keeps the assertion's hash, not the assertion).
+repository a new resource names, that the owner's passkey stood behind `#portal`'s signature,
+and that the change fell inside the working set the owner signed on the token, it takes from
+Portal (Portal keeps the assertion and the set beside the version, which carries neither).
 
 ## Trust-assumption disclosure (7.4.1, C10.2)
 
