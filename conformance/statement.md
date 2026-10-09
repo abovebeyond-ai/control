@@ -133,10 +133,13 @@ Met since v0.33.0 (7 October 2026), for the grant itself: the grant moves only f
 through policy versions the gateway reads and judges (`docs/working-set.md`, *The policy log
 as built*). Each version names the hash of the one before it, back to the carried
 configuration, and is signed by a key the carried configuration names: the operator's token
-keys for any change, Elixir's key only for a change the gateway itself finds narrower (no new
-hand, kind, resource, task, system or accepted judgement, no higher count, no certificate or
-per-action word dropped). So the grant is no longer raised by anything but the operator's
-token (4.1.8, 4.2.3); every record names the version it was judged under, `control_policy`,
+keys for any change, Portal's key (`#portal`, after the operator's passkey) only for a change
+the gateway itself finds a repair (kinds from the B1/B2 list `policy.RepairKinds` and
+resources added for hands that exist, nothing else), Elixir's key only for a change the
+gateway itself finds narrower (no new hand, kind, resource, task, system or accepted
+judgement, no higher count, no certificate or per-action word dropped). So the grant is raised
+by nothing but the operator's token, or by the operator's passkey within reversible kinds
+(4.1.8, 4.2.3); every record names the version it was judged under, `control_policy`,
 beside `policy_bundle_hash` (4.1.1); and the approval of a policy change is the signed
 version itself: its payload the exact change in the words the signer was shown, its issuer
 the authenticated key, its `iat` the time, kept whole in the attestation record that measured
@@ -256,7 +259,8 @@ restarts, measures each kept version into RTMR3 after the binary and the carried
 configuration, and takes a fresh quote before the first action under it. A narrowing (a
 project or repository removed) reaches the gateway within the minute without the operator;
 a widening waits for the operator's signature on the token (`hand.mjs policy sign`), shown
-first as the change in words in Portal. Only the gateway reaches out; nothing comes in, and
+first as the change in words in Portal, or, when it only adds reversible kinds and resources,
+for the operator's passkey in Portal, which then signs with `#portal`. Only the gateway reaches out; nothing comes in, and
 the configuration is carried over again only for a new release or new signers.
 
 What remains, disclosed: a version the gateway refuses blocks every later one until one
@@ -264,8 +268,9 @@ that follows the served version arrives (Elixir does not sign a narrowing whose 
 log does not name for it, and Portal keeps only versions whose signature and place hold, so
 this is the case of a wrong signer key, not of a malformed version); when Portal does not
 answer, the gateway keeps the last version it verified; and a widening approved by passkey
-inside a working set is not offered, since the set names Portal projects and which
-repository belongs to which project is Portal's own data.
+rests on Portal: the gateway bounds it to reversible kinds and to hands that exist, but which
+repository a new resource names, and that the owner's passkey stood behind `#portal`'s
+signature, it takes from Portal (the version keeps the assertion's hash, not the assertion).
 
 ## Trust-assumption disclosure (7.4.1, C10.2)
 
@@ -276,7 +281,7 @@ repository belongs to which project is Portal's own data.
 | the anchors | DigiCert as a timestamp authority; Hedera's consensus and its mirror nodes |
 | the identity | the domain abovebeyond.ai and its DNS; the self-certifying identifier binds the log to its first entry; a successor is trusted on the shared `#key-1`, on a hardware token since 5 October 2026 (`key-custody.md`), while the old key stays valid under the first identifier, where no version can retire it |
 | the operator's word | on the token: Yubico's key generation and PIN/touch enforcement; that the tool showing the payload before the touch (`hand.mjs`) is the tool the operator ran, since a token cannot display what it signs. By passkey: Portal, which verifies the assertion and signs with `#portal`, and Google's KMS. Either way the grant bounds what a wrong word can allow |
-| the grant | the configuration the operator carried to the gateway, then each policy version the gateway applied since: all measured into RTMR3 in order, so what the gateway serves is attested. A widening rests on the operator's token as a capability does; a narrowing signed by Elixir rests on the gateway's own check that it only takes away, and on the carried configuration naming Elixir's key (see *Since 13 September 2026*) |
+| the grant | the configuration the operator carried to the gateway, then each policy version the gateway applied since: all measured into RTMR3 in order, so what the gateway serves is attested. A widening rests on the operator's token as a capability does; a repair (reversible kinds and resources only) rests on the gateway's own check that it is one, and on Portal and its passkey check, as a capability signed by `#portal` does; a narrowing signed by Elixir rests on the gateway's own check that it only takes away, and on the carried configuration naming Elixir's key (see *Since 13 September 2026*) |
 | the premises | the OSV advisory data the hands read, graded as inferred or gateway in the provenance |
 | the effect | GitHub honours a token; it verifies nothing about the evidence. A running system (`stocklist.photos_repair`) holds no token for the gateway: it verifies the record and the capability itself, against the DID document, and refuses what neither allows |
 

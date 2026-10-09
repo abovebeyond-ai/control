@@ -109,7 +109,8 @@ signature)`, with the payload:
 
 **Who signs.** The carried configuration names the keys under `policy_log.signers`, and is
 measured into RTMR3 with them. `widen` keys (the owner's tokens, `#operator`, `#operator-2`)
-may sign any version. `narrow` keys (Elixir) may sign a version only if the gateway itself finds
+may sign any version. `repair` keys (Portal, after the owner's passkey) may sign a version
+that adds only reversible kinds and resources (see *A widening by passkey*). `narrow` keys (Elixir) may sign a version only if the gateway itself finds
 it narrower: no new hand, kind, resource, task, system or accepted judgement; no higher count;
 no certificate or per-action word dropped; no change to who speaks for a hand; no system moved
 to another address. Anything else from a narrowing key is refused, by name.
@@ -150,6 +151,41 @@ gateway knows repositories. Which repository belongs to which project is Portal'
 widening approved by passkey and bounded by the set would still rest on Portal for that mapping.
 Until that is settled, a widening is signed on the token. The owner's token over NFC on the
 phone is the way to make that a tap anywhere.
+
+## A widening by passkey, as built (8 October 2026)
+
+A widening that only adds what is undone in one step no longer needs the token. A third signer
+role sits beside `widen` and `narrow` in `policy_log.signers`: `repair`, Portal's key
+(`did:…#portal`, the Google KMS key that already signs capabilities). The gateway accepts a
+version from a repair key only when, against the version served, it adds nothing but
+
+- kinds from `policy.RepairKinds` (`policy/repair.go`), each with its radius named: the
+  workbench's proposal kinds (`branch.push`, `pull.open`, `issue.open`, `preview.push`,
+  `forge.deploy`), the `portal.*` writes, and the B2 system kinds (`stocklist.photos_repair`,
+  `studio.research_draft`, `observatory.trend_edit`, `observatory.trend_site`), to a hand or to
+  one of its tasks;
+- resources, for a hand that already exists and whose every kind is on that list (a new
+  resource reaches every kind the hand holds, so a hand holding `review.invite` or
+  `workflow.dispatch` gets a new repository only on the token);
+
+and changes nothing else: no new hand, task, system or system address, nothing about who speaks
+for a hand, no higher count, no certificate or per-action word dropped, no judgement accepted.
+The rest is `Narrower`'s check, run on the version with the allowed additions taken off. What
+reaches a person or cannot be called back (`review.invite`, `review.sign`, `pull.merge`,
+`pull.ready`, anything B3) is not on the list; a test keeps every system kind decided for it.
+
+Elixir marks a draft `repairOnly` by the same rule, ported line for line, and only when the
+running gateway names Portal's key among its repair signers (`/v1/policy` serves them): before the
+carry-over the gateway would refuse Portal's signature, and a refused version blocks every later
+one. Elixir writes Portal's key under `signers.repair` in the configuration it drafts. Portal shows such a draft on the
+Grants page with an approve button; on the passkey touch it signs the version with `#portal`,
+keeps the assertion's hash beside it, and keeps the version like any other. Portal refuses a
+`#portal` version for a draft that is not `repairOnly`, and the gateway refuses it again on its
+own. The gateway learns the repair signer only from a carried configuration, so the role takes
+effect after a release and one carry-over.
+
+Not yet: the approval is bounded by the rule, not by a working set. A passkey approval that must
+fall inside the owner's working set (its projects, its layer, its end) is the next step.
 
 ## The owner's key on the phone, as built (7 and 8 October 2026)
 

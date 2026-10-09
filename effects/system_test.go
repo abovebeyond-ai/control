@@ -105,3 +105,14 @@ func TestEverySystemKindHasASchema(t *testing.T) {
 		t.Fatal("a site decision without an action must be refused")
 	}
 }
+
+// Every action on a running system is named on the repair list or deliberately left off it,
+// so a new system kind cannot slip under the passkey by default, nor be forgotten there.
+func TestEverySystemKindIsDecidedForTheRepairList(t *testing.T) {
+	notRepair := map[string]bool{}
+	for _, k := range SystemKinds {
+		if !policy.IsRepairKind(k) && !notRepair[k] {
+			t.Errorf("%s is neither on policy.RepairKinds nor deliberately left off", k)
+		}
+	}
+}
