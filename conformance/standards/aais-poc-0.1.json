@@ -1,0 +1,31 @@
+{
+  "id": "aais-poc-0.1",
+  "title": "Advanced AI Society Proof-of-Control, draft v0.1",
+  "about": "The version statement.md and register.json were written against (claim date 9 September 2026). Its row ids are the C-chapter numbering of the GitHub draft.",
+  "poc_threshold": 3,
+  "caps": {
+    "mathematics": { "tier": 3 },
+    "hardware-vendor-attestation": { "tier": 2, "why": "held at 2 until an outsider's recorded verification run (8.1.5)" },
+    "cloud-provider": { "tier": 2, "why": "held at 2 until 8.1.5" },
+    "software-vendor-word": { "tier": 2, "why": "held at 2 until 8.1.5" },
+    "operator-service-key": { "tier": 2, "why": "the chain ends at a key on an ordinary server (C8.3.2)" },
+    "operator-service": { "tier": 2, "why": "the chain ends at Portal, not at a person (C8.3.2)" },
+    "data-source": { "tier": 2, "why": "taken as given, graded inferred in the provenance" },
+    "timestamp-authority": { "tier": 3, "why": "accepted with the public ledger as single-history consensus (7.3.3)" },
+    "governed-ledger": { "tier": 3, "why": "single-history consensus (7.3.3), read back with no credential" },
+    "dns-domain": { "tier": 3, "why": "the self-certifying identifier binds the log to its first entry" },
+    "operator-hardware-key": { "tier": 3, "why": "the key never leaves the token" }
+  },
+  "independent_parties": { "status": "not-addressed" },
+  "map": {
+    "judged-before-effect": { "domain": "C4", "rows": ["4.1.1"] },
+    "reason-verified": { "domain": "C4" },
+    "history-anchored": { "domain": "C7", "rows": ["7.3.3"] },
+    "agent-identified": { "domain": "C5" },
+    "gateway-attested": { "domain": "C7", "rows": ["7.3.2"] },
+    "task-authorized": { "domain": "C4", "rows": ["4.2.1", "4.2.3", "5.1.3"] },
+    "admitted-on-token": { "domain": "C8", "rows": ["8.3.2"] },
+    "admitted-by-passkey": { "domain": "C8", "rows": ["8.3.2"] },
+    "halts-on-mismatch": { "domain": "C7", "rows": ["7.6.3", "8.3.3"] }
+  }
+}
