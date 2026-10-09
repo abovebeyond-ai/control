@@ -148,11 +148,11 @@ owner (`App\Control\PolicyLog`); `hand.mjs policy sign` signs on the token, and 
 the same over NFC; Elixir writes `policy_log` into the configuration it carries; the conformance
 statement describes grants changing through policy versions.
 
-**The passkey inside a working set: still open.** The working set names Portal projects; the
-gateway knows repositories. Which repository belongs to which project is Portal's own data, so a
-widening approved by passkey and bounded by the set would still rest on Portal for that mapping.
-Until that is settled, a widening is signed on the token. The owner's token over NFC on the
-phone is the way to make that a tap anywhere.
+**The passkey inside a working set: built for repairs (9 October 2026).** A widening that only
+adds reversible kinds and resources is approved by passkey inside the set (see *A widening by
+passkey*). It rests on Portal for which repository belongs to which project, since the set names
+Portal projects and the gateway knows repositories; the gateway's own rule keeps it to B1/B2.
+Every other widening is signed on the token, over NFC on the phone or at the laptop.
 
 ## A widening by passkey, as built (8 October 2026)
 
@@ -186,8 +186,16 @@ keeps the assertion's hash beside it, and keeps the version like any other. Port
 own. The gateway learns the repair signer only from a carried configuration, so the role takes
 effect after a release and one carry-over.
 
-Not yet: the approval is bounded by the rule, not by a working set. A passkey approval that must
-fall inside the owner's working set (its projects, its layer, its end) is the next step.
+**Inside the working set (9 October 2026).** Portal offers the passkey only inside the working
+set in force, signed on the token: every kind the draft adds at or below the set's layer, and
+everything it newly reaches inside the set's projects. That is the resources it adds, and the
+hand's resources an added kind acts on (a new `portal.*` kind on a hand that names fifteen
+projects reaches all fifteen). Elixir sends with a repair-only draft what each hand gains
+(`adds`: new kinds with their layer, new resources), since Portal holds the draft and not the
+grants the gateway serves. Without a set, or outside it, the page says why and the token signs
+it. The approval kept beside the version names the set. The gateway does not see the set: it
+bounds a `#portal` version by the rule above, and the set is Portal's own check, the same way a
+passkey admission inside a set is.
 
 ## The owner's key on the phone, as built (7 and 8 October 2026)
 
