@@ -20,7 +20,9 @@ import (
 // names the hash of the one before it, the first names the hash of the carried configuration,
 // so the gateway only ever moves forward and a replayed older version, wider or not, is
 // refused. A version that widens anything is signed by the owner on his token; a version that
-// only takes away may be signed by Elixir, and the gateway itself checks that it does.
+// only adds reversible kinds or resources may be signed by Portal's key after the owner's
+// passkey (RepairOnly); a version that only takes away may be signed by Elixir. The gateway
+// itself checks that each does no more.
 
 // VersionType is the type every version carries, so a token signed for something else (a
 // working set, a capability) is never read as a policy.
@@ -63,10 +65,12 @@ func HashOf(b []byte) string {
 }
 
 // Signers are the keys the gateway accepts a version from, by DID URL: Widen may sign any
-// version (the owner's token keys), Narrow only one that takes away (Elixir).
+// version (the owner's token keys), Repair only one that adds nothing but reversible kinds and
+// resources (Portal's key, after the owner's passkey), Narrow only one that takes away (Elixir).
 type Signers struct {
 	Widen  map[string]string `json:"widen"`
 	Narrow map[string]string `json:"narrow,omitempty"`
+	Repair map[string]string `json:"repair,omitempty"`
 }
 
 // Head is what the gateway serves now: the version and hash the next must follow, and the
@@ -103,18 +107,23 @@ func ParseVersion(token string) (SignedVersion, error) {
 
 // Next judges a version against the head: signed by a key the gateway knows, the very next
 // number, naming the head's hash, not from the future, and, from a key that may only take
-// away, narrower than what is served. It returns the new head, or the reason it is refused.
+// away, narrower than what is served, or from a repair key, no more than a repair of it. It returns the new head, or the reason it is refused.
 func Next(head Head, s SignedVersion, signers Signers, now time.Time) (Head, error) {
 	v := s.Version
 	if v.Type != VersionType {
 		return head, fmt.Errorf("not a policy version but %q", v.Type)
 	}
 	key, widen := signers.Widen[v.Iss]
-	if !widen {
-		var ok bool
-		if key, ok = signers.Narrow[v.Iss]; !ok {
-			return head, fmt.Errorf("%s is not a key this gateway takes a policy from", v.Iss)
-		}
+	narrowKey, narrow := signers.Narrow[v.Iss]
+	repairKey, repair := signers.Repair[v.Iss]
+	switch {
+	case widen:
+	case narrow:
+		key = narrowKey
+	case repair:
+		key = repairKey
+	default:
+		return head, fmt.Errorf("%s is not a key this gateway takes a policy from", v.Iss)
 	}
 	if err := verifySignature(key, s); err != nil {
 		return head, err
@@ -134,9 +143,14 @@ func Next(head Head, s SignedVersion, signers Signers, now time.Time) (Head, err
 	if len(v.Change) == 0 {
 		return head, errors.New("a version says its change in words")
 	}
-	if !widen {
+	if !widen && narrow {
 		if reason := Narrower(head.Agents, head.Systems, v.Agents, v.Systems); reason != "" {
 			return head, fmt.Errorf("%s may only take away, and version %d %s", v.Iss, v.Version, reason)
+		}
+	}
+	if !widen && !narrow {
+		if reason := RepairOnly(head.Agents, head.Systems, v.Agents, v.Systems); reason != "" {
+			return head, fmt.Errorf("%s may only add reversible kinds and resources, and version %d %s", v.Iss, v.Version, reason)
 		}
 	}
 	return Head{Version: v.Version, Hash: s.Hash(), Agents: v.Agents, Systems: v.Systems}, nil

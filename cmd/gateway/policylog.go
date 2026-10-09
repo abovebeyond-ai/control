@@ -214,13 +214,18 @@ func portalToken(secrets string) string {
 }
 
 // policy serves the version the gateway judges under, whole: its number, its hash, every hand's
-// grant and the systems. Elixir drafts the next version on it and decides whether its change
-// only takes away; a reader sees what each record's control_policy names. The same grants are
-// readable already, as the attachment beside the first record judged under each.
+// grant and the systems, and the keys it takes the next version from. Elixir drafts the next
+// version on it and decides whether its change only takes away, or is a repair this gateway
+// would take on Portal's key; a reader sees what each record's control_policy names. The same
+// grants are readable already, as the attachment beside the first record judged under each.
 func (s *service) policy(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.head == nil {
 		writeJSON(w, 404, map[string]any{"error": "this gateway reads no policy log"})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "agents": s.cfg.head.Agents, "systems": s.cfg.head.Systems})
+	out := map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "agents": s.cfg.head.Agents, "systems": s.cfg.head.Systems}
+	if s.cfg.PolicyLog != nil {
+		out["signers"] = s.cfg.PolicyLog.Signers
+	}
+	writeJSON(w, 200, out)
 }
