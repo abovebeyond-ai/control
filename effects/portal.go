@@ -37,7 +37,7 @@ type Portal struct {
 const PortalResourcePrefix = "portal:"
 
 func (p Portal) Kinds() []string {
-	return []string{"portal.update", "portal.time_entry", "portal.expense", "portal.project.patch", "portal.task", "portal.measure", "portal.playbook"}
+	return []string{"portal.update", "portal.time_entry", "portal.expense", "portal.project.patch", "portal.task", "portal.measure", "portal.playbook", "portal.share"}
 }
 
 // projectFields are the fields a project patch may carry, flat in the parameters as the
@@ -201,6 +201,33 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 			detail["file"] = fileID
 		}
 		return Outcome{OK: true, Detail: detail}
+	case "portal.share":
+		// A document behind a link and a passphrase (portal#399). The document is the one
+		// attached file, digest bound to params.files_sha256 like an invoice; the passphrase
+		// arrives as its hash. Portal answers the share's id; the link is not put in the
+		// outcome, since the record is public and the link is for the reader alone.
+		if str("title") == "" || str("passphrase_hash") == "" || str("files_sha256") == "" {
+			return Outcome{Error: "portal.share needs params.title, params.passphrase_hash and params.files_sha256"}
+		}
+		files, err := DecodeFiles(a.Attached["files"])
+		if err != nil || len(files) != 1 {
+			return Outcome{Error: "portal.share needs exactly one file attached, the document: " + fmt.Sprint(err)}
+		}
+		if got, _ := FilesDigest(files); got != str("files_sha256") {
+			return Outcome{Error: "the attached document does not match params.files_sha256"}
+		}
+		fields := map[string]string{"project": slug, "title": str("title"), "passphrase_hash": str("passphrase_hash")}
+		if d, ok := a.Params["days"].(float64); ok {
+			fields["days"] = fmt.Sprintf("%d", int(d))
+		}
+		status, body, err := p.postFile(ctx, client, base, token, "share", fields, files[0], str("evidence"), str("capability"))
+		if err != nil {
+			return Outcome{Error: err.Error()}
+		}
+		if status/100 != 2 {
+			return Outcome{Error: answered(status, body)}
+		}
+		return Outcome{OK: true, Detail: map[string]any{"project": slug, "share": body["id"], "title": str("title")}}
 	case "portal.project.patch":
 		fields := map[string]any{}
 		for _, k := range projectFields {
@@ -277,6 +304,52 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 
 // upload puts the invoice on the expense: Portal's file door takes a multipart form (the
 // file, the project, the expense id, a label), and answers with the file's id.
+// postFile is one multipart write to a Portal door: the fields and one file, with the
+// evidence and the capability as headers like every other write (portal.share, v0.36.0).
+func (p Portal) postFile(ctx context.Context, client *http.Client, base, token, door string, fields map[string]string, f FileChange, evidence, capTok string) (int, map[string]any, error) {
+	content, err := base64.StdEncoding.DecodeString(f.Content)
+	if err != nil {
+		return 0, nil, fmt.Errorf("the attached file is not base64")
+	}
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	part, err := form.CreateFormFile("file", path.Base(f.Path))
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := part.Write(content); err != nil {
+		return 0, nil, err
+	}
+	for k, v := range fields {
+		_ = form.WriteField(k, v)
+	}
+	if err := form.Close(); err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/api/ingest/"+door, &buf)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	if evidence != "" {
+		req.Header.Set("Control-Evidence", evidence)
+	}
+	if capTok != "" {
+		req.Header.Set("Control-Capability", capTok)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return res.StatusCode, out, nil
+}
+
 func (p Portal) upload(ctx context.Context, client *http.Client, base, token, slug string, expenseID any, f FileChange, evidence, capTok string) (any, error) {
 	content, err := base64.StdEncoding.DecodeString(f.Content)
 	if err != nil {
