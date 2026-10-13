@@ -475,10 +475,14 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	// An expense may carry its invoice (since v0.18.0); it is bound the same way when it does,
 	// and an expense without a file passes without one.
 	expenseWithFile := req.Action.Kind == "portal.expense" && (len(req.Files) > 0 || req.Action.Params["files_sha256"] != nil)
-	if req.Action.Kind == "branch.push" || req.Action.Kind == "review.publish" || expenseWithFile {
-		// A push binds its files, a publication its page, to the judged parameters by
-		// digest before any judgement: what does not match is refused unrecorded.
-		param := map[string]string{"branch.push": "files_sha256", "review.publish": "page_sha256", "portal.expense": "files_sha256"}[req.Action.Kind]
+	// A share always carries its document (v0.39.0): the first share from the workbench on
+	// 13 October 2026 was judged and allowed, and the adapter found no file, because this
+	// list did not name the kind.
+	if req.Action.Kind == "branch.push" || req.Action.Kind == "review.publish" || req.Action.Kind == "portal.share" || expenseWithFile {
+		// A push binds its files, a publication its page, a share its document, to the
+		// judged parameters by digest before any judgement: what does not match is refused
+		// unrecorded.
+		param := map[string]string{"branch.push": "files_sha256", "review.publish": "page_sha256", "portal.expense": "files_sha256", "portal.share": "files_sha256"}[req.Action.Kind]
 		want, _ := req.Action.Params[param].(string)
 		got, _ := effects.FilesDigest(req.Files)
 		if len(req.Files) == 0 || want == "" || got != want {
