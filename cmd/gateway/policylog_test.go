@@ -70,10 +70,22 @@ func (f *policyLogFixture) sign(head policy.Head, iss string, key ed25519.Privat
 	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, payload))
 }
 
+// signDigest makes the same version in the digest form, as the hands make it since v0.40.0.
+func (f *policyLogFixture) signDigest(head policy.Head, iss string, key ed25519.PrivateKey, resources ...string) string {
+	body, _ := json.Marshal(map[string]any{
+		"agents": map[string]policy.HandGrant{logShed: {Grant: policy.Grant{Principal: "did:x", Kinds: []string{"pull.open"}, Resources: resources, MaxPerKind: 1}}},
+		"change": []string{"the workbench at home may propose on " + strings.Join(resources, ", ")},
+	})
+	h, _ := json.Marshal(map[string]any{"type": policy.VersionType, "iss": iss, "version": head.Version + 1, "prev": head.Hash, "iat": time.Now().Unix(), "body_hash": policy.HashOf(body)})
+	b64 := base64.RawURLEncoding.EncodeToString
+	return b64(h) + "." + b64(body) + "." + b64(ed25519.Sign(key, h))
+}
+
 func TestTheGatewayPullsAVersionKeepsItAndServesIt(t *testing.T) {
 	f := newPolicyLogFixture(t)
 	boot := bootHead(f.cfg, f.carried)
-	v1 := f.sign(boot, logOwner, f.owner, "abovebeyond-ai/portal", "abovebeyond-ai/portal-android")
+	// In the digest form: the head signed, the body named by hash, kept and measured whole.
+	v1 := f.signDigest(boot, logOwner, f.owner, "abovebeyond-ai/portal", "abovebeyond-ai/portal-android")
 	f.served = []string{v1}
 
 	took, err := pullPolicy(f.cfg, f.carried, f.server.Client(), "hand-token", time.Now())
@@ -91,7 +103,7 @@ func TestTheGatewayPullsAVersionKeepsItAndServesIt(t *testing.T) {
 	if !policy.ResourceCovered(served.Agents[logShed].Grant.Resources, "abovebeyond-ai/portal-android") {
 		t.Fatal("the gateway does not serve the new repository")
 	}
-	if in := policyInputs(applied); len(in) != 1 || in[0].Name != "policy-version-1" {
+	if in := policyInputs(applied); len(in) != 1 || in[0].Name != "policy-version-1" || in[0].Content != base64.StdEncoding.EncodeToString([]byte(v1)) {
 		t.Fatalf("RTMR3 inputs %+v", in)
 	}
 
