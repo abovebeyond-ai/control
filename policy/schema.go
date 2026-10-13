@@ -87,8 +87,10 @@ var Schemas = map[string]Schema{
 	// attached and digest bound like an invoice, the passphrase only as its hash, so the record
 	// holds neither the word nor the text, and the link is read back by the hand, never written.
 	"portal.share": {
-		Required: map[string]string{"title": "string", "passphrase_hash": "string", "files_sha256": "hex64"},
-		Optional: map[string]string{"days": "int"},
+		// passphrase_hash optional since v0.40.0: without it the link is the key, and every
+		// open is still on record.
+		Required: map[string]string{"title": "string", "files_sha256": "hex64"},
+		Optional: map[string]string{"days": "int", "passphrase_hash": "string"},
 	},
 	"workflow.dispatch": {
 		Required: map[string]string{"workflow": "string", "ref": "string"},

@@ -206,8 +206,8 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		// attached file, digest bound to params.files_sha256 like an invoice; the passphrase
 		// arrives as its hash. Portal answers the share's id; the link is not put in the
 		// outcome, since the record is public and the link is for the reader alone.
-		if str("title") == "" || str("passphrase_hash") == "" || str("files_sha256") == "" {
-			return Outcome{Error: "portal.share needs params.title, params.passphrase_hash and params.files_sha256"}
+		if str("title") == "" || str("files_sha256") == "" {
+			return Outcome{Error: "portal.share needs params.title and params.files_sha256"}
 		}
 		files, err := DecodeFiles(a.Attached["files"])
 		if err != nil || len(files) != 1 {
@@ -216,7 +216,10 @@ func (p Portal) Perform(ctx context.Context, a policy.Action) Outcome {
 		if got, _ := FilesDigest(files); got != str("files_sha256") {
 			return Outcome{Error: "the attached document does not match params.files_sha256"}
 		}
-		fields := map[string]string{"project": slug, "title": str("title"), "passphrase_hash": str("passphrase_hash")}
+		fields := map[string]string{"project": slug, "title": str("title")}
+		if h := str("passphrase_hash"); h != "" {
+			fields["passphrase_hash"] = h
+		}
 		if d, ok := a.Params["days"].(float64); ok {
 			fields["days"] = fmt.Sprintf("%d", int(d))
 		}
