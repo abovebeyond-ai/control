@@ -271,4 +271,12 @@ func TestAShareCarriesItsDocumentAndNeverTheWord(t *testing.T) {
 	if o.OK || len(*calls) != 0 {
 		t.Fatalf("a share without its document is refused: %+v", o)
 	}
+
+	// Without a passphrase hash the link is the key: the field is simply not sent.
+	*calls = nil
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.share", Resource: "portal:bextrust",
+		Params: map[string]any{"title": "KYC landscape", "files_sha256": digest}, Attached: map[string]any{"files": files}})
+	if !o.OK || len(*calls) != 1 || (*calls)[0].Body["passphrase_hash"] != "" {
+		t.Fatalf("a share open by link sends no hash: %+v %+v", o, *calls)
+	}
 }
