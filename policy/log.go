@@ -46,13 +46,39 @@ type LogVersion struct {
 	Change  []string             `json:"change"`
 }
 
-// SignedVersion is a version as it travels: the payload as signed, its signature, and the
-// hash the next version names.
+// SignedVersion is a version as it travels: the token, the bytes its signature covers (the
+// whole payload in the earlier form, the head in the digest form), and the version read out of
+// it; Hash is what the next version names.
 type SignedVersion struct {
 	Token   string
 	Payload []byte
 	Version LogVersion
 }
+
+// versionHead is what the key signs in the digest form: who, which number, after what, when,
+// and the body by its hash. A few hundred bytes whatever the grants weigh, so a key that takes
+// only short input (a YubiKey's PIV slot signs about a kilobyte in one piece) signs any version.
+type versionHead struct {
+	Type     string `json:"type"`
+	Iss      string `json:"iss"`
+	Version  int    `json:"version"`
+	Prev     string `json:"prev"`
+	Iat      int64  `json:"iat"`
+	BodyHash string `json:"body_hash"`
+}
+
+// versionBody is what the head names: the grants, the systems and the change in words.
+type versionBody struct {
+	Agents  map[string]HandGrant `json:"agents"`
+	Systems map[string]string    `json:"systems,omitempty"`
+	Change  []string             `json:"change"`
+}
+
+// Formats are the token forms this gateway reads, the preferred one first. Served on
+// /v1/policy and /v1/agents, so a signer uses the digest form only once the gateway takes it:
+// a version in a form the gateway does not read is refused, and a refused version blocks the
+// chain until the owner replaces it.
+var Formats = []string{"digest", "payload"}
 
 // Hash names a signed version: sha-256 over the token as it travels, tagged.
 func (s SignedVersion) Hash() string { return HashOf([]byte(s.Token)) }
@@ -85,24 +111,59 @@ type Head struct {
 // maxSkew bounds how far a version's iat may lie ahead of the gateway's clock.
 const maxSkew = 5 * time.Minute
 
-// ParseVersion reads a token, base64url(payload) "." base64url(Ed25519 signature), the form a
-// working set has: the token signs the payload bytes exactly as they travel.
+// ParseVersion reads a token in either of its forms. The digest form, since v0.40.0, is three
+// base64url parts, head "." body "." signature: the Ed25519 signature covers the head's bytes
+// exactly as they travel, and the head names the body by its sha-256, so what the key signed
+// and what the gateway reads are bound together without the key ever seeing the body. The
+// earlier form is two parts, base64url(payload) "." base64url(signature), the whole payload
+// signed, the form a working set has; versions kept on disk from before the change are in it
+// and are still read.
 func ParseVersion(token string) (SignedVersion, error) {
-	parts := strings.Split(strings.TrimSpace(token), ".")
-	if len(parts) != 2 {
-		return SignedVersion{}, errors.New("a version is two base64url parts joined by a dot")
+	token = strings.TrimSpace(token)
+	parts := strings.Split(token, ".")
+	switch len(parts) {
+	case 2:
+		payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+		if err != nil {
+			return SignedVersion{}, fmt.Errorf("payload: %w", err)
+		}
+		var v LogVersion
+		if err := decodeStrict(payload, &v); err != nil {
+			return SignedVersion{}, fmt.Errorf("payload: %w", err)
+		}
+		return SignedVersion{Token: token, Payload: payload, Version: v}, nil
+	case 3:
+		head, err := base64.RawURLEncoding.DecodeString(parts[0])
+		if err != nil {
+			return SignedVersion{}, fmt.Errorf("head: %w", err)
+		}
+		body, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return SignedVersion{}, fmt.Errorf("body: %w", err)
+		}
+		var h versionHead
+		if err := decodeStrict(head, &h); err != nil {
+			return SignedVersion{}, fmt.Errorf("head: %w", err)
+		}
+		var b versionBody
+		if err := decodeStrict(body, &b); err != nil {
+			return SignedVersion{}, fmt.Errorf("body: %w", err)
+		}
+		if h.BodyHash != HashOf(body) {
+			return SignedVersion{}, fmt.Errorf("the head of version %d names a body of %s, and the body is %s", h.Version, h.BodyHash, HashOf(body))
+		}
+		v := LogVersion{Type: h.Type, Iss: h.Iss, Version: h.Version, Prev: h.Prev, Iat: h.Iat, Agents: b.Agents, Systems: b.Systems, Change: b.Change}
+		return SignedVersion{Token: token, Payload: head, Version: v}, nil
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return SignedVersion{}, fmt.Errorf("payload: %w", err)
-	}
-	var v LogVersion
-	dec := json.NewDecoder(bytes.NewReader(payload))
+	return SignedVersion{}, errors.New("a version is a head, a body and a signature, or a payload and a signature, as base64url parts joined by dots")
+}
+
+// decodeStrict reads JSON into a struct and refuses a field the struct does not name, so a
+// version cannot carry anything the gateway does not read.
+func decodeStrict(raw []byte, into any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&v); err != nil {
-		return SignedVersion{}, fmt.Errorf("payload: %w", err)
-	}
-	return SignedVersion{Token: strings.TrimSpace(token), Payload: payload, Version: v}, nil
+	return dec.Decode(into)
 }
 
 // Next judges a version against the head: signed by a key the gateway knows, the very next
@@ -162,7 +223,7 @@ func verifySignature(keyHex string, s SignedVersion) error {
 		return errors.New("the signer's key is not an Ed25519 public key")
 	}
 	parts := strings.Split(s.Token, ".")
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	sig, err := base64.RawURLEncoding.DecodeString(parts[len(parts)-1])
 	if err != nil {
 		return fmt.Errorf("signature: %w", err)
 	}

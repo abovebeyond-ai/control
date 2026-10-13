@@ -100,8 +100,11 @@ chain heads (DigiCert and Hedera), so nobody can rewrite the history unseen.
 The gateway half is in the code: `policy/log.go`, `cmd/gateway/policylog.go`, the RTMR3
 extension in `attest/boot.go` and the `control-policy` timer in `deploy/gcp/startup.sh`.
 
-**A version** is a token in the working set's form, `base64url(payload).base64url(Ed25519
-signature)`, with the payload:
+**A version** is a token of three base64url parts, `head.body.signature` (the digest form,
+since v0.40.0). The Ed25519 signature covers the head's bytes exactly as they travel, and the
+head names the body by its hash, so the key signs a few hundred bytes whatever the grants weigh:
+a YubiKey's PIV slot signs about a kilobyte in one piece, and the first real widening was 6.6 KB.
+The head:
 
 | field | meaning |
 |---|---|
@@ -110,9 +113,21 @@ signature)`, with the payload:
 | `version` | one more than the version served |
 | `prev` | `sha-256:` of the previous token, or of the carried configuration for version 1 |
 | `iat` | when it was signed; not more than five minutes ahead of the gateway's clock |
+| `body_hash` | `sha-256:` of the body's bytes as they travel |
+
+The body:
+
+| field | meaning |
+|---|---|
 | `agents` | every hand's grant, in the shape `config.json` gives it |
 | `systems` | the running systems' addresses |
 | `change` | the change in the words the signer was shown before signing (row 4.1.6) |
+
+The hash a next version names is `sha-256:` over the whole token. The earlier form, two parts
+with the whole payload signed (`base64url(payload).base64url(signature)`, the working set's
+form), is still read: versions kept on disk from before the change are in it. `GET /v1/policy`
+and the `policy` object on `GET /v1/agents` list the forms the gateway reads under `formats`, so
+a signer uses the digest form only once the gateway takes it.
 
 **Who signs.** The carried configuration names the keys under `policy_log.signers`, and is
 measured into RTMR3 with them. `widen` keys (the owner's tokens, `#operator`, `#operator-2`)

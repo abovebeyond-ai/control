@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,19 @@ func sign(t *testing.T, key ed25519.PrivateKey, v LogVersion) SignedVersion {
 	}
 	token := base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, payload))
 	s, err := ParseVersion(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// signDigest makes the same version in the digest form: the head signed, the body named by hash.
+func signDigest(t *testing.T, key ed25519.PrivateKey, v LogVersion) SignedVersion {
+	t.Helper()
+	body, _ := json.Marshal(versionBody{Agents: v.Agents, Systems: v.Systems, Change: v.Change})
+	head, _ := json.Marshal(versionHead{Type: v.Type, Iss: v.Iss, Version: v.Version, Prev: v.Prev, Iat: v.Iat, BodyHash: HashOf(body)})
+	b64 := base64.RawURLEncoding.EncodeToString
+	s, err := ParseVersion(b64(head) + "." + b64(body) + "." + b64(ed25519.Sign(key, head)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +217,66 @@ func TestATaskNarrowingIsNarrowerAndDroppingItIsNot(t *testing.T) {
 	}
 }
 
+func TestADigestSignedVersionReadsAndChainsLikeTheOther(t *testing.T) {
+	k := newLogKeys(t)
+	head := bootHead()
+	// Version 1 in the earlier form, version 2 in the digest form: one chain, one judgement.
+	v1 := sign(t, k.owner, version(head, owner, withResources(head, "abovebeyond-ai/portal"), head.Systems))
+	next, err := Next(head, v1, k.signers, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2 := signDigest(t, k.owner, version(next, owner, withResources(next, "abovebeyond-ai/portal", "abovebeyond-ai/portal-android"), next.Systems))
+	after, err := Next(next, v2, k.signers, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != 2 || after.Hash != v2.Hash() || after.Hash != HashOf([]byte(v2.Token)) || !contains(after.Agents[shed].Grant.Resources, "abovebeyond-ai/portal-android") {
+		t.Fatalf("head after version 2: %+v", after)
+	}
+
+	// The head is short whatever the body weighs: two hundred repositories, under half a kilobyte signed.
+	many := make([]string, 0, 200)
+	for i := 0; i < 200; i++ {
+		many = append(many, "abovebeyond-ai/repository-"+strconv.Itoa(i))
+	}
+	heavy := signDigest(t, k.owner, version(after, owner, withResources(after, many...), after.Systems))
+	if len(heavy.Payload) > 512 || len(heavy.Token) < 4096 {
+		t.Fatalf("the head weighs %d bytes for a token of %d", len(heavy.Payload), len(heavy.Token))
+	}
+	if _, err := Next(after, heavy, k.signers, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// A body that is not the one the head names does not even parse; a signature by another key
+	// over the head does not hold; a body with a field of the head in it is refused.
+	parts := strings.Split(v2.Token, ".")
+	other, _ := json.Marshal(versionBody{Agents: withResources(next, "abovebeyond-ai/everything"), Systems: next.Systems, Change: v2.Version.Change})
+	if _, err := ParseVersion(parts[0] + "." + base64.RawURLEncoding.EncodeToString(other) + "." + parts[2]); err == nil || !strings.Contains(err.Error(), "names a body") {
+		t.Fatalf("a swapped body must not parse, got %v", err)
+	}
+	_, stranger, _ := ed25519.GenerateKey(rand.Reader)
+	if _, err := Next(next, signDigest(t, stranger, version(next, owner, next.Agents, next.Systems)), k.signers, now); err == nil || !strings.Contains(err.Error(), "does not hold") {
+		t.Fatalf("a forged head must be refused, got %v", err)
+	}
+	smuggled := base64.RawURLEncoding.EncodeToString([]byte(`{"agents":{},"change":["x"],"iss":"did:x#operator"}`))
+	if _, err := ParseVersion(parts[0] + "." + smuggled + "." + parts[2]); err == nil {
+		t.Fatal("a body carrying a head's field must not parse")
+	}
+
+	// Elixir's narrowing and a widening it may not sign are judged the same in this form.
+	narrowing := signDigest(t, k.elixir, version(after, elixir, withResources(after, "abovebeyond-ai/portal"), after.Systems))
+	if _, err := Next(after, narrowing, k.signers, now); err != nil {
+		t.Fatal(err)
+	}
+	widening := signDigest(t, k.elixir, version(after, elixir, withResources(after, "abovebeyond-ai/portal", "abovebeyond-ai/portal-android", "abovebeyond-ai/control"), after.Systems))
+	if _, err := Next(after, widening, k.signers, now); err == nil || !strings.Contains(err.Error(), "may only take away") {
+		t.Fatalf("Elixir's widening must be refused in the digest form too, got %v", err)
+	}
+}
+
 func TestATokenThatIsNotAVersionDoesNotParse(t *testing.T) {
-	for _, token := range []string{"", "one-part", "a.b.c", "!!.!!"} {
+	for _, token := range []string{"", "one-part", "a.b.c", "!!.!!", "a.b.c.d"} {
 		if _, err := ParseVersion(token); err == nil {
 			t.Errorf("%q parsed", token)
 		}
