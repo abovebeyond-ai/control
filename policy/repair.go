@@ -23,6 +23,7 @@ var RepairKinds = map[string]string{
 	"portal.task":             "B2: a task's state in Portal, set back in one step",
 	"portal.measure":          "B1: queues a measurement; nothing changes but a reading",
 	"portal.playbook":         "B2: queues a playbook, whose own actions are judged one by one",
+	"portal.share":            "B2: one share in Portal, ended there in one step",
 	"stocklist.photos_repair": "B2: writes derived photo sizes a later run can write again",
 	"studio.research_draft":   "B2: one brief for review; an editor approves or dismisses it",
 	"observatory.trend_edit":  "B2: rewrites one trend's text; the text before is kept, one step undoes it",

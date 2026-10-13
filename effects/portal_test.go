@@ -25,6 +25,19 @@ func fakePortal(t *testing.T) (*httptest.Server, *[]portalCall) {
 	var calls []portalCall
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/ingest/share" {
+			f, hdr, err := r.FormFile("file")
+			if err != nil {
+				w.WriteHeader(422)
+				_, _ = w.Write([]byte(`{"message":"no file"}`))
+				return
+			}
+			content, _ := io.ReadAll(f)
+			calls = append(calls, portalCall{Method: r.Method, Path: r.URL.Path, Auth: r.Header.Get("Authorization"), Evidence: r.Header.Get("Control-Evidence"), Capability: r.Header.Get("Control-Capability"),
+				Body: map[string]any{"project": r.FormValue("project"), "title": r.FormValue("title"), "days": r.FormValue("days"), "passphrase_hash": r.FormValue("passphrase_hash"), "name": hdr.Filename, "content": string(content)}})
+			_, _ = w.Write([]byte(`{"ok":true,"id":41}`))
+			return
+		}
 		if r.URL.Path == "/api/ingest/file" {
 			// The file door takes a multipart form: read it as Portal would, before the body is gone.
 			f, hdr, err := r.FormFile("file")
@@ -221,5 +234,41 @@ func TestAnExpenseCarriesItsInvoice(t *testing.T) {
 	o = p.Perform(context.Background(), policy.Action{Kind: "portal.expense", Resource: "portal:hoet", Params: map[string]any{"vendor": "Together AI", "amount": 20.0}})
 	if !o.OK || len(*calls) != 1 {
 		t.Fatalf("an expense without a file passes without one: %+v", o)
+	}
+}
+
+// A share: the document attached and digest bound, the passphrase as its hash, and the link
+// kept out of the outcome because the record is public and the link is the reader's.
+func TestAShareCarriesItsDocumentAndNeverTheWord(t *testing.T) {
+	srv, calls := fakePortal(t)
+	p := portalWithToken(t, srv.URL)
+	files := []FileChange{{Path: "kyc-landscape.md", Content: base64.StdEncoding.EncodeToString([]byte("# Brief\n\nThey verify the person."))}}
+	digest, _ := FilesDigest(files)
+	o := p.Perform(context.Background(), policy.Action{Kind: "portal.share", Resource: "portal:bextrust",
+		Params:   map[string]any{"title": "KYC landscape", "days": 30.0, "passphrase_hash": "pbkdf2-sha256$1000$c2FsdA==$aGFzaA==", "files_sha256": digest, "evidence": "ev", "capability": "cap"},
+		Attached: map[string]any{"files": files}})
+	if !o.OK || o.Detail["share"] != 41.0 || o.Detail["title"] != "KYC landscape" {
+		t.Fatalf("share: %+v", o)
+	}
+	if _, leaked := o.Detail["url"]; leaked {
+		t.Fatal("the link must not be in the outcome")
+	}
+	if len(*calls) != 1 || (*calls)[0].Path != "/api/ingest/share" {
+		t.Fatalf("one multipart write to the share door: %+v", *calls)
+	}
+	c := (*calls)[0]
+	if c.Body["project"] != "bextrust" || c.Body["title"] != "KYC landscape" || c.Body["days"] != "30" || c.Body["passphrase_hash"] != "pbkdf2-sha256$1000$c2FsdA==$aGFzaA==" || c.Body["name"] != "kyc-landscape.md" || c.Body["content"] != "# Brief\n\nThey verify the person." || c.Evidence != "ev" || c.Capability != "cap" || c.Auth != "Bearer tok-portal" {
+		t.Fatalf("the fields, the file, the evidence and the token: %+v", c)
+	}
+
+	*calls = nil
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.share", Resource: "portal:bextrust",
+		Params: map[string]any{"title": "KYC landscape", "passphrase_hash": "x", "files_sha256": digest}, Attached: map[string]any{"files": []FileChange{{Path: "other.md", Content: base64.StdEncoding.EncodeToString([]byte("other"))}}}})
+	if o.OK || len(*calls) != 0 {
+		t.Fatalf("a mismatching document must be refused before the write: %+v %d", o, len(*calls))
+	}
+	o = p.Perform(context.Background(), policy.Action{Kind: "portal.share", Resource: "portal:bextrust", Params: map[string]any{"title": "KYC landscape", "passphrase_hash": "x"}})
+	if o.OK || len(*calls) != 0 {
+		t.Fatalf("a share without its document is refused: %+v", o)
 	}
 }
