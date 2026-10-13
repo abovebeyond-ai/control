@@ -939,3 +939,69 @@ func TestASystemActionCarriesItsEvidence(t *testing.T) {
 		t.Fatal("the hand's own parameters must stay as they were")
 	}
 }
+
+// A share binds its document the way a push binds its files: without it, or with one that
+// does not match the digest, the submission is refused before any judgement; with it, the
+// adapter receives the file and Portal is written once.
+func TestAShareBindsItsDocumentBeforeTheJudgement(t *testing.T) {
+	var writes []string
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, hdr, err := r.FormFile("file")
+		if err != nil {
+			w.WriteHeader(422)
+			_, _ = w.Write([]byte(`{"message":"no file"}`))
+			return
+		}
+		writes = append(writes, r.URL.Path+" "+hdr.Filename+" "+r.FormValue("title"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"ok":true,"id":5}`))
+	}))
+	defer portal.Close()
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", "portal-token"), []byte("tok-portal\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("35", 32))
+	agent := "did:webvh:QmTest:example.org#agent-workbench"
+	s := &service{
+		cfg: config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store"), Secrets: filepath.Join(dir, "secrets"), Agents: map[string]struct {
+			Grant policy.Grant `json:"grant"`
+		}{agent: {Grant: policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"portal.share"}, Resources: []string{"portal:bextrust"}, MaxPerKind: 3}}}},
+		key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+	}
+	s.effects.Add(effects.Portal{SecretsDir: filepath.Join(dir, "secrets"), Base: portal.URL})
+	post := func(body any) (int, map[string]any) {
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	files := []effects.FileChange{{Path: "kyc-landscape.md", Content: "IyBCcmllZgo="}}
+	digest, _ := effects.FilesDigest(files)
+	params := map[string]any{"title": "KYC landscape", "days": 30, "passphrase_hash": "pbkdf2-sha256$1000$c2FsdA==$aGFzaA==", "files_sha256": digest}
+
+	if code, out := post(submitRequest{Agent: agent, Action: policy.Action{Kind: "portal.share", Resource: "portal:bextrust", Params: params}}); code != 400 || !strings.Contains(fmt.Sprint(out["error"]), "files_sha256") {
+		t.Fatalf("a share without its document: %d %v", code, out)
+	}
+	if code, out := post(submitRequest{Agent: agent, Action: policy.Action{Kind: "portal.share", Resource: "portal:bextrust", Params: params}, Files: []effects.FileChange{{Path: "kyc-landscape.md", Content: "b3RoZXI="}}}); code != 400 {
+		t.Fatalf("a document that does not match the digest: %d %v", code, out)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("Portal was reached before the judgement: %v", writes)
+	}
+	code, out := post(submitRequest{Agent: agent, Action: policy.Action{Kind: "portal.share", Resource: "portal:bextrust", Params: params}, Files: files})
+	if code != 200 || out["verdict"] != "ALLOW" {
+		t.Fatalf("share: %d %v", code, out)
+	}
+	effect, _ := out["effect"].(map[string]any)
+	if effect["ok"] != true {
+		t.Fatalf("the share was not written: %v", out["effect"])
+	}
+	if len(writes) != 1 || writes[0] != "/api/ingest/share kyc-landscape.md KYC landscape" {
+		t.Fatalf("one write to the share door with the document: %v", writes)
+	}
+}
