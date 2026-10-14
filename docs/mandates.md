@@ -1,9 +1,16 @@
 # Mandates by blast radius
 
-A design note, not yet built. It describes how the owner's agents get to act on running
+A design note, partly built. It describes how the owner's agents get to act on running
 systems (the Stocklist platform, the Gentells Observatory) and not only propose code, without
 weakening what holds today: no credential at the hand, every action judged and recorded,
 merging and admitting the owner's alone.
+
+What runs: the B1 reads, under one kind per system that the system checks itself
+(`stocklist.read`, `stocklist.photos_read`, `observatory.read`, `glk.read`), and four B2 actions
+the gateway judges and carries out: `stocklist.photos_repair`, `studio.research_draft`,
+`observatory.trend_edit` and `observatory.trend_site` (marked *built* in the tables below). The
+list per system is Portal's `Capability::SYSTEMS`. What is not built: the finer B1 reads the
+tables name, every other B2 command, B3 with `once`, and `bounds`.
 
 ## Why
 
@@ -56,7 +63,7 @@ extended with what a layer needs:
 | `iss` | the owner's key (`#portal` or `#operator`) |
 | `sub` | the hand (`#agent-workbench-shed`, `#agent-elixir`) |
 | `kinds` | only the kinds of one layer |
-| `resource` | the system: `stocklist:platform`, `gentells:observatory` |
+| `resource` | the system: `stocklist:platform`, `observatory:pipeline` |
 | `layer` | `B1`, `B2`, `B3` |
 | `bounds` | per kind, where the schema needs the owner's number (a price ceiling) |
 | `exp` | B1 up to 30 days, B2 the rest of the day, B3 minutes |
