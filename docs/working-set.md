@@ -4,7 +4,7 @@ Status: designed on 6 October 2026, largely built by 9 October. The owner signs 
 the token (`hand.mjs workingset`, or the phone over NFC), Portal keeps it, and inside it, and only
 inside it, a passkey touch admits the workbench; it can be ended in one tap. The gateway reads a
 signed policy log, a repair widening goes through on a passkey, capabilities ended early are
-refused, and from v0.41.0 the gateway holds a passkey capability to the set it carries when the
+refused, and from v0.42.0 the gateway holds a passkey capability to the set it carries when the
 grant says `working_set`. What is not built: the systems do not check a set, and a passkey
 widening of the policy is bounded by the repair rule, not by the set. The sections marked *as
 built* say exactly what runs; the ones before them are the design they came from. It builds on
