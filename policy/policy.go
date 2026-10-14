@@ -82,6 +82,12 @@ type Grant struct {
 	// touch of the key per action; a push and a pull request end in a review, an invitation
 	// is mail already sent and a seal is anchored.
 	PerAction []string `json:"per_action,omitempty"`
+	// WorkingSet, when set, holds a capability signed by the principal key (Portal's, after a
+	// passkey touch) to the working set the owner signed on a token key named above: it must
+	// carry the set, for its project, its layer and no longer than it stands. Without it a
+	// passkey word reaches whatever Portal chose to sign; the operator's own keys are the
+	// token itself and are not held to a set (docs/working-set.md, "The gateway checks the set").
+	WorkingSet bool `json:"working_set,omitempty"`
 	// Judgements names the controls a certificate of premises may argue for this grant.
 	// A working is only as good as the rule it argues: a permit that accepts "within
 	// semver" must not be satisfied by a working that argues something else. Empty means

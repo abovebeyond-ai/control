@@ -48,6 +48,16 @@ type Payload struct {
 type Task struct {
 	Playbook string `json:"playbook"`
 	Project  string `json:"project"`
+	// WorkingSet is the set a passkey word was given inside: Portal names it, and carries
+	// the owner's signed token so the gateway can hold the word to it (InsideWorkingSet).
+	WorkingSet *TaskWorkingSet `json:"workingSet,omitempty"`
+}
+
+// TaskWorkingSet names the set by its jti and issuer and carries it whole.
+type TaskWorkingSet struct {
+	ID     string `json:"jti,omitempty"`
+	Issuer string `json:"iss,omitempty"`
+	Token  string `json:"token,omitempty"`
 }
 
 // Issue signs a payload with the principal's key.

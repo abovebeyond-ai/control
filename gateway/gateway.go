@@ -340,9 +340,10 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 		default:
 			// Which of the principal's keys: the one the token names as its issuer, when the
 			// grant lists it by fragment (the operator's token keys), else the principal key.
+			byToken := false
 			if unverified, _, _, perr := capability.Parse(token); perr == nil {
 				if k, named := g.cfg.Policy.Grant.PrincipalKeys[unverified.Issuer]; named {
-					key = k
+					key, byToken = k, true
 				}
 			}
 			if key == "" {
@@ -360,7 +361,18 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 				break
 			}
 			merged["control_capability"] = capability.Digest(token)
-			merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires, "iss": p.Issuer}
+			task := map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires, "iss": p.Issuer}
+			merged["control_task"] = task
+			// Portal's word is held to the set the owner signed on the token, when the grant says so.
+			if g.cfg.Policy.Grant.WorkingSet && !byToken {
+				did, _, _ := strings.Cut(g.cfg.Agent, "#")
+				ws, err := capability.InsideWorkingSet(p, g.cfg.Policy.Grant.PrincipalKeys, did, g.cfg.Clock())
+				if err != nil {
+					capReason = err.Error()
+					break
+				}
+				task["working_set"] = map[string]any{"jti": ws.ID, "iss": ws.Issuer}
+			}
 			if g.cfg.Revoked != nil && p.ID != "" {
 				if since, ended := g.cfg.Revoked(p.ID); ended {
 					capReason = "the owner ended this capability at " + since + ", before it expired"

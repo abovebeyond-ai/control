@@ -130,11 +130,12 @@
     {
       "id": "bounded-by-working-set",
       "says": "A passkey approval can only fall inside a working set the operator signed on the token.",
-      "how": "Working set signed on the YubiKey; Portal refuses a passkey approval outside it.",
-      "evidence": ["docs/working-set.md"],
-      "trust": ["portal-webauthn", "operator-token"],
-      "status": "designed",
-      "open": "The gateway does not check the working set yet; only Portal enforces the bound."
+      "how": "A grant with working_set holds every capability Portal signs for that hand to the set it carries whole: signed by a token key the grant names, naming the project, reaching every kind's layer, outlasting the capability, a week at most.",
+      "evidence": ["capability/workingset.go", "gateway/gateway.go", "docs/working-set.md"],
+      "trust": ["mathematics", "operator-token", "intel", "google-cloud"],
+      "status": "built",
+      "since": "v0.41.0",
+      "open": "Enforced once the served policy sets working_set on the workbench hands; Elixir writes it once the gateway serves the field. A passkey-signed policy version is held to the repair rule, not to the set, and B1 reads on the systems are not held to a set."
     }
   ]
 }

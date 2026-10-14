@@ -725,7 +725,7 @@ func (s *service) agents(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"agents": ids, "grants": grants, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()}
 	// The version served, so Elixir drafts the next one on it and a reader sees which it is.
 	if s.cfg.head != nil {
-		out["policy"] = map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "formats": policy.Formats}
+		out["policy"] = map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "formats": policy.Formats, "fields": policy.Fields}
 	}
 	writeJSON(w, 200, out)
 }

@@ -125,9 +125,11 @@ func TestTheGatewayPullsAVersionKeepsItAndServesIt(t *testing.T) {
 		Hash    string                      `json:"hash"`
 		Agents  map[string]policy.HandGrant `json:"agents"`
 		Signers policy.Signers              `json:"signers"`
+		Fields  []string                    `json:"fields"`
 	}
 	// The signers it takes, so Elixir offers a repair to the passkey only when this gateway takes Portal's key.
-	if json.Unmarshal(rec0.Body.Bytes(), &whole); rec0.Code != 200 || whole.Version != 1 || whole.Hash != head.Hash || len(whole.Agents[logShed].Grant.Resources) != 2 || whole.Signers.Repair["did:x#portal"] != "ab" {
+	if json.Unmarshal(rec0.Body.Bytes(), &whole); rec0.Code != 200 || whole.Version != 1 || whole.Hash != head.Hash || len(whole.Agents[logShed].Grant.Resources) != 2 || whole.Signers.Repair["did:x#portal"] != "ab" ||
+		len(whole.Fields) != 1 || whole.Fields[0] != "working_set" {
 		t.Fatalf("GET /v1/policy: %d %s", rec0.Code, rec0.Body.String())
 	}
 

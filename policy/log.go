@@ -80,6 +80,12 @@ type versionBody struct {
 // chain until the owner replaces it.
 var Formats = []string{"digest", "payload"}
 
+// Fields are the optional grant fields this gateway reads that an earlier release did not.
+// A body is decoded strictly, so a version naming a field the gateway does not know is
+// refused and blocks the chain: a signer writes one only once it is served here, on
+// /v1/policy and /v1/agents beside the formats.
+var Fields = []string{"working_set"}
+
 // Hash names a signed version: sha-256 over the token as it travels, tagged.
 func (s SignedVersion) Hash() string { return HashOf([]byte(s.Token)) }
 
@@ -283,6 +289,9 @@ func grantNarrower(cur, next Grant) string {
 	}
 	if k := firstOutside(cur.PerAction, next.PerAction); k != "" {
 		return "drops the word per action for " + k
+	}
+	if cur.WorkingSet && !next.WorkingSet {
+		return "drops the working set for Portal's word"
 	}
 	if j := firstOutside(judgements(next.Judgements), judgements(cur.Judgements)); j != "" {
 		return "accepts the judgement " + j
