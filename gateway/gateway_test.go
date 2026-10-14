@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"github.com/abovebeyond-ai/control/attest"
@@ -843,3 +844,57 @@ func TestACapabilityTheOwnerEndedIsRefused(t *testing.T) {
 		t.Fatalf("standing: %v", v.Reason)
 	}
 }
+
+// A grant with working_set holds Portal's word to the set the owner signed on the token: without
+// it the word is refused, with it the action goes through and the record names the set; the
+// operator's own key is the token itself and is not held to a set; and a grant without the
+// switch takes Portal's word as before.
+func TestPortalsWordIsHeldToTheWorkingSetWhenTheGrantSaysSo(t *testing.T) {
+	portal := ed25519.NewKeyFromSeed([]byte("principal-seed-principal-seed-32"))
+	op := ed25519.NewKeyFromSeed([]byte("operator-one-operator-one-seed32"))
+	pub := func(k ed25519.PrivateKey) string { return hex.EncodeToString(k.Public().(ed25519.PublicKey)) }
+	store, _ := log.Open(t.TempDir())
+	seed, _ := hex.DecodeString(strings.Repeat("11", 32))
+	now := time.Unix(1_800_000_000, 0)
+	grant := policy.Grant{Principal: "did:example:ab", Kinds: []string{"pull.open"}, Resources: []string{"o/r"}, MaxPerKind: 5,
+		PrincipalKey: pub(portal), PrincipalKeys: map[string]string{"did:example:ab#operator": pub(op)}, WorkingSet: true}
+	cfg := Config{Issuer: "https://gateway.example/control", Agent: "did:example:ab#agent-workbench",
+		Policy: policy.Policy{Grant: grant, PathAware: true}, Store: store, Key: ed25519.NewKeyFromSeed(seed), Clock: func() time.Time { return now }}
+	g, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"type": "working-set", "iss": "did:example:ab#operator", "sub": "did:example:ab", "projects": []string{"demo"},
+		"layer": "B2", "iat": now.Unix(), "exp": now.Add(3 * 24 * time.Hour).Unix(), "jti": "ws-1"})
+	set := base64.RawURLEncoding.EncodeToString(raw) + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(op, raw))
+	word := func(iss string, key ed25519.PrivateKey, ws *capability.TaskWorkingSet) string {
+		tok, _ := capability.Issue(capability.Payload{Issuer: iss, Subject: cfg.Agent, Audience: cfg.Issuer,
+			Task: capability.Task{Playbook: "workbench", Project: "demo", WorkingSet: ws}, Kinds: []string{"pull.open"}, Resources: []string{"o/r"},
+			IssuedAt: now.Unix(), Expires: now.Add(2 * time.Hour).Unix(), ID: "01W"}, key)
+		return tok
+	}
+	a := policy.Action{Kind: "pull.open", Resource: "o/r", Params: map[string]any{"branch": "b", "base": "main"}}
+
+	if v := g.SubmitWith("r1", a, "did:example:ab", nil, nil, nil, nil, word("did:example:ab#portal", portal, &setNamedOnly)); v.Allowed() || v.Token == nil || !strings.Contains(v.Reason, "must carry the working set") {
+		t.Fatalf("named only: %v", v)
+	}
+	v := g.SubmitWith("r2", a, "did:example:ab", nil, nil, nil, nil, word("did:example:ab#portal", portal, &capability.TaskWorkingSet{ID: "ws-1", Token: set}))
+	if !v.Allowed() {
+		t.Fatalf("inside the set: %v", v.Reason)
+	}
+	if ws := v.Token.Claims()["control_task"].(map[string]any)["working_set"]; ws == nil || ws.(map[string]any)["jti"] != "ws-1" {
+		t.Fatalf("the record names the set: %v", v.Token.Claims()["control_task"])
+	}
+	if v := g.SubmitWith("r3", a, "did:example:ab", nil, nil, nil, nil, word("did:example:ab#operator", op, nil)); !v.Allowed() {
+		t.Fatalf("the operator's key needs no set: %v", v.Reason)
+	}
+
+	grant.WorkingSet = false
+	g2, _ := Open(Config{Issuer: cfg.Issuer, Agent: cfg.Agent, Policy: policy.Policy{Grant: grant, PathAware: true}, Store: store, Key: cfg.Key, Clock: cfg.Clock})
+	if v := g2.SubmitWith("r4", a, "did:example:ab", nil, nil, nil, nil, word("did:example:ab#portal", portal, nil)); !v.Allowed() {
+		t.Fatalf("without the switch: %v", v.Reason)
+	}
+}
+
+// setNamedOnly is what Portal carried before the set rode whole: its name alone.
+var setNamedOnly = capability.TaskWorkingSet{ID: "ws-1", Issuer: "did:example:ab#operator"}

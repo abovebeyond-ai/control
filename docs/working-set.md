@@ -1,14 +1,15 @@
 # The working set: one strong word, then a passkey wherever you are
 
 Status: designed on 6 October 2026, largely built by 9 October. The owner signs a working set on
-the token (`hand.mjs workingset`, or the phone over NFC), Portal keeps it and admits every project
-in it until its end with one passkey touch, and it can be ended in one tap. The gateway reads a
-signed policy log, a repair widening goes through on a passkey, and capabilities ended early are
-refused. What is not built: the gateway and the systems do not check a working set themselves (it
-bounds what Portal admits, not what the gateway accepts), and a passkey widening is bounded by the
-repair rule, not by the set. *The gateway checks the set* is the design for the first half. The sections marked *as built* say exactly what runs; the ones before
-them are the design they came from. It builds on `mandates.md` (commands modelled on blast radius)
-and changes how the owner approves, not what a hand may do.
+the token (`hand.mjs workingset`, or the phone over NFC), Portal keeps it, and inside it, and only
+inside it, a passkey touch admits the workbench; it can be ended in one tap. The gateway reads a
+signed policy log, a repair widening goes through on a passkey, capabilities ended early are
+refused, and from v0.41.0 the gateway holds a passkey capability to the set it carries when the
+grant says `working_set`. What is not built: the systems do not check a set, and a passkey
+widening of the policy is bounded by the repair rule, not by the set. The sections marked *as
+built* say exactly what runs; the ones before them are the design they came from. It builds on
+`mandates.md` (commands modelled on blast radius) and changes how the owner approves, not what a
+hand may do.
 
 ## Why
 
@@ -212,55 +213,52 @@ it. The approval kept beside the version names the set. The gateway does not see
 bounds a `#portal` version by the rule above, and the set is Portal's own check, the same way a
 passkey admission inside a set is.
 
-## The gateway checks the set (design, 14 October 2026; not built)
+## The gateway checks the set, as built (14 October 2026)
 
-Today the set bounds what Portal will sign, not what the gateway accepts. A capability signed
-by Portal's key (`#portal`) is held to that key, its audience, its hand and its expiry
-(`capability.Verify`), and its `task.workingSet` carries only the set's `jti` and `iss`, which
-the gateway ignores. So a Portal that was taken over could sign an admission for any project
-the grant names, until any date, and the gateway would take it. The step below makes the
-sentence in *Why it holds* true for capabilities: someone who holds Portal gets at most what the
-owner set out on the token.
+Before this, the set bounded what Portal would sign, not what the gateway accepted: a capability
+signed by Portal's key was held to that key, its audience, its hand and its expiry, and its
+`task.workingSet` named the set without the gateway reading it. A first design let a word of a
+day or less through without a set. That bounded nothing: `iat` and `exp` are Portal's to write,
+so a Portal in other hands issues a fresh day every day. Every passkey word is held to a set
+instead.
 
-**The rule.** For a capability whose issuer is Portal's key:
+**The rule.** A grant with `working_set: true` holds every capability signed by its principal
+key (Portal's, after a passkey touch) to the working set it carries whole, under
+`task.workingSet.token`. `capability.InsideWorkingSet` refuses by name unless
 
-- A word for a day or less (`exp - iat` at most 25 hours, so a "today" issued just after midnight
-  on the day the clocks go back still fits) needs no set. That is the passkey alone, Tier 2, as
-  it is today and as the admission screen says.
-- A longer word must carry the set itself, the whole token, under `task.workingSet.token`. The
-  gateway then checks, and refuses by name when one fails:
-  1. the set's signature under a `widen` key of `policy_log.signers` (the owner's tokens, the
-     keys already measured into RTMR3 for the policy log); no new key list;
-  2. `type` is `working-set` and `sub` is the hands' DID;
-  3. the set ends no earlier than the capability, and stands a week at most;
-  4. the capability's `task.project` is among the set's `projects`;
-  5. every kind the capability names has a radius in `policy.RepairKinds` at or below the set's
-     `layer`. A kind without a radius there is not admitted under a set at all.
+1. the set is signed by a key the grant names under `principal_keys` (the owner's tokens, the
+   same keys an operator-signed capability is checked against);
+2. its `type` is `working-set` and its `sub` is the hands' DID;
+3. it ends no earlier than the capability and stands a week at most;
+4. the capability's `task.project` is among its `projects`;
+5. every kind the capability names has a radius in `policy.RepairKinds` at or below the set's
+   `layer`. A kind without a radius there is never admitted by passkey.
 
-Operator-signed capabilities (`#operator`, `#operator-2`) are the token itself and are not held
-to a set. The record's `control_task` gains `working_set: {jti, iss}`, so a reader follows an
+A capability signed by one of the `principal_keys` is the token itself and is not held to a
+set. The record's `control_task` carries `working_set: {jti, iss}`, so a reader follows an
 action to the passkey assertion and from there to a token signature, without asking Portal.
 
-**What it reuses.** The signer list and the radius table already exist and are measured or
-tested; the check is a function of the capability and the served policy, about a hundred lines
-with tests. Ending a set early needs nothing new: `WorkbenchAdmit::endSet` moves every admission
-under the set to now, and Portal's revoked list carries their `jti`s to the gateway within half a
-minute (`cmd/gateway/revoked.go`).
+**Portal.** The passkey admits the workbench only inside the set in force, for its projects,
+and only when it reaches B2 (every kind the gateway judges for the workbench is B2): for the
+set's period, or two hours, today or a repair today within it, never outlasting it
+(`WorkbenchAdmit::setFor`). The capability carries the set's `jti`, `iss` and token. Outside a
+set the owner admits on the token (`hand.mjs admit`). Reading a running system (B1, 30 days)
+goes to the system, not the gateway, and still needs no set.
 
-**Order.** Portal first: `Capability::issue` puts the set's token beside its `jti` and `iss`. The
-gateway reads `task` leniently, so this changes nothing until the gateway checks. Then a release
-that checks, effective once the served policy names `widen` signers. A long admission issued
-before Portal's change carries no token and is refused after that release; the owner admits
-once more inside the set, or the release waits a week until every such word has run out.
+**The policy.** `working_set` takes away, so a narrowing key may set it; dropping it is a
+widening (`grantNarrower`), so only the owner's token may, and a repair version may not. A body
+is decoded strictly, so the gateway serves the grant fields it reads under `fields` on
+`/v1/policy` and `/v1/agents` (`policy.Fields`), and a signer writes `working_set` only once it
+is served. Ending a set early needs nothing new: `WorkbenchAdmit::endSet` moves every admission
+under it to now, and the revoked list carries their `jti`s to the gateway within half a minute.
 
-**What stays out, and why.**
+**What stays out.**
 
 - *A passkey-signed policy version.* The set names projects and a policy names repositories;
   the gateway holds no map from one to the other, and `RepairKinds` already caps such a version
   at B2. The set stays Portal's own check there, as *A widening by passkey* says.
-- *The systems' reads.* A B1 word (up to 30 days) goes to Stocklist, the Observatory or GLK, not
-  to the gateway. Each system would apply the same five checks in its own mandate code; that is a
-  step per system, after this one.
+- *The systems' reads.* A B1 word goes to Stocklist, the Observatory or GLK, not to the
+  gateway. Each system would apply the same checks in its own mandate code.
 
 ## The owner's key on the phone, as built (7 and 8 October 2026)
 

@@ -217,6 +217,25 @@ func TestATaskNarrowingIsNarrowerAndDroppingItIsNot(t *testing.T) {
 	}
 }
 
+// Holding Portal's word to the working set takes away, so Elixir may sign it; dropping it
+// gives Portal's word back its own reach, which only the owner's token may sign, and the
+// repair key may not either.
+func TestHoldingPortalsWordToTheSetIsNarrowerAndDroppingItIsNot(t *testing.T) {
+	cur := bootHead().Agents
+	g := cur[shed].Grant
+	g.WorkingSet = true
+	held := map[string]HandGrant{shed: {Grant: g}}
+	if reason := Narrower(cur, nil, held, nil); reason != "" {
+		t.Fatalf("holding the word to the set is narrower: %s", reason)
+	}
+	if reason := Narrower(held, nil, cur, nil); !strings.Contains(reason, "drops the working set") {
+		t.Fatalf("dropping the set widens, got %q", reason)
+	}
+	if reason := RepairOnly(held, nil, cur, nil); reason == "" {
+		t.Fatal("a repair may not drop the set")
+	}
+}
+
 func TestADigestSignedVersionReadsAndChainsLikeTheOther(t *testing.T) {
 	k := newLogKeys(t)
 	head := bootHead()
