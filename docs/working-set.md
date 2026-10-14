@@ -6,7 +6,7 @@ in it until its end with one passkey touch, and it can be ended in one tap. The 
 signed policy log, a repair widening goes through on a passkey, and capabilities ended early are
 refused. What is not built: the gateway and the systems do not check a working set themselves (it
 bounds what Portal admits, not what the gateway accepts), and a passkey widening is bounded by the
-repair rule, not by the set. The sections marked *as built* say exactly what runs; the ones before
+repair rule, not by the set. *The gateway checks the set* is the design for the first half. The sections marked *as built* say exactly what runs; the ones before
 them are the design they came from. It builds on `mandates.md` (commands modelled on blast radius)
 and changes how the owner approves, not what a hand may do.
 
@@ -212,6 +212,56 @@ it. The approval kept beside the version names the set. The gateway does not see
 bounds a `#portal` version by the rule above, and the set is Portal's own check, the same way a
 passkey admission inside a set is.
 
+## The gateway checks the set (design, 14 October 2026; not built)
+
+Today the set bounds what Portal will sign, not what the gateway accepts. A capability signed
+by Portal's key (`#portal`) is held to that key, its audience, its hand and its expiry
+(`capability.Verify`), and its `task.workingSet` carries only the set's `jti` and `iss`, which
+the gateway ignores. So a Portal that was taken over could sign an admission for any project
+the grant names, until any date, and the gateway would take it. The step below makes the
+sentence in *Why it holds* true for capabilities: someone who holds Portal gets at most what the
+owner set out on the token.
+
+**The rule.** For a capability whose issuer is Portal's key:
+
+- A word for a day or less (`exp - iat` at most 25 hours, so a "today" issued just after midnight
+  on the day the clocks go back still fits) needs no set. That is the passkey alone, Tier 2, as
+  it is today and as the admission screen says.
+- A longer word must carry the set itself, the whole token, under `task.workingSet.token`. The
+  gateway then checks, and refuses by name when one fails:
+  1. the set's signature under a `widen` key of `policy_log.signers` (the owner's tokens, the
+     keys already measured into RTMR3 for the policy log); no new key list;
+  2. `type` is `working-set` and `sub` is the hands' DID;
+  3. the set ends no earlier than the capability, and stands a week at most;
+  4. the capability's `task.project` is among the set's `projects`;
+  5. every kind the capability names has a radius in `policy.RepairKinds` at or below the set's
+     `layer`. A kind without a radius there is not admitted under a set at all.
+
+Operator-signed capabilities (`#operator`, `#operator-2`) are the token itself and are not held
+to a set. The record's `control_task` gains `working_set: {jti, iss}`, so a reader follows an
+action to the passkey assertion and from there to a token signature, without asking Portal.
+
+**What it reuses.** The signer list and the radius table already exist and are measured or
+tested; the check is a function of the capability and the served policy, about a hundred lines
+with tests. Ending a set early needs nothing new: `WorkbenchAdmit::endSet` moves every admission
+under the set to now, and Portal's revoked list carries their `jti`s to the gateway within half a
+minute (`cmd/gateway/revoked.go`).
+
+**Order.** Portal first: `Capability::issue` puts the set's token beside its `jti` and `iss`. The
+gateway reads `task` leniently, so this changes nothing until the gateway checks. Then a release
+that checks, effective once the served policy names `widen` signers. A long admission issued
+before Portal's change carries no token and is refused after that release; the owner admits
+once more inside the set, or the release waits a week until every such word has run out.
+
+**What stays out, and why.**
+
+- *A passkey-signed policy version.* The set names projects and a policy names repositories;
+  the gateway holds no map from one to the other, and `RepairKinds` already caps such a version
+  at B2. The set stays Portal's own check there, as *A widening by passkey* says.
+- *The systems' reads.* A B1 word (up to 30 days) goes to Stocklist, the Observatory or GLK, not
+  to the gateway. Each system would apply the same five checks in its own mandate code; that is a
+  step per system, after this one.
+
 ## The owner's key on the phone, as built (7 and 8 October 2026)
 
 Everything the token signs at the laptop can now be signed on the phone, with the same YubiKey
@@ -256,4 +306,5 @@ next read, at most 30 seconds, the token still acts.
 3. **B3 inside a set.** A per-action signature by passkey inside a set, or the strong key for every
    B3 action regardless? The first is smoother; the second keeps every irreversible act at the token.
 4. **Revocation.** Ending a set early must take one tap and reach the gateway and the systems
-   before the next action.
+   before the next action. The gateway half is built: the revoked list, read every half minute
+   (`cmd/gateway/revoked.go`). The systems do not read it yet.
