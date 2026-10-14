@@ -143,6 +143,9 @@ func main() {
 		// A kept version that no longer holds stops the replay there: the gateway serves the
 		// last version that did, and says why.
 		head, applied, err := loadChain(cfg, carried, time.Now())
+		if errors.Is(err, errPolicyState) {
+			fail(err)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "policy log: %v\n", err)
 		}

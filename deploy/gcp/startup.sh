@@ -177,6 +177,10 @@ User=control
 Group=control
 ExecStartPre=+/usr/local/bin/control-gateway --config /var/lib/control/config.json --attest
 ExecStartPre=+/bin/chown -R control:control /var/lib/control/secrets /var/lib/control/store
+# The policy log is written by the root timer below (control-policy); the gateway reads it as
+# its own user. Until 14 October 2026 it could not, and served the carried configuration while
+# --attest, as root, had measured the versions kept: the register and the policy disagreed.
+ExecStartPre=+/bin/sh -c 'if [ -e /var/lib/control/policy-log.json ]; then chown control:control /var/lib/control/policy-log.json; fi'
 ExecStart=/usr/local/bin/control-gateway --config /var/lib/control/config.json
 Restart=on-failure
 RestartSec=5

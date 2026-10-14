@@ -63,6 +63,12 @@ func bootHead(cfg config, carried []byte) policy.Head {
 	return policy.Head{Version: 0, Hash: policy.HashOf(carried), Agents: agents, Systems: cfg.Systems}
 }
 
+// errPolicyState is a kept policy log the gateway cannot read. It is never a reason to serve the
+// carried configuration instead: --attest, run as root, may have read the same file and measured
+// its versions into RTMR3, and a gateway judging by another policy than the register names would
+// be the quiet mismatch the halt exists to prevent. The gateway stops instead (main).
+var errPolicyState = errors.New("the kept policy log cannot be read")
+
 // loadChain replays the versions kept on disk from the boot head, each judged again as when it
 // arrived. A chain that does not start at this carried configuration belongs to an earlier
 // carry-over and is set aside: the carried configuration is the newer word.
@@ -73,11 +79,11 @@ func loadChain(cfg config, carried []byte, now time.Time) (policy.Head, []policy
 		return head, nil, nil
 	}
 	if err != nil {
-		return head, nil, err
+		return head, nil, fmt.Errorf("%w: %v", errPolicyState, err)
 	}
 	var st policyState
 	if err := json.Unmarshal(raw, &st); err != nil {
-		return head, nil, fmt.Errorf("policy state: %w", err)
+		return head, nil, fmt.Errorf("%w: %v", errPolicyState, err)
 	}
 	var applied []policy.SignedVersion
 	for i, token := range st.Tokens {
