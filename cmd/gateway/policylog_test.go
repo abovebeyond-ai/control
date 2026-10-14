@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -188,5 +189,34 @@ func TestANewCarryOverSetsTheKeptVersionsAside(t *testing.T) {
 	head, applied, err := loadChain(f.cfg, carried, time.Now())
 	if err != nil || head.Version != 0 || len(applied) != 0 || head.Hash != policy.HashOf(carried) {
 		t.Fatalf("head %+v, %d applied, %v", head, len(applied), err)
+	}
+}
+
+// A kept policy log the gateway cannot read is never answered with the carried configuration:
+// --attest, as root, may have measured its versions, so serving the carried one would judge by
+// a policy the register does not name. On 14 October 2026 the root timer wrote the file 0600 and
+// the gateway, as its own user, served v0 while RTMR3 held v1.
+func TestAKeptLogTheGatewayCannotReadIsRefusedNotReplaced(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	f := newPolicyLogFixture(t)
+	boot := bootHead(f.cfg, f.carried)
+	f.served = []string{f.signDigest(boot, logOwner, f.owner, "abovebeyond-ai/portal", "abovebeyond-ai/portal-android")}
+	if took, err := pullPolicy(f.cfg, f.carried, f.server.Client(), "hand-token", time.Now()); err != nil || took != 1 {
+		t.Fatalf("took %d, %v", took, err)
+	}
+	if err := os.Chmod(f.cfg.PolicyLog.statePath(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadChain(f.cfg, f.carried, time.Now()); !errors.Is(err, errPolicyState) {
+		t.Fatalf("an unreadable log must stop the gateway, got %v", err)
+	}
+	os.Remove(f.cfg.PolicyLog.statePath())
+	if err := os.WriteFile(f.cfg.PolicyLog.statePath(), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadChain(f.cfg, f.carried, time.Now()); !errors.Is(err, errPolicyState) {
+		t.Fatalf("a log that does not parse must stop the gateway, got %v", err)
 	}
 }
