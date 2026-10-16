@@ -40,7 +40,7 @@ const ForgeResourcePrefix = "forge:"
 // preview site (Secret Manager: control-forge-deploy-<slug>).
 func ForgeSecret(slug string) string { return "forge-deploy-" + slug }
 
-func (f Forge) Kinds() []string { return []string{policy.ForgeDeployKind} }
+func (f Forge) Kinds() []string { return policy.Builtin.Of("forge") }
 
 // ForgeSlug reads the project out of a Forge resource.
 func ForgeSlug(resource string) (string, bool) {

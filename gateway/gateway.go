@@ -366,7 +366,7 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 			// Portal's word is held to the set the owner signed on the token, when the grant says so.
 			if g.cfg.Policy.Grant.WorkingSet && !byToken {
 				did, _, _ := strings.Cut(g.cfg.Agent, "#")
-				ws, err := capability.InsideWorkingSet(p, g.cfg.Policy.Grant.PrincipalKeys, did, g.cfg.Clock())
+				ws, err := capability.InsideWorkingSet(p, g.cfg.Policy.Grant.PrincipalKeys, did, g.cfg.Policy.Kinds(), g.cfg.Clock())
 				if err != nil {
 					capReason = err.Error()
 					break

@@ -229,8 +229,13 @@ func (s *service) policy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"error": "this gateway reads no policy log"})
 		return
 	}
+	// The kinds the version defines, as a signer copies them into the next one: none is {}.
+	kinds := s.cfg.head.Kinds
+	if kinds == nil {
+		kinds = policy.Kinds{}
+	}
 	// The forms this gateway reads, so a signer uses the digest form only once it is taken.
-	out := map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "agents": s.cfg.head.Agents, "systems": s.cfg.head.Systems, "formats": policy.Formats, "fields": policy.Fields}
+	out := map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "agents": s.cfg.head.Agents, "systems": s.cfg.head.Systems, "kinds": kinds, "formats": policy.Formats, "fields": policy.Fields}
 	if s.cfg.PolicyLog != nil {
 		out["signers"] = s.cfg.PolicyLog.Signers
 	}

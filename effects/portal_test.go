@@ -163,7 +163,7 @@ func TestAProjectPatchCarriesOnlyProjectFields(t *testing.T) {
 // refused with "no parameter schema is registered for portal.task".
 func TestEveryPortalKindHasASchema(t *testing.T) {
 	for _, k := range (Portal{}).Kinds() {
-		if _, ok := policy.Schemas[k]; !ok {
+		if _, ok := policy.Builtin[k]; !ok {
 			t.Fatalf("%s has no parameter schema", k)
 		}
 	}

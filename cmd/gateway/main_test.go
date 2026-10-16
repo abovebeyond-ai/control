@@ -931,7 +931,7 @@ func TestAPullRequestIsPutOnThePreviewInOneRunOfTwoSteps(t *testing.T) {
 // Portal write does: the system verifies both before it acts (docs/mandates.md).
 func TestASystemActionCarriesItsEvidence(t *testing.T) {
 	a := policy.Action{Kind: "stocklist.photos_repair", Resource: "stocklist:platform", Params: map[string]any{"vehicle": float64(23312)}}
-	got := withEvidence(a, evidence.Token{"iss": "https://gateway.example"}, "cap.tok")
+	got := withEvidence(a, policy.SystemAdapter, evidence.Token{"iss": "https://gateway.example"}, "cap.tok")
 	if got.Params["capability"] != "cap.tok" || got.Params["evidence"] == nil || got.Params["evidence"] == "" {
 		t.Fatalf("a system action must carry its evidence: %+v", got.Params)
 	}
@@ -1003,5 +1003,77 @@ func TestAShareBindsItsDocumentBeforeTheJudgement(t *testing.T) {
 	}
 	if len(writes) != 1 || writes[0] != "/api/ingest/share kyc-landscape.md KYC landscape" {
 		t.Fatalf("one write to the share door with the document: %v", writes)
+	}
+}
+
+// A kind the served version defines needs no release: the gateway serves it in the kind table,
+// judges it by the schema the owner signed, and the system adapter carries it to the running
+// system with its evidence (docs/kinds.md).
+func TestAKindTheVersionDefinesIsServedJudgedAndCarried(t *testing.T) {
+	var acts []map[string]any
+	system := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path != "/control/act" || r.Header.Get("Control-Evidence") == "" || r.Header.Get("Control-Capability") != "" {
+			w.WriteHeader(400)
+			return
+		}
+		acts = append(acts, body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer system.Close()
+
+	dir := t.TempDir()
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	seed, _ := hex.DecodeString(strings.Repeat("36", 32))
+	agent := "did:webvh:QmTest:example.org#agent-workbench-shed"
+	grant := policy.Grant{Principal: "did:webvh:QmTest:example.org", Kinds: []string{"glk.worksheet_note", "pull.open"}, Resources: []string{"glk:transferor"}, MaxPerKind: 3}
+	note := policy.Kind{Adapter: policy.SystemAdapter, On: []string{"glk:transferor"}, Radius: "B2", Why: "one note on a worksheet, deleted there in one step", Place: "Writes to a live system", Words: "add a note to a worksheet",
+		Schema: policy.Schema{Required: map[string]string{"worksheet": "int", "text": "string"}, Optional: map[string]string{}}}
+	head := policy.Head{Version: 2, Hash: "sha-256:" + strings.Repeat("ab", 32), Agents: map[string]policy.HandGrant{agent: {Grant: grant}},
+		Systems: map[string]string{"glk:transferor": system.URL}, Kinds: policy.Kinds{"glk.worksheet_note": note}}
+	cfg := withHead(config{Issuer: "https://gateway.example/control", Store: filepath.Join(dir, "store")}, head)
+	cfg.head = &head
+	s := &service{cfg: cfg, key: ed25519.NewKeyFromSeed(seed), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
+	s.effects.Add(effects.System{Bases: cfg.Systems, Table: cfg.kinds()})
+
+	rec := httptest.NewRecorder()
+	s.agents(rec, httptest.NewRequest("GET", "/v1/agents", nil))
+	var served struct {
+		Kinds map[string]struct {
+			Adapter string `json:"adapter"`
+			Radius  string `json:"radius"`
+			Words   string `json:"words"`
+			Source  string `json:"source"`
+		} `json:"kinds"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &served); err != nil {
+		t.Fatal(err)
+	}
+	if d := served.Kinds["glk.worksheet_note"]; d.Source != "policy" || d.Adapter != "system" || d.Radius != "B2" || d.Words != "add a note to a worksheet" {
+		t.Fatalf("the defined kind as served: %+v", d)
+	}
+	if d := served.Kinds["pull.open"]; d.Source != "release" || d.Adapter != "github" {
+		t.Fatalf("a built-in kind as served: %+v", d)
+	}
+
+	post := func(params map[string]any) (int, map[string]any) {
+		raw, _ := json.Marshal(submitRequest{Agent: agent, Action: policy.Action{Kind: "glk.worksheet_note", Resource: "glk:transferor", Params: params}})
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	if code, out := post(map[string]any{"worksheet": 7, "text": "x", "all": true}); code != 200 || out["verdict"] != "DENY" || len(acts) != 0 {
+		t.Fatalf("outside the defined schema: %d %v %v", code, out, acts)
+	}
+	code, out := post(map[string]any{"worksheet": 7, "text": "Kabel ligt klaar"})
+	if effect, _ := out["effect"].(map[string]any); code != 200 || out["verdict"] != "ALLOW" || effect["ok"] != true {
+		t.Fatalf("within the defined schema: %d %v", code, out)
+	}
+	if len(acts) != 1 || acts[0]["kind"] != "glk.worksheet_note" || acts[0]["params"].(map[string]any)["text"] != "Kabel ligt klaar" {
+		t.Fatalf("one act on the system, its own parameters only: %v", acts)
 	}
 }

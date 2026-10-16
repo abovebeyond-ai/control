@@ -43,7 +43,10 @@ type LogVersion struct {
 	Iat     int64                `json:"iat"`
 	Agents  map[string]HandGrant `json:"agents"`
 	Systems map[string]string    `json:"systems,omitempty"`
-	Change  []string             `json:"change"`
+	// Kinds are the kinds on a running system this version defines beside the built-in ones
+	// (docs/kinds.md): defining or changing one is the owner's, dropping one takes away.
+	Kinds  Kinds    `json:"kinds,omitempty"`
+	Change []string `json:"change"`
 }
 
 // SignedVersion is a version as it travels: the token, the bytes its signature covers (the
@@ -67,10 +70,12 @@ type versionHead struct {
 	BodyHash string `json:"body_hash"`
 }
 
-// versionBody is what the head names: the grants, the systems and the change in words.
+// versionBody is what the head names: the grants, the systems, the kinds defined and the
+// change in words.
 type versionBody struct {
 	Agents  map[string]HandGrant `json:"agents"`
 	Systems map[string]string    `json:"systems,omitempty"`
+	Kinds   Kinds                `json:"kinds,omitempty"`
 	Change  []string             `json:"change"`
 }
 
@@ -80,11 +85,11 @@ type versionBody struct {
 // chain until the owner replaces it.
 var Formats = []string{"digest", "payload"}
 
-// Fields are the optional grant fields this gateway reads that an earlier release did not.
-// A body is decoded strictly, so a version naming a field the gateway does not know is
-// refused and blocks the chain: a signer writes one only once it is served here, on
-// /v1/policy and /v1/agents beside the formats.
-var Fields = []string{"working_set"}
+// Fields are the optional fields of a version this gateway reads that an earlier release did
+// not: working_set on a grant, kinds on the body. A body is decoded strictly, so a version
+// naming a field the gateway does not know is refused and blocks the chain: a signer writes
+// one only once it is served here, on /v1/policy and /v1/agents beside the formats.
+var Fields = []string{"working_set", "kinds"}
 
 // Hash names a signed version: sha-256 over the token as it travels, tagged.
 func (s SignedVersion) Hash() string { return HashOf([]byte(s.Token)) }
@@ -112,6 +117,7 @@ type Head struct {
 	Hash    string
 	Agents  map[string]HandGrant
 	Systems map[string]string
+	Kinds   Kinds
 }
 
 // maxSkew bounds how far a version's iat may lie ahead of the gateway's clock.
@@ -158,7 +164,7 @@ func ParseVersion(token string) (SignedVersion, error) {
 		if h.BodyHash != HashOf(body) {
 			return SignedVersion{}, fmt.Errorf("the head of version %d names a body of %s, and the body is %s", h.Version, h.BodyHash, HashOf(body))
 		}
-		v := LogVersion{Type: h.Type, Iss: h.Iss, Version: h.Version, Prev: h.Prev, Iat: h.Iat, Agents: b.Agents, Systems: b.Systems, Change: b.Change}
+		v := LogVersion{Type: h.Type, Iss: h.Iss, Version: h.Version, Prev: h.Prev, Iat: h.Iat, Agents: b.Agents, Systems: b.Systems, Kinds: b.Kinds, Change: b.Change}
 		return SignedVersion{Token: token, Payload: head, Version: v}, nil
 	}
 	return SignedVersion{}, errors.New("a version is a head, a body and a signature, or a payload and a signature, as base64url parts joined by dots")
@@ -174,7 +180,9 @@ func decodeStrict(raw []byte, into any) error {
 
 // Next judges a version against the head: signed by a key the gateway knows, the very next
 // number, naming the head's hash, not from the future, and, from a key that may only take
-// away, narrower than what is served, or from a repair key, no more than a repair of it. It returns the new head, or the reason it is refused.
+// away, narrower than what is served, or from a repair key, no more than a repair of it; and
+// every kind it defines a kind a policy may define. It returns the new head, or the reason it
+// is refused.
 func Next(head Head, s SignedVersion, signers Signers, now time.Time) (Head, error) {
 	v := s.Version
 	if v.Type != VersionType {
@@ -210,17 +218,32 @@ func Next(head Head, s SignedVersion, signers Signers, now time.Time) (Head, err
 	if len(v.Change) == 0 {
 		return head, errors.New("a version says its change in words")
 	}
+	if err := CheckDefined(v.Kinds); err != nil {
+		return head, fmt.Errorf("version %d: %w", v.Version, err)
+	}
 	if !widen && narrow {
-		if reason := Narrower(head.Agents, head.Systems, v.Agents, v.Systems); reason != "" {
+		reason := definedNarrower(head.Kinds, v.Kinds)
+		if reason == "" {
+			reason = Narrower(head.Agents, head.Systems, v.Agents, v.Systems)
+		}
+		if reason != "" {
 			return head, fmt.Errorf("%s may only take away, and version %d %s", v.Iss, v.Version, reason)
 		}
 	}
 	if !widen && !narrow {
-		if reason := RepairOnly(head.Agents, head.Systems, v.Agents, v.Systems); reason != "" {
+		// A repair grants kinds by the radius the owner gave them and leaves the table as it is.
+		reason := ""
+		if !reflect.DeepEqual(nonNilKinds(head.Kinds), nonNilKinds(v.Kinds)) {
+			reason = "changes the kinds defined, which are the owner's"
+		}
+		if reason == "" {
+			reason = RepairOnly(Builtin.With(head.Kinds), head.Agents, head.Systems, v.Agents, v.Systems)
+		}
+		if reason != "" {
 			return head, fmt.Errorf("%s may only add reversible kinds and resources, and version %d %s", v.Iss, v.Version, reason)
 		}
 	}
-	return Head{Version: v.Version, Hash: s.Hash(), Agents: v.Agents, Systems: v.Systems}, nil
+	return Head{Version: v.Version, Hash: s.Hash(), Agents: v.Agents, Systems: v.Systems, Kinds: v.Kinds}, nil
 }
 
 func verifySignature(keyHex string, s SignedVersion) error {
@@ -337,6 +360,13 @@ func firstOutside(list, of []string) string {
 		}
 	}
 	return ""
+}
+
+func nonNilKinds(k Kinds) Kinds {
+	if k == nil {
+		return Kinds{}
+	}
+	return k
 }
 
 func nonNil(m map[string]string) map[string]string {

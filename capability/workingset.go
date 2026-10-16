@@ -34,12 +34,13 @@ type WorkingSet struct {
 const MaxWorkingSet = 7*24*time.Hour + 5*time.Minute
 
 // layers a set may reach, lowest first; B3 and up stay with the token, per action.
-var layers = []string{"B1", "B2"}
+var layers = policy.Layers
 
 // InsideWorkingSet holds a capability to the working set it carries. keys are the owner's
 // token keys by DID URL (the grant's principal_keys); did is the DID whose hands the set is
-// for. It returns the set, or the first reason the capability falls outside it.
-func InsideWorkingSet(p Payload, keys map[string]string, did string, now time.Time) (WorkingSet, error) {
+// for; kinds is the table the radius of each kind is read from. It returns the set, or the
+// first reason the capability falls outside it.
+func InsideWorkingSet(p Payload, keys map[string]string, did string, kinds policy.Kinds, now time.Time) (WorkingSet, error) {
 	var ws WorkingSet
 	if p.Task.WorkingSet == nil || p.Task.WorkingSet.Token == "" {
 		return ws, errors.New("Portal's word for this hand must carry the working set the owner signed on the token")
@@ -79,10 +80,9 @@ func InsideWorkingSet(p Payload, keys map[string]string, did string, now time.Ti
 		return ws, fmt.Errorf("a working set reaches B1 or B2, not %q", ws.Layer)
 	}
 	for _, k := range p.Kinds {
-		radius, ok := policy.RepairKinds[k]
 		at := -1
 		for i, l := range layers {
-			if ok && strings.HasPrefix(radius, l+":") {
+			if kinds[k].Radius == l {
 				at = i
 			}
 		}

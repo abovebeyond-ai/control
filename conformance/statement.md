@@ -134,7 +134,7 @@ through policy versions the gateway reads and judges (`docs/working-set.md`, *Th
 as built*). Each version names the hash of the one before it, back to the carried
 configuration, and is signed by a key the carried configuration names: the operator's token
 keys for any change, Portal's key (`#portal`, after the operator's passkey) only for a change
-the gateway itself finds a repair (kinds from the B1/B2 list `policy.RepairKinds` and
+the gateway itself finds a repair (kinds with a B1 or B2 radius in the kind table, `docs/kinds.md`, and
 resources added for hands that exist, nothing else), Elixir's key only for a change the
 gateway itself finds narrower (no new hand, kind, resource, task, system or accepted
 judgement, no higher count, no certificate or per-action word dropped). So the grant is raised

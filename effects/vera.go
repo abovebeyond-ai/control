@@ -38,9 +38,7 @@ type Vera struct {
 	Base       string // https://vera.abovebeyond.ai
 }
 
-func (v Vera) Kinds() []string {
-	return []string{"review.publish", "review.invite", "review.sign"}
-}
+func (v Vera) Kinds() []string { return policy.Builtin.Of("vera") }
 
 var reviewID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 

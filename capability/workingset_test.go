@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/abovebeyond-ai/control/policy"
 )
 
 func signSet(t *testing.T, claims map[string]any, key ed25519.PrivateKey) string {
@@ -44,7 +46,7 @@ func TestAWordIsHeldToTheWorkingSetItCarries(t *testing.T) {
 		return p
 	}
 
-	ws, err := InsideWorkingSet(word(signSet(t, set(nil), op), nil), keys, "did:example:ab", now)
+	ws, err := InsideWorkingSet(word(signSet(t, set(nil), op), nil), keys, "did:example:ab", policy.Builtin, now)
 	if err != nil || ws.ID != "ws-1" || ws.Issuer != "did:example:ab#operator" {
 		t.Fatalf("inside: %v %+v", err, ws)
 	}
@@ -66,7 +68,7 @@ func TestAWordIsHeldToTheWorkingSetItCarries(t *testing.T) {
 		"a B3 set":              {word(signSet(t, set(func(c map[string]any) { c["layer"] = "B3" }), op), nil), "B1 or B2"},
 		"a kind with no radius": {word(signSet(t, set(nil), op), func(p *Payload) { p.Kinds = append(p.Kinds, "review.invite") }), "review.invite is above"},
 	} {
-		if _, err := InsideWorkingSet(c.p, keys, "did:example:ab", now); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := InsideWorkingSet(c.p, keys, "did:example:ab", policy.Builtin, now); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Fatalf("%s: %v, want %q", name, err, c.want)
 		}
 	}
