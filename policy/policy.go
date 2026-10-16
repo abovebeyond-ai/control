@@ -222,7 +222,12 @@ func (p PathSummary) Digest() string {
 type Policy struct {
 	Grant     Grant
 	PathAware bool
+	// Defined are the kinds the served policy version defines beside the built-in ones.
+	Defined Kinds
 }
+
+// Kinds is the table this policy judges by: the built-in kinds and those the policy defines.
+func (p Policy) Kinds() Kinds { return Builtin.With(p.Defined) }
 
 // BundleHash names the policy: grant, rule and version.
 func (p Policy) BundleHash() string {
@@ -249,7 +254,7 @@ func (p Policy) Bundle() map[string]any {
 	doc := map[string]any{
 		"principal": p.Grant.Principal, "kinds": kinds, "resources": resources,
 		"max_per_kind": p.Grant.MaxPerKind, "premises_for": premises, "judgements": append([]string{}, p.Grant.Judgements...),
-		"path_aware": p.PathAware, "version": Version, "schemas": schemaDocument(),
+		"path_aware": p.PathAware, "version": Version, "schemas": p.Kinds().schemaDocument(),
 		"submitter_key": p.Grant.SubmitterKey, "principal_key": p.Grant.PrincipalKey,
 		"expiry": "none: a standing grant, replaced by a new bundle when it changes",
 	}
@@ -296,11 +301,14 @@ func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 	if !contains(p.Grant.Kinds, a.Kind) {
 		return "DENY", "kind not in grant"
 	}
-	if err := Validate(a); err != nil {
+	if err := p.Kinds().Validate(a); err != nil {
 		return "DENY", "out of schema: " + err.Error()
 	}
 	if !ResourceCovered(p.Grant.Resources, a.Resource) {
 		return "DENY", "resource not in grant"
+	}
+	if reason := p.Kinds().Acts(a.Kind, a.Resource); reason != "" {
+		return "DENY", reason
 	}
 	if p.PathAware && p.Grant.MaxPerKind > 0 && phi.PerKind[a.Kind]+1 > p.Grant.MaxPerKind {
 		return "DENY", "a second " + a.Kind + " in one run: the first already ran"

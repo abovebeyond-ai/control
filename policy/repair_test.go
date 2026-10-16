@@ -84,7 +84,7 @@ func TestANewResourceDoesNotReachAKindThatIsNotReversible(t *testing.T) {
 	g.Kinds = append(append([]string{}, g.Kinds...), "review.invite")
 	head.Agents = map[string]HandGrant{shed: {Grant: g}}
 	next := changed(head, func(g *Grant) { g.Resources = append(g.Resources, "vera/other/*") })
-	if reason := RepairOnly(head.Agents, head.Systems, next, head.Systems); !strings.Contains(reason, "holds review.invite") {
+	if reason := RepairOnly(Builtin, head.Agents, head.Systems, next, head.Systems); !strings.Contains(reason, "holds review.invite") {
 		t.Fatalf("a resource added beside review.invite: %q", reason)
 	}
 }
@@ -98,26 +98,26 @@ func TestARepairAddsAListedKindToATaskButNoTask(t *testing.T) {
 	add := changed(head, func(g *Grant) {
 		g.Tasks = map[string]TaskGrant{"maintenance": {Kinds: []string{"branch.push", "issue.open"}}}
 	})
-	if reason := RepairOnly(head.Agents, head.Systems, add, head.Systems); reason != "" {
+	if reason := RepairOnly(Builtin, head.Agents, head.Systems, add, head.Systems); reason != "" {
 		t.Fatalf("a listed kind added to a task: %s", reason)
 	}
 	task := changed(head, func(g *Grant) {
 		g.Tasks = map[string]TaskGrant{"maintenance": {Kinds: []string{"branch.push"}}, "headers": {Kinds: []string{"issue.open"}}}
 	})
-	if reason := RepairOnly(head.Agents, head.Systems, task, head.Systems); !strings.Contains(reason, "adds the task headers") {
+	if reason := RepairOnly(Builtin, head.Agents, head.Systems, task, head.Systems); !strings.Contains(reason, "adds the task headers") {
 		t.Fatalf("a task added: %q", reason)
 	}
 }
 
 func TestNoKindThatReachesAPersonIsARepairKind(t *testing.T) {
 	for _, k := range []string{"review.invite", "review.sign", "review.publish", "pull.merge", "pull.ready", "branch.delete", "workflow.dispatch", "stocklist.resend", "stocklist.transport_price"} {
-		if IsRepairKind(k) {
+		if Builtin.IsRepair(k) {
 			t.Errorf("%s is on the repair list", k)
 		}
 	}
-	for k, radius := range RepairKinds {
-		if !strings.HasPrefix(radius, "B1: ") && !strings.HasPrefix(radius, "B2: ") {
-			t.Errorf("%s names no radius of B1 or B2: %q", k, radius)
+	for k, d := range Builtin {
+		if d.Radius != "" && (!containsString(Layers, d.Radius) || d.Why == "") {
+			t.Errorf("%s names no radius of B1 or B2 with what bounds it: %q %q", k, d.Radius, d.Why)
 		}
 	}
 }

@@ -106,6 +106,17 @@ type config struct {
 	head    *policy.Head
 }
 
+// defined are the kinds the served version defines (docs/kinds.md); none without a policy log.
+func (c config) defined() policy.Kinds {
+	if c.head == nil {
+		return nil
+	}
+	return c.head.Kinds
+}
+
+// kinds is the table the gateway judges and performs by: the built-in kinds and the defined.
+func (c config) kinds() policy.Kinds { return policy.Builtin.With(c.defined()) }
+
 type service struct {
 	cfg      config
 	key      ed25519.PrivateKey
@@ -176,7 +187,7 @@ func main() {
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.Forge{SecretsDir: cfg.Secrets})
-	s.effects.Add(effects.System{Bases: cfg.Systems})
+	s.effects.Add(effects.System{Bases: cfg.Systems, Table: cfg.kinds()})
 	s.attested, err = attestation(cfg, key)
 	fail(err)
 	// Every agent's chain is opened now, not at its first request: an action the last
@@ -402,7 +413,7 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 	if s.cfg.head != nil {
 		served = policyClaim(*s.cfg.head)
 	}
-	gcfg := gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served}
+	gcfg := gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true, Defined: s.cfg.defined()}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served}
 	if s.revoked != nil {
 		gcfg.Revoked = s.revoked.Revoked
 	}
@@ -475,17 +486,14 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	if req.Principal == "" {
 		req.Principal = s.cfg.Agents[req.Agent].Grant.Principal
 	}
-	// An expense may carry its invoice (since v0.18.0); it is bound the same way when it does,
-	// and an expense without a file passes without one.
-	expenseWithFile := req.Action.Kind == "portal.expense" && (len(req.Files) > 0 || req.Action.Params["files_sha256"] != nil)
-	// A share always carries its document (v0.39.0): the first share from the workbench on
-	// 13 October 2026 was judged and allowed, and the adapter found no file, because this
-	// list did not name the kind.
-	if req.Action.Kind == "branch.push" || req.Action.Kind == "review.publish" || req.Action.Kind == "portal.share" || expenseWithFile {
-		// A push binds its files, a publication its page, a share its document, to the
-		// judged parameters by digest before any judgement: what does not match is refused
-		// unrecorded.
-		param := map[string]string{"branch.push": "files_sha256", "review.publish": "page_sha256", "portal.expense": "files_sha256", "portal.share": "files_sha256"}[req.Action.Kind]
+	// A push binds its files, a publication its page, a share its document, an expense its
+	// invoice, to the judged parameters by digest before any judgement: what does not match is
+	// refused unrecorded. The kind table names the parameter (Kind.Files), so a kind that takes
+	// files cannot be added without saying so: the first share on 13 October 2026 was judged
+	// and allowed, and the adapter found no file, because a list here did not name the kind.
+	kind := s.cfg.kinds()[req.Action.Kind]
+	_, mustBind := kind.Required[kind.Files]
+	if param := kind.Files; param != "" && (mustBind || len(req.Files) > 0 || req.Action.Params[param] != nil) {
 		want, _ := req.Action.Params[param].(string)
 		got, _ := effects.FilesDigest(req.Files)
 		if len(req.Files) == 0 || want == "" || got != want {
@@ -561,7 +569,7 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 			// carries them in its footer, so a runner or a merge check can refuse
 			// what nobody judged. The hand's parameters stay as recorded; this is
 			// the gateway's own addition, and the outcome names it.
-			o := adapter.Perform(ctx, withEvidence(req.Action, v.Token, req.Capability))
+			o := adapter.Perform(ctx, withEvidence(req.Action, s.cfg.kinds()[req.Action.Kind].Adapter, v.Token, req.Capability))
 			cancel()
 			outcome = o
 			if o.OK {
@@ -616,7 +624,7 @@ func (s *service) accessed(what string, next http.HandlerFunc) http.HandlerFunc 
 // withEvidence adds the signed request record and the capability to the effect
 // the far end receives: as workflow inputs for a dispatch, as a footer for a pull
 // request. Other kinds carry nothing extra.
-func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Action {
+func withEvidence(a policy.Action, adapter string, tok evidence.Token, capTok string) policy.Action {
 	params := map[string]any{}
 	for k, v := range a.Params {
 		params[k] = v
@@ -646,7 +654,7 @@ func withEvidence(a policy.Action, tok evidence.Token, capTok string) policy.Act
 		body, _ := params["body"].(string)
 		params["body"] = body + relying.Footer(relying.EncodeToken(tok), capTok)
 	}
-	if strings.HasPrefix(a.Kind, "portal.") || effects.IsSystemKind(a.Kind) {
+	if adapter == "portal" || adapter == policy.SystemAdapter {
 		// Portal and a running system take the record and the capability as headers on the
 		// write (Control-Evidence, Control-Capability); the adapter reads them from here.
 		params["evidence"] = relying.EncodeToken(tok)
@@ -725,12 +733,33 @@ func (s *service) agents(w http.ResponseWriter, r *http.Request) {
 			"resources": digestOf(s.cfg.Agents[id].Grant.Resources),
 		}
 	}
-	out := map[string]any{"agents": ids, "grants": grants, "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()}
+	// And the kind table (docs/kinds.md): every kind this gateway performs, its schema, adapter,
+	// radius and words, the built-in and the defined, so Portal, Elixir and the hand read one
+	// table instead of keeping their own.
+	out := map[string]any{"agents": ids, "grants": grants, "kinds": s.kindTable(), "platform": s.platform(), "dry": s.cfg.Dry, "failures": s.store.Failures()}
 	// The version served, so Elixir drafts the next one on it and a reader sees which it is.
 	if s.cfg.head != nil {
 		out["policy"] = map[string]any{"version": s.cfg.head.Version, "hash": s.cfg.head.Hash, "formats": policy.Formats, "fields": policy.Fields}
 	}
 	writeJSON(w, 200, out)
+}
+
+// kindTable is the kind table as served: each kind with where its definition comes from, the
+// release or the policy version.
+func (s *service) kindTable() map[string]any {
+	defined := s.cfg.defined()
+	out := map[string]any{}
+	for k, v := range s.cfg.kinds() {
+		source := "release"
+		if _, ok := defined[k]; ok {
+			source = "policy"
+		}
+		out[k] = struct {
+			policy.Kind
+			Source string `json:"source"`
+		}{v, source}
+	}
+	return out
 }
 
 // digestOf names a set without spelling it out: sorted, newline-joined, sha-256. Anyone

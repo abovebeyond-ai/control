@@ -177,7 +177,7 @@ role sits beside `widen` and `narrow` in `policy_log.signers`: `repair`, Portal'
 (`did:…#portal`, the Google KMS key that already signs capabilities). The gateway accepts a
 version from a repair key only when, against the version served, it adds nothing but
 
-- kinds from `policy.RepairKinds` (`policy/repair.go`), each with its radius named: the
+- kinds with a radius in the kind table (`policy.Kind.Radius`, `docs/kinds.md`): the
   workbench's proposal kinds (`branch.push`, `pull.open`, `issue.open`, `preview.push`,
   `forge.deploy`), the `portal.*` writes, and the B2 system kinds (`stocklist.photos_repair`,
   `studio.research_draft`, `observatory.trend_edit`, `observatory.trend_site`), to a hand or to
@@ -231,7 +231,7 @@ key (Portal's, after a passkey touch) to the working set it carries whole, under
 2. its `type` is `working-set` and its `sub` is the hands' DID;
 3. it ends no earlier than the capability and stands a week at most;
 4. the capability's `task.project` is among its `projects`;
-5. every kind the capability names has a radius in `policy.RepairKinds` at or below the set's
+5. every kind the capability names has a radius in the kind table at or below the set's
    `layer`. A kind without a radius there is never admitted by passkey.
 
 A capability signed by one of the `principal_keys` is the token itself and is not held to a
@@ -255,7 +255,7 @@ under it to now, and the revoked list carries their `jti`s to the gateway within
 **What stays out.**
 
 - *A passkey-signed policy version.* The set names projects and a policy names repositories;
-  the gateway holds no map from one to the other, and `RepairKinds` already caps such a version
+  the gateway holds no map from one to the other, and the kind table's radii already cap such a version
   at B2. The set stays Portal's own check there, as *A widening by passkey* says.
 - *The systems' reads.* A B1 word goes to Stocklist, the Observatory or GLK, not to the
   gateway. Each system would apply the same checks in its own mandate code.

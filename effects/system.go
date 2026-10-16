@@ -13,34 +13,20 @@ import (
 	"github.com/abovebeyond-ai/control/policy"
 )
 
-// SystemKinds are the actions on a running system (docs/mandates.md): one kind per action,
-// never a generic command, each with its own schema and its own blast radius. The first is
-// Stocklist's photo repair (B2: it writes derived sizes a later run can write again). The second
-// is a research draft on the Gentells pipeline (B2: one brief for the desk, ready for review,
-// which any editor edits, approves or dismisses; nothing is published).
-var SystemKinds = []string{"stocklist.photos_repair", "studio.research_draft", "observatory.trend_edit", "observatory.trend_site"}
-
 // System carries an action to the control endpoint of a running system, the evidence
 // attached. It holds no credential: the system verifies the owner's capability and this
 // gateway's signed request record itself (relying's checks), and refuses what nobody judged
 // or what the owner did not mandate. Bases maps a resource ("stocklist:platform") to the
-// system's base URL; an address is configuration, not a secret.
+// system's base URL; an address is configuration, not a secret. Table is the kind table the
+// gateway serves: the system adapter performs every kind in it on a running system, one kind
+// per action (docs/mandates.md), the built-in ones and those the policy defines.
 type System struct {
 	Bases  map[string]string
+	Table  policy.Kinds
 	Client *http.Client
 }
 
-func (System) Kinds() []string { return SystemKinds }
-
-// IsSystemKind says whether the gateway attaches the evidence for a system to this kind.
-func IsSystemKind(kind string) bool {
-	for _, k := range SystemKinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
-}
+func (s System) Kinds() []string { return s.Table.Of(policy.SystemAdapter) }
 
 func (s System) Perform(ctx context.Context, a policy.Action) Outcome {
 	base := strings.TrimRight(s.Bases[a.Resource], "/")

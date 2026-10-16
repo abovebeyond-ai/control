@@ -52,9 +52,7 @@ type GitHub struct {
 	Reviewer string
 }
 
-func (g GitHub) Kinds() []string {
-	return []string{"workflow.dispatch", "branch.push", "branch.delete", "pull.open", "pull.ready", "issue.open", policy.PreviewPushKind}
-}
+func (g GitHub) Kinds() []string { return policy.Builtin.Of("github") }
 
 // FileChange is one file of a branch.push: the path and the full new content. The runner
 // in the project's CI computes the change and hands it back instead of pushing; the

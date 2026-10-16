@@ -69,8 +69,8 @@ func TestASystemRefusalAndAnUnknownSystem(t *testing.T) {
 // Every system kind has a schema, or the gateway refuses it before the grant is read; and the
 // photo repair takes one car and nothing else.
 func TestEverySystemKindHasASchema(t *testing.T) {
-	for _, k := range (System{}).Kinds() {
-		if _, ok := policy.Schemas[k]; !ok {
+	for _, k := range (System{Table: policy.Builtin}).Kinds() {
+		if _, ok := policy.Builtin[k]; !ok {
 			t.Fatalf("%s has no parameter schema", k)
 		}
 	}
@@ -103,16 +103,5 @@ func TestEverySystemKindHasASchema(t *testing.T) {
 	}
 	if err := policy.Validate(policy.Action{Kind: "observatory.trend_site", Resource: "observatory:pipeline", Params: map[string]any{"trend": "insight-1"}}); err == nil {
 		t.Fatal("a site decision without an action must be refused")
-	}
-}
-
-// Every action on a running system is named on the repair list or deliberately left off it,
-// so a new system kind cannot slip under the passkey by default, nor be forgotten there.
-func TestEverySystemKindIsDecidedForTheRepairList(t *testing.T) {
-	notRepair := map[string]bool{}
-	for _, k := range SystemKinds {
-		if !policy.IsRepairKind(k) && !notRepair[k] {
-			t.Errorf("%s is neither on policy.RepairKinds nor deliberately left off", k)
-		}
 	}
 }

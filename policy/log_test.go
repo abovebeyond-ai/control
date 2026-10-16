@@ -50,7 +50,7 @@ func sign(t *testing.T, key ed25519.PrivateKey, v LogVersion) SignedVersion {
 // signDigest makes the same version in the digest form: the head signed, the body named by hash.
 func signDigest(t *testing.T, key ed25519.PrivateKey, v LogVersion) SignedVersion {
 	t.Helper()
-	body, _ := json.Marshal(versionBody{Agents: v.Agents, Systems: v.Systems, Change: v.Change})
+	body, _ := json.Marshal(versionBody{Agents: v.Agents, Systems: v.Systems, Kinds: v.Kinds, Change: v.Change})
 	head, _ := json.Marshal(versionHead{Type: v.Type, Iss: v.Iss, Version: v.Version, Prev: v.Prev, Iat: v.Iat, BodyHash: HashOf(body)})
 	b64 := base64.RawURLEncoding.EncodeToString
 	s, err := ParseVersion(b64(head) + "." + b64(body) + "." + b64(ed25519.Sign(key, head)))
@@ -231,7 +231,7 @@ func TestHoldingPortalsWordToTheSetIsNarrowerAndDroppingItIsNot(t *testing.T) {
 	if reason := Narrower(held, nil, cur, nil); !strings.Contains(reason, "drops the working set") {
 		t.Fatalf("dropping the set widens, got %q", reason)
 	}
-	if reason := RepairOnly(held, nil, cur, nil); reason == "" {
+	if reason := RepairOnly(Builtin, held, nil, cur, nil); reason == "" {
 		t.Fatal("a repair may not drop the set")
 	}
 }

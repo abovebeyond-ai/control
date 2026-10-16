@@ -138,6 +138,16 @@
       "status": "live",
       "since": "v0.42.0",
       "open": "Held for the workbench at home (policy v1, signed by Elixir as a narrowing); the laptop's hand is not in the served policy. A passkey-signed policy version is held to the repair rule, not to the set, and B1 reads on the systems are not held to a set."
+    },
+    {
+      "id": "kinds-defined-by-owner",
+      "says": "Every kind the gateway performs is described in one table it judges by, and a kind on a running system is defined only by a policy version the operator signed on the token.",
+      "how": "Kinds performed by code are described beside that code; a kind on a running system may be defined in the signed policy version. Defining or changing a definition is a widening, dropping one a narrowing, a repair leaves the table as it is and grants by the radius the operator signed. The table is served on /v1/agents.",
+      "evidence": ["policy/kinds.go", "policy/log.go", "cmd/gateway/main.go", "docs/kinds.md"],
+      "trust": ["mathematics", "operator-token", "intel", "google-cloud"],
+      "status": "built",
+      "since": "v0.43.0",
+      "open": "Portal, Elixir and the hand keep lists of their own until they read the served table. The four system kinds from before the table are still built in."
     }
   ]
 }

@@ -36,12 +36,10 @@ type Portal struct {
 // PortalResourcePrefix is what a Portal resource starts with.
 const PortalResourcePrefix = "portal:"
 
-func (p Portal) Kinds() []string {
-	return []string{"portal.update", "portal.time_entry", "portal.expense", "portal.project.patch", "portal.task", "portal.measure", "portal.playbook", "portal.share"}
-}
+func (p Portal) Kinds() []string { return policy.Builtin.Of("portal") }
 
 // projectFields are the fields a project patch may carry, flat in the parameters as the
-// schema names them (policy.Schemas): the same list lib/portal.mjs on the operator's
+// schema names them (policy.Builtin): the same list lib/portal.mjs on the operator's
 // machine refuses everything outside of. clearNextAction stands for the null Portal takes
 // to empty the next action, since a schema cannot type a null.
 var projectFields = []string{"status", "nextAction", "milestones", "summary", "stack", "links", "replaceLinks", "elixir", "productionTheirs"}
