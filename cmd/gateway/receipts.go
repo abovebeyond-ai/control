@@ -80,7 +80,10 @@ func (s *service) outboxDir() string { return filepath.Join(s.store.Dir, "outbox
 // receipt writes the job for an action that has all its records: verdicts holds the request,
 // effect and result, in that order. It returns nothing: a job that cannot be written is logged,
 // and the action stands as recorded.
-func (s *service) receipt(g *gateway.Gateway, req submitRequest, verdicts []gateway.Verdict, outcome any) {
+//
+// answer is what the result record's control_outcome digests (kept beside it as its outcome), so
+// a reader holding the receipt checks it against the record and finds the order name there.
+func (s *service) receipt(g *gateway.Gateway, req submitRequest, verdicts []gateway.Verdict, outcome, answer any) {
 	grant := s.cfg.Agents[req.Agent].Grant
 	if grant.Org == "" || len(verdicts) == 0 {
 		return
@@ -132,7 +135,7 @@ func (s *service) receipt(g *gateway.Gateway, req submitRequest, verdicts []gate
 		// The proof of each record into the checkpoint that closes the action; the anchor
 		// answers which minute anchored that checkpoint (GET /anchor/proof?root=).
 		"inclusion": map[string]any{"tree_size": size, "steps": steps, "leaves": leaves, "checkpoint": cp},
-		"outcome":   outcome,
+		"outcome":   answer,
 	}
 	if base["params"] == nil {
 		base["params"] = map[string]any{}

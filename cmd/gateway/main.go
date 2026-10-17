@@ -709,7 +709,7 @@ func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequ
 		return 503, map[string]any{"verdict": rr.Verdict, "reason": "the result record could not be written: " + rr.Reason, "action": v.ActionID}
 	}
 	out["steps"] = []int{v.Step, e.Step, rr.Step}
-	s.receipt(g, req, []gateway.Verdict{v, e, rr}, outcome)
+	s.receipt(g, req, []gateway.Verdict{v, e, rr}, outcome, answer)
 	return 200, out
 }
 
