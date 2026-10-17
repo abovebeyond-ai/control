@@ -117,18 +117,18 @@ func (l *revokedList) pull(client *http.Client, url, token string) error {
 
 // follow reads the list once before the gateway serves, then every interval, for as long as
 // the gateway runs.
-func (l *revokedList) follow(cfg revokedConfig, token string) {
+func (l *revokedList) follow(cfg revokedConfig, token func() string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	every := time.Duration(cfg.Every) * time.Second
 	if every <= 0 {
 		every = 30 * time.Second
 	}
-	if err := l.pull(client, cfg.URL, token); err != nil {
+	if err := l.pull(client, cfg.URL, token()); err != nil {
 		fmt.Fprintf(os.Stderr, "revocations: %v\n", err)
 	}
 	go func() {
 		for range time.Tick(every) {
-			if err := l.pull(client, cfg.URL, token); err != nil {
+			if err := l.pull(client, cfg.URL, token()); err != nil {
 				fmt.Fprintf(os.Stderr, "revocations: %v\n", err)
 			}
 		}

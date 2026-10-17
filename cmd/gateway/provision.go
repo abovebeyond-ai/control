@@ -40,8 +40,17 @@ const (
 	provisionPurpose = "bextrust provision key v1"
 )
 
-// Only Odoo API keys are provisioned: odoo-key-<instance> or odoo-key-<instance>-<agent>.
+// An organisation provisions Odoo API keys: odoo-key-<instance> or odoo-key-<instance>-<agent>.
 var provisionName = regexp.MustCompile(`^odoo-key-[a-z0-9][a-z0-9-]{0,62}$`)
+
+// relayTokenFile is the relay's door token, provisioned by the relay's operator.
+const relayTokenFile = "relay-token"
+
+// provisionerConfig is a party other than an organisation that may provision named files.
+type provisionerConfig struct {
+	Key   string   `json:"key"`
+	Files []string `json:"files"`
+}
 
 // provisioner holds the provisioning key and what was provisioned, in memory only.
 type provisioner struct {
@@ -114,28 +123,43 @@ func provisionSigned(e provisionEnvelope) ([]byte, error) {
 	return canonical.Encode(map[string]any{"purpose": provisionInfo, "org": e.Org, "kid": e.Kid, "enc": e.Enc, "ct": e.CT})
 }
 
-// signedBy checks the envelope's signature under the org's pinned root key.
-func (e provisionEnvelope) signedBy(roots map[string]ed25519.PublicKey) error {
+// signedBy checks the envelope's signature under the org's pinned root key, or the named
+// provisioner's key, and says which files that signer may provision.
+func (e provisionEnvelope) signedBy(roots map[string]ed25519.PublicKey, others map[string]provisionerConfig) (func(string) bool, error) {
 	root, ok := roots[e.Org]
+	allowed := func(n string) bool { return provisionName.MatchString(n) }
 	if !ok {
-		return fmt.Errorf("no root key is pinned for %q", e.Org)
+		p, isProv := others[e.Org]
+		raw, err := hex.DecodeString(p.Key)
+		if !isProv || err != nil || len(raw) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("no root key is pinned for %q and no provisioner has that name", e.Org)
+		}
+		root = ed25519.PublicKey(raw)
+		allowed = func(n string) bool {
+			for _, f := range p.Files {
+				if f == n {
+					return true
+				}
+			}
+			return false
+		}
 	}
 	sig, err := hex.DecodeString(e.Sig)
 	if err != nil {
-		return errors.New("sig is not hex")
+		return nil, errors.New("sig is not hex")
 	}
 	in, err := provisionSigned(e)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !ed25519.Verify(root, in, sig) {
-		return fmt.Errorf("the envelope is not signed by %s's root key", e.Org)
+		return nil, fmt.Errorf("the envelope is not signed by %s's key", e.Org)
 	}
-	return nil
+	return allowed, nil
 }
 
 // openProvision opens one envelope with the provisioning key and reads its files.
-func (p *provisioner) open(e provisionEnvelope) (map[string][]byte, error) {
+func (p *provisioner) open(e provisionEnvelope, allowed func(string) bool) (map[string][]byte, error) {
 	if e.Kid != p.pub.Kid {
 		return nil, fmt.Errorf("sealed to key %q, this gateway's provisioning key is %q (restarted since?)", e.Kid, p.pub.Kid)
 	}
@@ -166,8 +190,8 @@ func (p *provisioner) open(e provisionEnvelope) (map[string][]byte, error) {
 	}
 	out := map[string][]byte{}
 	for name, v := range body.Files {
-		if !provisionName.MatchString(name) {
-			return nil, fmt.Errorf("%q is not a file this gateway takes (odoo-key-<instance>[-<agent>])", name)
+		if !allowed(name) {
+			return nil, fmt.Errorf("%q is not a file %s may provision", name, e.Org)
 		}
 		v = strings.TrimSpace(v)
 		if v == "" {
@@ -187,14 +211,15 @@ func (s *service) provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roots, err := s.cfg.orgKeys()
+	var allowed func(string) bool
 	if err == nil {
-		err = e.signedBy(roots)
+		allowed, err = e.signedBy(roots, s.cfg.Provisioners)
 	}
 	if err != nil {
 		writeJSON(w, 403, map[string]any{"error": err.Error()})
 		return
 	}
-	files, err := s.prov.open(e)
+	files, err := s.prov.open(e, allowed)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return

@@ -10,9 +10,10 @@ package main
 //     the record key as its nonce, and the gateway takes a new one every day;
 //   - the Odoo keys come from the organisation, sealed to a key the record key signs
 //     (provision.go), and stay in memory;
-//   - the client token and the relay token come from the environment (CLIENT_TOKEN,
-//     RELAY_TOKEN), which the image's launch policy lets the operator set, since the baked
-//     configuration is public with the image.
+//   - the launcher writes the container's environment into the attestation token, which is
+//     public, so no secret goes there: the client token comes as its SHA-256
+//     (CLIENT_TOKEN_SHA256, which the launch policy lets the operator set), and the relay token
+//     is provisioned like the Odoo keys, by the relay's operator (provisioners, "relay-token").
 
 import (
 	"context"
@@ -41,6 +42,9 @@ func envOverrides(cfg *config) {
 	if v := os.Getenv("CLIENT_TOKEN"); v != "" {
 		cfg.ClientToken = v
 	}
+	if v := os.Getenv("CLIENT_TOKEN_SHA256"); v != "" {
+		cfg.ClientTokenSHA256 = v
+	}
 	if v := os.Getenv("RELAY_TOKEN"); v != "" {
 		cfg.RelayToken = v
 	}
@@ -49,10 +53,23 @@ func envOverrides(cfg *config) {
 // relayDo sends a call to the relay with the relay token, when there is one: the relay's gate
 // door is on the internet once the gate runs away from the box.
 func (s *service) relayDo(req *http.Request) (*http.Response, error) {
-	if s.cfg.RelayToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.RelayToken)
+	if t := s.relayToken(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
 	}
 	return http.DefaultClient.Do(req)
+}
+
+// relayToken is the configured one, else the one the relay's operator provisioned.
+func (s *service) relayToken() string {
+	if s.cfg.RelayToken != "" {
+		return s.cfg.RelayToken
+	}
+	if s.prov != nil {
+		if v, ok := s.prov.key(relayTokenFile); ok {
+			return string(v)
+		}
+	}
+	return ""
 }
 
 // memoryKey is a record key made now and held only in memory.
@@ -130,4 +147,7 @@ func (s *service) setAttestation(r *attest.Record) error {
 }
 
 // errNoClientToken: a gateway reached over a tunnel must not take submissions from anyone.
-var errNoClientToken = errors.New("confidential-space: no client token (CLIENT_TOKEN): refusing to take submissions from anyone who reaches the port")
+var errNoClientToken = errors.New("confidential-space: no client token (CLIENT_TOKEN_SHA256): refusing to take submissions from anyone who reaches the port")
+
+// errClientTokenInEnv: the launcher would publish it in the attestation token.
+var errClientTokenInEnv = errors.New("confidential-space: a client token in the clear would be published in the attestation token; give its SHA-256 (CLIENT_TOKEN_SHA256)")

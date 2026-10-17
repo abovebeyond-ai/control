@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -35,6 +36,10 @@ const csImage = "sha256:abababababababababababababababababababababababababababab
 // sealProvision is acme-admin's side: seal the files to the gateway's provisioning key, after
 // checking the record key signed it, and sign the envelope with the org's root.
 func sealProvision(t *testing.T, keyAnswer map[string]any, recordKey ed25519.PublicKey, root ed25519.PrivateKey, files map[string]string) provisionEnvelope {
+	return sealProvisionAs(t, "acme", keyAnswer, recordKey, root, files)
+}
+
+func sealProvisionAs(t *testing.T, org string, keyAnswer map[string]any, recordKey ed25519.PublicKey, root ed25519.PrivateKey, files map[string]string) provisionEnvelope {
 	t.Helper()
 	raw, _ := json.Marshal(keyAnswer["key"])
 	var k registry.EncKey
@@ -53,7 +58,7 @@ func sealProvision(t *testing.T, keyAnswer map[string]any, recordKey ed25519.Pub
 		t.Fatal(err)
 	}
 	b64 := base64.RawURLEncoding.EncodeToString
-	e := provisionEnvelope{Org: "acme", Kid: k.Kid, Enc: b64(enc), CT: b64(ct)}
+	e := provisionEnvelope{Org: org, Kid: k.Kid, Enc: b64(enc), CT: b64(ct)}
 	signed, _ := provisionSigned(e)
 	e.Sig = hex.EncodeToString(ed25519.Sign(root, signed))
 	return e
@@ -97,12 +102,14 @@ func TestAGatewayInConfidentialSpaceIsProvisionedByTheOrgAndSaysSoInItsRecords(t
 		Role: "buyer", Kinds: kinds, CeilingEUR: 5000, IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, tom)
 
 	key, _ := memoryKey()
+	bextrust := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0xbe}, 32))
 	dir := t.TempDir()
 	agent := "did:web:bextrust.abovebeyond.ai:acme#procurement-agent"
 	issuer := "http://acme-gate:8080"
 	cfg := config{Issuer: issuer, Store: csStore(filepath.Join(dir, "store"), key.Public().(ed25519.PublicKey)), Secrets: filepath.Join(dir, "none"), RelayURL: relay.URL,
-		RelayToken: "relay-door", Attestation: attestationCS, ClientToken: "c",
-		Orgs: map[string]string{"acme": hex.EncodeToString(root.Public().(ed25519.PublicKey))}, Passkey: odooParty,
+		Attestation: attestationCS, ClientTokenSHA256: "f4e4ac0e3c8d6e3bb3aa6dbbe7b9cdd4ec7c1bd9a2e5b34b2a7ae59ad9e7e0ab",
+		Provisioners: map[string]provisionerConfig{"bextrust": {Key: hex.EncodeToString(bextrust.Public().(ed25519.PublicKey)), Files: []string{"relay-token"}}},
+		Orgs:         map[string]string{"acme": hex.EncodeToString(root.Public().(ed25519.PublicKey))}, Passkey: odooParty,
 		Agents: map[string]struct {
 			Grant policy.Grant `json:"grant"`
 		}{agent: {Grant: policy.Grant{Principal: "acme", Kinds: kinds, Resources: []string{"odoo:acme/*"}, Org: "acme", Asks: "acme#elise"}}}}
@@ -169,10 +176,21 @@ func TestAGatewayInConfidentialSpaceIsProvisionedByTheOrgAndSaysSoInItsRecords(t
 	if code != 200 || len(out["provisioned"].([]any)) != 2 {
 		t.Fatalf("provision: %d %v", code, out)
 	}
+	// The relay's operator provisions its door token, and only that: not an Odoo key, and Acme
+	// not the relay token.
+	if code, _ := call(s.provision, "/v1/provision", sealProvisionAs(t, "bextrust", keyAnswer, recordKey, bextrust, map[string]string{"odoo-key-acme": "x"})); code != 400 {
+		t.Fatalf("bextrust provisioning an Odoo key: %d", code)
+	}
+	if code, _ := call(s.provision, "/v1/provision", sealProvision(t, keyAnswer, recordKey, root, map[string]string{"relay-token": "x"})); code != 400 {
+		t.Fatalf("acme provisioning the relay token: %d", code)
+	}
+	if code, out := call(s.provision, "/v1/provision", sealProvisionAs(t, "bextrust", keyAnswer, recordKey, bextrust, map[string]string{"relay-token": "relay-door"})); code != 200 {
+		t.Fatalf("bextrust provisioning the relay token: %d %v", code, out)
+	}
 	g, _ := s.gateway(agent)
 	recs, _ := s.store.Records(agent)
-	if len(recs) != 1 {
-		t.Fatalf("one record of the provisioning, got %d", len(recs))
+	if len(recs) != 2 {
+		t.Fatalf("one record per provisioning, got %d", len(recs))
 	}
 	raw, _ := json.Marshal(recs[0])
 	if strings.Contains(string(raw), "provisioned-secret") || !strings.Contains(string(raw), `"control_action":"provision-`) {
@@ -237,7 +255,8 @@ func TestAGatewayInConfidentialSpaceIsProvisionedByTheOrgAndSaysSoInItsRecords(t
 func TestAProvisioningEnvelopeOpensOnlyWithItsKey(t *testing.T) {
 	p, _ := newProvisioner()
 	other, _ := ecdh.P256().GenerateKey(rand.Reader)
-	if _, err := p.open(provisionEnvelope{Kid: "nope"}); err == nil || !strings.Contains(err.Error(), "restarted") {
+	all := func(string) bool { return true }
+	if _, err := p.open(provisionEnvelope{Kid: "nope"}, all); err == nil || !strings.Contains(err.Error(), "restarted") {
 		t.Fatalf("an envelope for another kid: %v", err)
 	}
 	k := *encKeyOf(t, other)
@@ -245,7 +264,24 @@ func TestAProvisioningEnvelopeOpensOnlyWithItsKey(t *testing.T) {
 	aad, _ := canonical.Encode(map[string]any{"kid": p.pub.Kid})
 	enc, ct, _ := hpkeSeal(k, provisionInfo, aad, plain)
 	b64 := base64.RawURLEncoding.EncodeToString
-	if _, err := p.open(provisionEnvelope{Kid: p.pub.Kid, Enc: b64(enc), CT: b64(ct)}); err == nil {
+	if _, err := p.open(provisionEnvelope{Kid: p.pub.Kid, Enc: b64(enc), CT: b64(ct)}, all); err == nil {
 		t.Fatal("an envelope sealed to another key opened")
+	}
+}
+
+func TestAClientTokenByItsHashGuardsSubmit(t *testing.T) {
+	sum := sha256.Sum256([]byte("the-client-token"))
+	s := &service{cfg: config{ClientTokenSHA256: hex.EncodeToString(sum[:])}}
+	h := s.authed(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
+	for tok, want := range map[string]int{"the-client-token": 204, "another": 401, "": 401} {
+		req := httptest.NewRequest("POST", "/v1/submit", nil)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		if rec.Code != want {
+			t.Errorf("token %q: %d, want %d", tok, rec.Code, want)
+		}
 	}
 }

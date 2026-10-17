@@ -116,6 +116,15 @@ type config struct {
 	// receipts, chains, observers, revocations): the relay's door for the gate. RELAY_TOKEN in
 	// the environment overrides it, as CLIENT_TOKEN overrides client_token.
 	RelayToken string `json:"relay_token,omitempty"`
+	// ClientTokenSHA256 is the client token by its SHA-256 (hex), for a gateway whose
+	// environment is public: in Confidential Space the launcher writes the container's
+	// environment into the attestation token, so the token itself never goes there
+	// (CLIENT_TOKEN_SHA256 overrides it).
+	ClientTokenSHA256 string `json:"client_token_sha256,omitempty"`
+	// Provisioners may seal files to the gateway besides the organisations (provision.go): by
+	// name, an Ed25519 key in hex and the files it may provision, e.g. the relay's operator
+	// with "relay-token", which in Confidential Space cannot travel in the environment.
+	Provisioners map[string]provisionerConfig `json:"provisioners,omitempty"`
 	// Odoo maps an instance, the first part of an odoo:<instance>/<model> resource, to its
 	// address and database; its API key is odoo-key-<instance> in the secrets.
 	Odoo map[string]effects.OdooInstance `json:"odoo,omitempty"`
@@ -234,7 +243,10 @@ func main() {
 		key, err = memoryKey()
 		fail(err)
 		cfg.Store = csStore(cfg.Store, key.Public().(ed25519.PublicKey))
-		if cfg.ClientToken == "" {
+		if cfg.ClientToken != "" {
+			fail(errClientTokenInEnv)
+		}
+		if cfg.ClientTokenSHA256 == "" {
 			fail(errNoClientToken)
 		}
 	} else {
@@ -254,11 +266,13 @@ func main() {
 	fail(err)
 	if cfg.Revocations != nil {
 		s.revoked = newRevokedList(time.Now)
-		token := cfg.RelayToken
-		if token == "" {
-			token = portalToken(cfg.Secrets)
-		}
-		s.revoked.follow(*cfg.Revocations, token)
+		portal := portalToken(cfg.Secrets)
+		s.revoked.follow(*cfg.Revocations, func() string {
+			if t := s.relayToken(); t != "" {
+				return t
+			}
+			return portal
+		})
 	}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets, Reviewer: cfg.Reviewer})
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
@@ -887,9 +901,14 @@ func withEvidence(a policy.Action, adapter string, tok evidence.Token, capTok st
 // authed refuses a submission without the client token when one is configured.
 func (s *service) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.ClientToken != "" {
-			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.ClientToken)) != 1 {
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if s.cfg.ClientToken != "" && subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.ClientToken)) != 1 {
+			writeJSON(w, 401, map[string]any{"error": "a client token is required to submit"})
+			return
+		}
+		if want := strings.ToLower(s.cfg.ClientTokenSHA256); want != "" {
+			sum := sha256.Sum256([]byte(got))
+			if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(want)) != 1 {
 				writeJSON(w, 401, map[string]any{"error": "a client token is required to submit"})
 				return
 			}
