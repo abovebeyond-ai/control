@@ -27,6 +27,7 @@ import (
 	"github.com/abovebeyond-ai/control/merkle"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/premises"
+	"github.com/abovebeyond-ai/control/registry"
 )
 
 // Engine names the code that judges; it is the software measurement.
@@ -41,6 +42,9 @@ type Verdict struct {
 	Token    evidence.Token // nil for FAIL_CLOSED: nothing could be written
 	Step     int
 	ActionID string // shared by the three records of one action: request, effect, result
+	// Signer is the registry entry whose holder gave the word, under a grant that names an
+	// organisation: the effect is held to its ceiling.
+	Signer *registry.Entry
 }
 
 // Phases of one intercepted action (row 7.1.2): the request judged before anything
@@ -80,6 +84,11 @@ type Config struct {
 	// capability holds to its signature and expiry on its own; this is what lets ending a
 	// word at Portal reach an action the hand already holds a token for.
 	Revoked func(jti string) (since string, revoked bool)
+	// Orgs are the root keys pinned per organisation, for a grant that names one: the start of
+	// every registry chain (docs/odoo-gate.md).
+	Orgs map[string]ed25519.PublicKey
+	// Passkey is the relying party a person's passkey word is held to.
+	Passkey capability.Party
 }
 
 // Gateway holds the chain state of one agent. One instance is one path.
@@ -318,22 +327,28 @@ func (g *Gateway) SubmitSigned(run string, action policy.Action, principal strin
 // kind and the resource; otherwise the request is refused and the refusal
 // recorded. The record carries the token's digest and the task it names.
 func (g *Gateway) SubmitWith(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, body, signature []byte, token string) Verdict {
-	state := "unsigned"
-	if len(signature) > 0 {
-		state = "invalid"
-		if key := g.cfg.Policy.Grant.SubmitterKey; key != "" {
-			if pub, err := hex.DecodeString(key); err == nil && len(pub) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(pub), body, signature) {
-				state = "verified"
-			}
-		}
-	}
-	merged := map[string]any{"control_submitter": state}
-	for k, v := range extension {
-		merged[k] = v
-	}
+	return g.SubmitChained(run, action, principal, extension, prem, body, signature, token, nil)
+}
+
+// SubmitChained is SubmitWith with the registry chain that vouches for the person behind a
+// passkey capability, for a grant that names an organisation (Grant.Org, docs/odoo-gate.md):
+// the chain must lead from the organisation's pinned root to the entry the capability names
+// as its issuer, narrowing at every step, and the passkey must have signed under that entry's
+// key. The person, not the grant's principal, is then the record's initiating user, and the
+// verdict carries the entry, whose ceiling the effect is held to.
+func (g *Gateway) SubmitChained(run string, action policy.Action, principal string, extension map[string]any, prem *premises.Material, body, signature []byte, token string, chain []string) Verdict {
+	merged, state := g.submitter(body, signature, extension)
 	var capReason string
+	var signer *registry.Entry
 	pol := g.cfg.Policy
-	if key := g.cfg.Policy.Grant.PrincipalKey; key != "" || len(g.cfg.Policy.Grant.PrincipalKeys) > 0 {
+	if g.cfg.Policy.Grant.Org != "" {
+		var p capability.Payload
+		p, signer, capReason = g.orgWord(run, action, token, chain, merged)
+		if capReason == "" {
+			principal = signer.ID
+			pol, capReason = g.heldWord(p, action, merged, "the person's word")
+		}
+	} else if key := g.cfg.Policy.Grant.PrincipalKey; key != "" || len(g.cfg.Policy.Grant.PrincipalKeys) > 0 {
 		switch {
 		case token == "":
 			capReason = "no capability from the principal for this task"
@@ -373,49 +388,167 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 				}
 				task["working_set"] = map[string]any{"jti": ws.ID, "iss": ws.Issuer}
 			}
-			if g.cfg.Revoked != nil && p.ID != "" {
-				if since, ended := g.cfg.Revoked(p.ID); ended {
-					capReason = "the owner ended this capability at " + since + ", before it expired"
-					break
-				}
-			}
-			if !p.Covers(action.Kind, action.Resource) {
-				capReason = "the capability does not cover " + action.Kind + " on " + action.Resource
-				break
-			}
-			// The task the principal named selects the task's own rules out of the grant.
-			pol, capReason = g.cfg.Policy.ForTask(p.Task.Playbook)
-			if capReason != "" {
-				break
-			}
-			// A kind the grant lists under PerAction needs a word for this act, spent here.
-			if containsString(pol.Grant.PerAction, action.Kind) {
-				if p.Act == "" {
-					capReason = action.Kind + " needs the operator's word for this act, and this word names a period instead"
-					break
-				}
-				if want := capability.ActDigest(action); p.Act != want {
-					capReason = "the operator's word names another act than this one"
-					break
-				}
-				fresh, err := g.cfg.Store.Spend(p.ID)
-				if err != nil {
-					capReason = "the word could not be spent: " + err.Error()
-					break
-				}
-				if !fresh {
-					capReason = "this word was already spent"
-					break
-				}
-				merged["control_word"] = map[string]any{"act": p.Act, "spent": true}
-			}
+			pol, capReason = g.heldWord(p, action, merged, "the operator's word")
 		}
 	} else if token != "" {
 		merged["control_capability"] = capability.Digest(token)
 	} else if g.cfg.Policy.PerTask() {
 		_, capReason = g.cfg.Policy.ForTask("")
 	}
-	return g.submit(run, action, principal, merged, prem, pol, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified", capReason)
+	v := g.submit(run, action, principal, merged, prem, pol, g.cfg.Policy.Grant.SubmitterKey != "" && state != "verified", capReason)
+	if capReason == "" {
+		v.Signer = signer
+	}
+	return v
+}
+
+// submitter adds to the extension whether the hand signed exactly these bytes: verified,
+// unsigned or invalid.
+func (g *Gateway) submitter(body, signature []byte, extension map[string]any) (map[string]any, string) {
+	state := "unsigned"
+	if len(signature) > 0 {
+		state = "invalid"
+		if key := g.cfg.Policy.Grant.SubmitterKey; key != "" {
+			if pub, err := hex.DecodeString(key); err == nil && len(pub) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(pub), body, signature) {
+				state = "verified"
+			}
+		}
+	}
+	merged := map[string]any{"control_submitter": state}
+	for k, v := range extension {
+		merged[k] = v
+	}
+	return merged, state
+}
+
+// SubmitterHolds says whether the submission meets the grant's submitter key: signed by it
+// when the grant names one, anything when it names none.
+func (g *Gateway) SubmitterHolds(body, signature []byte) bool {
+	_, state := g.submitter(body, signature, nil)
+	return g.cfg.Policy.Grant.SubmitterKey == "" || state == "verified"
+}
+
+// heldWord holds a verified capability to the action and returns the policy it is judged
+// under, or why not: not ended early, covering the kind and the resource, a task the grant
+// names, and for a kind that needs a word per act (NeedsWord), naming this act, spent here.
+func (g *Gateway) heldWord(p capability.Payload, action policy.Action, merged map[string]any, whose string) (policy.Policy, string) {
+	pol := g.cfg.Policy
+	if g.cfg.Revoked != nil && p.ID != "" {
+		if since, ended := g.cfg.Revoked(p.ID); ended {
+			return pol, "the owner ended this capability at " + since + ", before it expired"
+		}
+	}
+	if !p.Covers(action.Kind, action.Resource) {
+		return pol, "the capability does not cover " + action.Kind + " on " + action.Resource
+	}
+	// The task the principal named selects the task's own rules out of the grant.
+	pol, reason := g.cfg.Policy.ForTask(p.Task.Playbook)
+	if reason != "" {
+		return pol, reason
+	}
+	// A kind the grant lists under PerAction, or above B1 under an organisation, needs a word
+	// for this act, spent here.
+	if containsString(pol.Grant.PerAction, action.Kind) || g.orgActs(action.Kind) {
+		if p.Act == "" {
+			return pol, action.Kind + " needs " + whose + " for this act, and this word names a period instead"
+		}
+		if want := capability.ActDigest(action); p.Act != want {
+			return pol, whose + " names another act than this one"
+		}
+		if p.ID == "" {
+			return pol, "a word for one act needs an id to be spent under"
+		}
+		fresh, err := g.cfg.Store.Spend(p.ID)
+		if err != nil {
+			return pol, "the word could not be spent: " + err.Error()
+		}
+		if !fresh {
+			return pol, "this word was already spent"
+		}
+		merged["control_word"] = map[string]any{"act": p.Act, "spent": true}
+	}
+	return pol, ""
+}
+
+// orgWord verifies a passkey capability and the registry chain behind it, for a grant that
+// names an organisation, and adds what it found to the record: the capability's digest, the
+// task, and the chain by its ids and digest with the role and ceiling of the entry that spoke.
+func (g *Gateway) orgWord(run string, action policy.Action, token string, chain []string, merged map[string]any) (capability.Payload, *registry.Entry, string) {
+	org := g.cfg.Policy.Grant.Org
+	var p capability.Payload
+	if token == "" {
+		// Nothing to verify, so the refusal says what the grant would have said, if it refuses,
+		// and otherwise which word is missing.
+		if verdict, reason := g.Precheck(run, action); verdict != "ALLOW" {
+			return p, nil, reason
+		}
+		if g.NeedsWord(action.Kind) {
+			return p, nil, action.Kind + " needs the word of a person of " + org + " for this act"
+		}
+		return p, nil, "no mandate from a person of " + org
+	}
+	if !capability.IsPasskey(token) {
+		return p, nil, "a capability under " + org + " is a passkey word (wa1)"
+	}
+	k, err := capability.ParsePasskey(token)
+	if err != nil {
+		return p, nil, err.Error()
+	}
+	entries, err := registry.VerifyChain(chain, g.cfg.Orgs, g.cfg.Clock())
+	if err != nil {
+		return p, nil, err.Error()
+	}
+	leaf := entries[len(entries)-1]
+	if leaf.Org != org {
+		return p, nil, "the registry chain is of " + leaf.Org + ", and this grant listens to " + org
+	}
+	if k.Payload.Issuer != leaf.ID {
+		return p, nil, "the word is signed as " + k.Payload.Issuer + ", and the registry chain ends at " + leaf.ID
+	}
+	holder, err := leaf.Holder.ECDSA()
+	if err != nil {
+		return p, nil, "the registry entry " + leaf.ID + " holds no passkey: " + err.Error()
+	}
+	p, err = capability.VerifyPasskey(token, holder, g.cfg.Passkey, g.cfg.Issuer, g.cfg.Agent, g.cfg.Clock())
+	if err != nil {
+		return p, nil, err.Error()
+	}
+	merged["control_capability"] = capability.Digest(token)
+	merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires, "iss": p.Issuer}
+	merged["control_chain"] = map[string]any{"entries": registry.IDs(entries), "digest": registry.Digest(chain), "role": leaf.Role, "ceiling_eur": leaf.CeilingEUR}
+	if !containsString(leaf.Kinds, action.Kind) {
+		return p, nil, "the registry gives " + leaf.ID + " no " + action.Kind
+	}
+	return p, &leaf, ""
+}
+
+// orgActs says whether a kind needs a word per act because the grant names an organisation:
+// every kind but a B1 read.
+func (g *Gateway) orgActs(kind string) bool {
+	return g.cfg.Policy.Grant.Org != "" && g.cfg.Policy.Kinds()[kind].Radius != "B1"
+}
+
+// NeedsWord says whether an action of this kind needs a word naming the act: the grant lists
+// it under PerAction, or names an organisation and the kind is more than a read.
+func (g *Gateway) NeedsWord(kind string) bool {
+	return containsString(g.cfg.Policy.Grant.PerAction, kind) || g.orgActs(kind)
+}
+
+// Precheck is the grant's judgement of an action without a record: what a person would be
+// asked to put a word to has to be something the grant allows first. For a grant per task it
+// judges by the whole grant, since the task is named by the word that is not there yet.
+func (g *Gateway) Precheck(run string, action policy.Action) (string, string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cfg.Policy.Evaluate(action, g.summary(run))
+}
+
+// Refuse records a request refused for a reason the gateway did not judge: a person said no
+// to a word they were asked for, or the word did not come in time. Nothing is verified,
+// because nothing was presented; the record says why, like any refusal.
+func (g *Gateway) Refuse(run string, action policy.Action, principal string, extension map[string]any, body, signature []byte, reason string) Verdict {
+	merged, _ := g.submitter(body, signature, extension)
+	return g.submit(run, action, principal, merged, nil, g.cfg.Policy, false, reason)
 }
 
 // SubmitIn is one intercepted step within a run. The path summary the policy

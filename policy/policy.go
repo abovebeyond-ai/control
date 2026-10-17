@@ -104,6 +104,15 @@ type Grant struct {
 	// naming a task the grant does not have is refused, and so is a submission
 	// without a capability when the grant is per task.
 	Tasks map[string]TaskGrant `json:"tasks,omitempty"`
+	// Org, when set, names an organisation that is not ours whose people speak for this hand
+	// (docs/odoo-gate.md): every capability is then a passkey word (wa1) by a person whose
+	// registry entry descends, narrowing at every step, from the root key the gateway pins for
+	// the organisation. A B1 kind runs under a mandate that names a period; every other kind
+	// needs a word naming the act, as if it were under PerAction. The principal keys above do
+	// not apply to such a grant.
+	Org string `json:"org,omitempty"`
+	// Asks names the registry entry asked for a word when the hand names nobody ("acme#elise").
+	Asks string `json:"asks,omitempty"`
 }
 
 // TaskGrant is what one task under an agent's grant may do: its verbs (within the
@@ -263,6 +272,10 @@ func (p Policy) Bundle() map[string]any {
 	if len(p.Grant.Tasks) > 0 {
 		doc["tasks"] = tasksDocument(p.Grant.Tasks)
 	}
+	// Likewise the organisation whose registry speaks for the hand.
+	if p.Grant.Org != "" {
+		doc["org"] = p.Grant.Org
+	}
 	// Likewise the operator's keys: a bundle without them hashes as before.
 	if len(p.Grant.PrincipalKeys) > 0 {
 		keys := map[string]any{}
@@ -315,6 +328,9 @@ func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 	}
 	if verdict, reason, held := previewRule(a, phi); held {
 		return verdict, reason
+	}
+	if reason := odooRule(a); reason != "" {
+		return "DENY", reason
 	}
 	return "ALLOW", "within grant"
 }

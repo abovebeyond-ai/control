@@ -42,7 +42,10 @@ attackers are built, and it is what the standard's rows on independent monitors 
    2026 Portal (`portal.update`, `portal.time_entry`, `portal.expense`, `portal.project.patch`,
    `portal.task`, `portal.measure`, `portal.playbook` on `portal:<slug>`, the ingest token
    `portal-token`), and since v0.26.0 Forge (`forge.deploy` on `forge:<slug>`, the site's
-   tokenless deploy trigger URL as `forge-deploy-<slug>`; see `docs/preview.md`).
+   tokenless deploy trigger URL as `forge-deploy-<slug>`; see `docs/preview.md`), and on a
+   demo branch Odoo (`odoo.read` and four draft-order kinds on `odoo:<instance>/<model>`, the
+   API key as `odoo-key-<instance>`), where the word comes from the passkey of a person at the
+   client, under a registry chain from the client's own root key; see `docs/odoo-gate.md`.
    Since v0.18.0 an expense may carry its invoice attached, digest bound like a push's files, so no
    write of a session is left outside. The Portal adapter exists because the writes of a session to the operator's own
    dashboard went on the operator's token, from the session's machine, with no record: the

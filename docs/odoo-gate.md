@@ -1,0 +1,175 @@
+# An agent in a client's Odoo, on a person's word
+
+Built on 17 October 2026 for the Bextrust gate demo, on a branch, not released. An AI
+procurement agent works in Acme's Odoo 19 through this gateway. Odoo's API stays as it is: the
+gateway holds the Odoo API key and is the only thing that calls Odoo. The agent reads under a
+mandate a buyer signed with a passkey; every write needs the buyer's passkey on that exact
+action; and what cannot be called back (approving or sending an order, paying a bill) has no
+kind at all. The authority does not come from us: it comes down a chain of registry entries
+from Acme's own root key, which the gateway pins.
+
+The contract between the gate, the relay and the app is `docs/contract.md` in the demo's box
+repository. This note says what the gate side does with it.
+
+## Who speaks: the registry chain
+
+Acme's root key (Ed25519) signs an entry for Tom, the purchasing director; Tom's key signs an
+entry for Elise, the buyer, whose key is a passkey on her phone (P-256). An entry is a `re1`
+token (`registry` package): the entry as canonical JSON, signed by the parent.
+
+| field | what |
+| --- | --- |
+| `id`, `org`, `parent` | `acme#elise`, `acme`, `acme#tom` (the org itself for an entry the root signs) |
+| `holder` | the child's public key as a JWK: OKP/Ed25519 to sign entries, EC/P-256 for a passkey |
+| `credential_id` | the passkey's id, for the relay; the gate checks the key, not the id |
+| `role`, `kinds`, `ceiling_eur`, `may_delegate`, `iat`, `exp` | what the holder may do, up to which order total in whole euros, until when |
+
+The gateway holds a chain, root first, to these rules (`registry.VerifyChain`):
+
+- the first entry names the org as its parent and is signed by the root key pinned for that
+  org in the configuration (`orgs`); each later one names the entry before it and is signed by
+  that entry's Ed25519 key;
+- only a parent with `may_delegate` signs children, so a passkey holder signs none;
+- a child's kinds are a subset of its parent's, its ceiling and its end no higher;
+- every entry is in date, its id lies under its org, no entry appears twice, at most eight;
+- the payload bytes are canonical JSON and carry no field the contract does not name, so the
+  bytes Acme signed have one reading.
+
+## The word: a passkey capability
+
+The passkey signs control's capability payload (`capability.Payload`) unchanged. The token is
+`wa1.<payload>.<authenticatorData>.<clientDataJSON>.<signature>`, each part base64url, and
+`capability.VerifyPasskey` holds it to:
+
+- the challenge in clientDataJSON is base64url(SHA-256(payload bytes)), so the signature covers
+  the payload and nothing the relay could change; the type is `webauthn.get`; the origin is one
+  the configuration lists (the site and the app's `android:apk-key-hash:...`); not cross-origin;
+- authenticatorData's RP ID hash is SHA-256 of the configured RP ID, with user presence (UP)
+  and user verification (UV) both set;
+- the ES256 signature over authenticatorData || SHA-256(clientDataJSON) verifies under the
+  holder key of the entry the chain ends at, and the payload's `iss` is that entry's id;
+- then what every capability is held to: this gateway (`aud`), this agent (`sub`), in date.
+
+After that the existing semantics apply as they are (`gateway.heldWord`): an early end through
+the revocation list, `Covers` for kind and resource, the task, and for a word per act the act
+digest (`capability.ActDigest`) and the spend of its `jti`. The registry entry must give the
+kind as well.
+
+## The grant
+
+A grant that names `org` listens to that organisation's people and to nothing else: every
+capability must be a `wa1` word with a chain to the pinned root. A B1 kind (`odoo.read`) runs
+under a mandate, a word that names a period. Every other kind needs a word that names the act,
+whatever `per_action` says, so a mandate that lists a write kind still carries no write.
+`asks` names the entry asked for a word when the agent names nobody.
+
+```json
+{
+  "issuer": "https://bextrust.abovebeyond.ai/control",
+  "orgs": {"acme": "<hex Ed25519 root key>"},
+  "passkey": {"rp_id": "bextrust.abovebeyond.ai",
+              "origins": ["https://bextrust.abovebeyond.ai", "android:apk-key-hash:<b64url sha256>"]},
+  "relay_url": "https://bextrust.abovebeyond.ai",
+  "odoo": {"acme": {"base": "https://acme.odoo.example", "db": "acme", "currency": "EUR"}},
+  "agents": {
+    "did:web:bextrust.abovebeyond.ai:acme#procurement-agent": {
+      "grant": {"principal": "acme", "org": "acme", "asks": "acme#elise",
+                "kinds": ["odoo.read", "odoo.order_draft", "odoo.order_line_set", "odoo.order_cancel", "odoo.order_request_approval"],
+                "resources": ["odoo:acme/*"]}
+    }
+  }
+}
+```
+
+The Odoo API key is `odoo-key-acme` in the secrets directory. A grant that names an org whose
+root is not pinned, or no RP ID and origins, stops the gateway at start. The bundle a record
+names carries `org`, and a policy version that changes it is a widening.
+
+## The kinds
+
+The resource is `odoo:<instance>/<model>`. The judgement refuses a model outside
+`policy.OdooModels` (`purchase.order`, `purchase.order.line`, `res.partner`,
+`product.product`, `product.template`, `stock.quant`) before anyone is asked.
+
+| kind | radius | params | what the adapter does |
+| --- | --- | --- | --- |
+| `odoo.read` | B1 | `model` (the resource's), `domain`, `fields`, `limit` (1 to 200) | `search_read`; plain field names only, no path into another model; a domain of plain terms and comparison operators; a default field list without binaries |
+| `odoo.order_draft` | B2 | `partner_id`, `lines` [{`product_id`, `qty`}] | prices the lines at the products' `standard_price` and refuses above the ceiling before creating; creates the order in draft; holds Odoo's own `amount_total` to the ceiling and cancels the draft at once when it is over |
+| `odoo.order_line_set` | B2 | `order`, `line`, `qty` | only on a draft and a line of that order; estimates the new total at the line's price, refuses above the ceiling; writes; sets the old quantity back when Odoo's total is over |
+| `odoo.order_cancel` | B2 | `order` | `button_cancel`, only on a draft or an order waiting for approval |
+| `odoo.order_request_approval` | B2 | `order` | `button_confirm`, after checking it cannot approve: the company approves in two steps, the total is at or above the threshold, the gateway's Odoo user is no purchase manager; the state after must be `to approve` |
+
+Ids and quantities are whole numbers above zero: the record's canonical form has no fractional
+numbers, so amounts in an outcome are strings with two decimals. The ceiling is the gateway's
+addition from the verified entry (`ceiling_eur`), never the hand's, and it is compared with the
+order's `amount_total` (taxes included) in the instance's currency; an order in another
+currency is refused. A write that arrives at the adapter without a ceiling is refused.
+
+## Waiting for a word
+
+A write that needs a word and comes without one is judged against the grant first, without a
+record, so nobody is asked to sign what the grant refuses. Then `/v1/submit` answers 202:
+
+```json
+{"pending": "<id>", "holder": "acme#elise", "payload": "<b64url>", "challenge": "<b64url>", "action": {"kind": "...", "resource": "...", "params": {...}}}
+```
+
+The payload is a capability for that one act: `iss` the holder, `sub` the agent, `kinds` and
+`resources` the action's, `act` its digest, `jti` `word-<id>`, ten minutes long. The same object
+is posted to `RELAY_URL/api/requests` (`relay_url`, or the environment); nothing is announced
+when neither is set.
+
+| method | what |
+| --- | --- |
+| `POST /v1/pending/{id}/word` | `{capability, chain}`: judged like any submission; performed when it holds; the answer is the record, as `/v1/submit` gives it |
+| `POST /v1/pending/{id}/refuse` | `{by}`: a refusal on the record ("refused by acme#elise"); nothing performed |
+| `GET /v1/pending/{id}` | `{state: waiting, done, refused or expired, record}` |
+
+The three sit behind the client token like a submission. A word that does not hold is a
+refusal on the record and decides the write (`done`, with a DENY); the agent asks again. A
+write whose ten minutes pass is recorded as refused when it is next asked for or swept (every
+minute). A decided write answers 409 to a second word.
+
+## What is recorded
+
+Every outcome, the word, the refusal and the expiry, is three records like any action: the
+request, the effect, the result. A request under a word names the person as `initiating_user`
+(`acme#elise`), the word in `control_capability` and `control_task`, the chain in
+`control_chain` (ids, digest, role and ceiling of the entry that spoke), and a spent word in
+`control_word`. The word and its chain are kept beside the record (`capability` attachment), so
+a stranger can replay both against Acme's root key. A refusal by the person carries
+`control_refused` with who the relay says refused.
+
+The rows a read returns go back to the agent and stay off the record: the outcome on the
+record carries their count and the SHA-256 of Odoo's answer (`records_sha256`), since the
+attachment endpoint is open to anyone who reaches the gateway. The answer the agent receives
+therefore carries more than the answer the result record digests.
+
+## Not built
+
+- **Ending a mandate early.** The relay's `/api/mandates/{id}/end` and `/api/stop-all` are not
+  seen by the gate. The gateway's revocation list (`revocations`) could read a list the relay
+  serves in Portal's format; until it does, a mandate ends at its `exp`.
+- **Revoking a registry entry** before its `exp`. A chain holds until its first entry ends.
+- **The passkey's signature counter** is not tracked; phone passkeys mostly send zero.
+- **Waiting writes survive no restart**: they live in memory. Nothing was judged for them; the
+  agent asks again.
+- **A refusal is not signed.** Refusing only keeps something from happening, so the relay's
+  word is taken; the record says it is the relay's.
+- **Currency conversion.** The ceiling is in euros and compared with an order in the instance's
+  currency. The local demo database runs in USD; set the Odoo company's currency to EUR, or
+  `currency: "USD"` for that instance and read the ceiling as dollars.
+- **Odoo state between check and call.** The adapter reads an order's state and total and then
+  acts; a person changing the order in Odoo in between is not excluded.
+- **Fractional quantities** have no kind, for the canonical form's sake.
+- **Per-task grants** do not combine with an org: the word names no playbook.
+- **No enforcement at Odoo's end.** Odoo does not see the record; the gateway's API user is the
+  only holder of the key, and its Odoo rights (purchase user, not manager) are the far end's
+  bound.
+
+The tests: `registry` (chain and narrowing), `capability` (the passkey word), `policy` (the
+Odoo rule and the two schema types), `effects` (the adapter against a fake Odoo that applies
+Odoo's approval rule), `cmd/gateway` (the whole demo with a fake Odoo and relay). With
+`CONTROL_ODOO_IT=1`, `effects` also runs against the Odoo at `http://127.0.0.1:8069` (database
+`acme`, key in `/home/bench/work/odoo-demo/gate.key`): it reads every model, drafts an order,
+changes a quantity, asks for approval and cancels it.

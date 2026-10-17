@@ -217,3 +217,26 @@ func UntagAny(digest string) (alg, value string, err error) {
 	}
 	return alg, value, nil
 }
+
+// Check refuses JSON bytes that are not already in canonical form: a payload a person or a
+// parent signs is then read the same way by every reader. Bytes with a duplicated key, a
+// float, or another order decode to a value whose canonical form differs from them.
+func Check(raw []byte) error {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	var generic any
+	if err := dec.Decode(&generic); err != nil {
+		return fmt.Errorf("the payload does not parse: %w", err)
+	}
+	if dec.More() {
+		return errors.New("the payload carries more than one JSON value")
+	}
+	again, err := Encode(generic)
+	if err != nil {
+		return err
+	}
+	if string(again) != string(raw) {
+		return errors.New("the payload is not canonical JSON (RFC 8785)")
+	}
+	return nil
+}

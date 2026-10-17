@@ -16,7 +16,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/abovebeyond-ai/control/policy"
 	"strings"
 	"time"
@@ -102,19 +101,7 @@ func Verify(token string, principal ed25519.PublicKey, audience, subject string,
 	if !ed25519.Verify(principal, raw, sig) {
 		return p, errors.New("the capability is not signed by the principal's key")
 	}
-	if p.Audience != audience {
-		return p, fmt.Errorf("the capability is for %s, not this gateway", p.Audience)
-	}
-	if p.Subject != subject {
-		return p, fmt.Errorf("the capability is for %s, not this agent", p.Subject)
-	}
-	if p.Expires <= now.Unix() {
-		return p, errors.New("the capability has expired")
-	}
-	if p.IssuedAt > now.Unix()+60 {
-		return p, errors.New("the capability is issued in the future")
-	}
-	return p, nil
+	return p, p.holds(audience, subject, now)
 }
 
 // SignedBy says whether the token's signature verifies under this key, and nothing more:

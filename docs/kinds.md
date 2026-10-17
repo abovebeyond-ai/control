@@ -17,7 +17,7 @@ Each row (`policy.Kind`, `policy/kinds.go`) says:
 
 | field | what it says |
 |---|---|
-| `adapter` | who performs it: `github`, `portal`, `forge`, `vera` or `system` |
+| `adapter` | who performs it: `github`, `portal`, `forge`, `vera`, `odoo` or `system` |
 | `radius` | `B1` or `B2` for a kind a repair key may add and a working set may admit; empty for a kind only the token grants |
 | `why` | what bounds the radius, in the words the owner signs |
 | `files` | the parameter that binds attached files by digest, if the kind takes files |
@@ -40,7 +40,7 @@ The gateway reads every judgement from the row:
 ## Where a row lives
 
 **A kind whose effect is code lives in the release** (`policy.Builtin`): the GitHub, Portal,
-Forge and Vera kinds. Its row sits beside the code that performs it. A schema in the policy for
+Forge, Vera and Odoo kinds (`docs/odoo-gate.md`). Its row sits beside the code that performs it. A schema in the policy for
 an effect the binary carries out would be two things that must agree, and then they don't.
 
 **A kind on a running system may live in the policy.** The system adapter is generic. It

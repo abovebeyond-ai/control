@@ -12,7 +12,7 @@ import (
 // gateway judges by it, serves it on /v1/agents, and Portal, Elixir and the hand read it there
 // instead of keeping lists of their own (docs/kinds.md).
 type Kind struct {
-	// Adapter performs the kind: github, portal, forge, vera or system.
+	// Adapter performs the kind: github, portal, forge, vera, odoo or system.
 	Adapter string `json:"adapter"`
 	// Radius is B1 or B2 for a kind a repair key may add and a working set may admit, empty for
 	// one that only the owner's token grants (it reaches a person or cannot be called back).
@@ -116,6 +116,23 @@ var Builtin = Kinds{
 		Schema: Schema{Required: map[string]string{"email": "string"}, Optional: map[string]string{}}},
 	"review.sign": {Adapter: "vera", Place: "Reviews in Vera", Words: "seal a finished review",
 		Schema: Schema{Required: map[string]string{"root": "string"}, Optional: map[string]string{"readings": "int", "judged": "int"}}},
+
+	// The Odoo kinds (docs/odoo-gate.md), on odoo:<instance>/<model>: a procurement agent in a
+	// client's Odoo, through the gateway, which holds the API key. Reads under a mandate a
+	// person signed with a passkey; every write on that person's word for the one act, and
+	// within the order total the registry gives them. What cannot be called back has no kind:
+	// approving or sending an order, paying a bill. Requesting approval leaves the order where
+	// a person with the right to approve has to act on it in Odoo.
+	"odoo.read": {Adapter: OdooAdapter, Radius: "B1", Why: "reads records of a fixed set of models; nothing changes", Place: "Reads in Odoo", Words: "read purchase orders, suppliers, products and stock",
+		Schema: Schema{Required: map[string]string{"model": "string"}, Optional: map[string]string{"domain": "domain", "fields": "list", "limit": "int"}}},
+	"odoo.order_draft": {Adapter: OdooAdapter, Radius: "B2", Why: "a purchase order in draft, which nobody receives and one step cancels", Place: "Drafts in Odoo", Words: "draft a purchase order",
+		Schema: Schema{Required: map[string]string{"partner_id": "int", "lines": "order_lines"}, Optional: map[string]string{}}},
+	"odoo.order_line_set": {Adapter: OdooAdapter, Radius: "B2", Why: "one quantity on a draft order, set back in one step", Place: "Drafts in Odoo", Words: "change a quantity on a draft purchase order",
+		Schema: Schema{Required: map[string]string{"order": "int", "line": "int", "qty": "int"}, Optional: map[string]string{}}},
+	"odoo.order_cancel": {Adapter: OdooAdapter, Radius: "B2", Why: "cancels an order nobody has received; Odoo sets it back to draft in one step", Place: "Drafts in Odoo", Words: "cancel a draft purchase order",
+		Schema: Schema{Required: map[string]string{"order": "int"}, Optional: map[string]string{}}},
+	"odoo.order_request_approval": {Adapter: OdooAdapter, Radius: "B2", Why: "puts an order before the person who approves it; nothing is approved or sent", Place: "Drafts in Odoo", Words: "ask for a purchase order to be approved",
+		Schema: Schema{Required: map[string]string{"order": "int"}, Optional: map[string]string{}}},
 
 	// Actions on a running system (docs/mandates.md), one kind per action, never a generic
 	// command. The photo repair of one car on Stocklist: without apply it only reports.

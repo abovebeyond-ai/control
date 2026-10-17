@@ -28,6 +28,10 @@ type Outcome struct {
 	OK     bool           `json:"ok"`
 	Detail map[string]any `json:"detail,omitempty"`
 	Error  string         `json:"error,omitempty"`
+	// Private goes back to the hand and not on the record: the rows a read took from a
+	// client's system, which the open attachment endpoint would otherwise serve to anyone who
+	// can reach the gateway. Detail then carries their digest, so the record still names them.
+	Private map[string]any `json:"-"`
 }
 
 // Adapter performs one kind of effect.

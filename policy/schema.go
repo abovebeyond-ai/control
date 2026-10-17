@@ -20,8 +20,9 @@ type Schema struct {
 // Types: "string", "hex64" (a sha-256 in hex), "hex40" (a git commit id in hex), "int" (a
 // whole number), "number" (any finite number), "bool", "strings" (an object whose values
 // are strings), "list" (an array of strings), "records" (an array of objects whose values
-// are strings), "[]string" (a short list of short words).
-var schemaTypes = []string{"string", "hex64", "hex40", "int", "number", "bool", "strings", "list", "records", "[]string"}
+// are strings), "[]string" (a short list of short words), "domain" (an Odoo search domain of
+// plain terms) and "order_lines" (order lines of a whole product id and a whole quantity).
+var schemaTypes = []string{"string", "hex64", "hex40", "int", "number", "bool", "strings", "list", "records", "[]string", "domain", "order_lines"}
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -159,6 +160,10 @@ func checkType(key, typ string, v any) error {
 				return fmt.Errorf("parameter %q.%s must be a string", key, k)
 			}
 		}
+	case "domain":
+		return checkDomain(key, v)
+	case "order_lines":
+		return checkOrderLines(key, v)
 	default:
 		return fmt.Errorf("unknown schema type %s", typ)
 	}

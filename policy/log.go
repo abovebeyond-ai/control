@@ -294,7 +294,7 @@ func Narrower(cur map[string]HandGrant, curSystems map[string]string, next map[s
 }
 
 func grantNarrower(cur, next Grant) string {
-	if cur.Principal != next.Principal || cur.SubmitterKey != next.SubmitterKey || cur.PrincipalKey != next.PrincipalKey ||
+	if cur.Principal != next.Principal || cur.SubmitterKey != next.SubmitterKey || cur.PrincipalKey != next.PrincipalKey || cur.Org != next.Org ||
 		cur.MaxSensitivity != next.MaxSensitivity || !reflect.DeepEqual(nonNil(cur.PrincipalKeys), nonNil(next.PrincipalKeys)) {
 		return "changes who speaks for it"
 	}

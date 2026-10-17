@@ -44,12 +44,14 @@ import (
 
 	"github.com/abovebeyond-ai/control/attest"
 	"github.com/abovebeyond-ai/control/canonical"
+	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/effects"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/premises"
+	"github.com/abovebeyond-ai/control/registry"
 	"github.com/abovebeyond-ai/control/relying"
 )
 
@@ -100,6 +102,18 @@ type config struct {
 	// Revocations, when set, is where the gateway reads the capabilities the owner ended
 	// before they expired (revoked.go); an action under one is refused.
 	Revocations *revokedConfig `json:"revocations,omitempty"`
+	// Orgs pins the root key of each organisation whose people speak for a hand (a grant's
+	// org): the Ed25519 public key in hex at the start of every registry chain (docs/odoo-gate.md).
+	Orgs map[string]string `json:"orgs,omitempty"`
+	// Passkey is the relying party those people's passkeys are made for: its RP ID and the
+	// origins an assertion may come from.
+	Passkey capability.Party `json:"passkey,omitempty"`
+	// RelayURL is where a write waiting for a person's word is announced (POST /api/requests);
+	// RELAY_URL in the environment when this is empty, and nobody is told when both are.
+	RelayURL string `json:"relay_url,omitempty"`
+	// Odoo maps an instance, the first part of an odoo:<instance>/<model> resource, to its
+	// address and database; its API key is odoo-key-<instance> in the secrets.
+	Odoo map[string]effects.OdooInstance `json:"odoo,omitempty"`
 
 	// The versions applied since this configuration, and the head they lead to; read at start.
 	applied []policy.SignedVersion
@@ -117,6 +131,32 @@ func (c config) defined() policy.Kinds {
 // kinds is the table the gateway judges and performs by: the built-in kinds and the defined.
 func (c config) kinds() policy.Kinds { return policy.Builtin.With(c.defined()) }
 
+// orgKeys are the pinned root keys by organisation, and an error when one is not a key or a
+// grant names an organisation without one, or without a relying party for its passkeys.
+func (c config) orgKeys() (map[string]ed25519.PublicKey, error) {
+	out := map[string]ed25519.PublicKey{}
+	for org, h := range c.Orgs {
+		pub, err := hex.DecodeString(strings.TrimSpace(h))
+		if err != nil || len(pub) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("orgs: the root key of %s is not 32 bytes of hex", org)
+		}
+		out[org] = ed25519.PublicKey(pub)
+	}
+	for agent, a := range c.Agents {
+		org := a.Grant.Org
+		if org == "" {
+			continue
+		}
+		if _, ok := out[org]; !ok {
+			return nil, fmt.Errorf("%s: the grant listens to %s, and no root key is pinned for it under orgs", agent, org)
+		}
+		if c.Passkey.RPID == "" || len(c.Passkey.Origins) == 0 {
+			return nil, fmt.Errorf("%s: the grant listens to %s, and passkey names no rp_id and origins", agent, org)
+		}
+	}
+	return out, nil
+}
+
 type service struct {
 	cfg      config
 	key      ed25519.PrivateKey
@@ -126,6 +166,9 @@ type service struct {
 	mu       sync.Mutex
 	gateways map[string]*gateway.Gateway
 	revoked  *revokedList
+	// The writes waiting for a person's word (pending.go).
+	pendMu  sync.Mutex
+	pending map[string]*pendingWord
 }
 
 func main() {
@@ -188,6 +231,9 @@ func main() {
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.Forge{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.System{Bases: cfg.Systems, Table: cfg.kinds()})
+	s.effects.Add(effects.Odoo{SecretsDir: cfg.Secrets, Instances: cfg.Odoo})
+	_, err = cfg.orgKeys()
+	fail(err)
 	s.attested, err = attestation(cfg, key)
 	fail(err)
 	// Every agent's chain is opened now, not at its first request: an action the last
@@ -200,6 +246,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
+	mux.HandleFunc("POST /v1/pending/{id}/word", s.authed(s.word))
+	mux.HandleFunc("POST /v1/pending/{id}/refuse", s.authed(s.refuse))
+	mux.HandleFunc("GET /v1/pending/{id}", s.authed(s.pendingState))
+	go s.sweepPending(time.Minute)
 	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
 	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
 	mux.HandleFunc("GET /v1/policy", s.accessed("policy", s.policy))
@@ -413,7 +463,12 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 	if s.cfg.head != nil {
 		served = policyClaim(*s.cfg.head)
 	}
-	gcfg := gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true, Defined: s.cfg.defined()}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served}
+	orgs, err := s.cfg.orgKeys()
+	if err != nil {
+		return nil, err
+	}
+	gcfg := gateway.Config{Issuer: s.cfg.Issuer, Agent: agent, Policy: policy.Policy{Grant: a.Grant, PathAware: true, Defined: s.cfg.defined()}, Store: s.store, Key: s.key, Attestation: s.attested, Release: s.cfg.Release, PolicyVersion: served,
+		Orgs: orgs, Passkey: s.cfg.Passkey}
 	if s.revoked != nil {
 		gcfg.Revoked = s.revoked.Revoked
 	}
@@ -442,6 +497,11 @@ type submitRequest struct {
 	// is the record's agbom_digest; the document is kept beside the record so the digest
 	// resolves to a manifest, as row 1.1.1 asks.
 	Agbom map[string]any `json:"agbom,omitempty"`
+	// Chain is the registry chain behind a passkey capability, root first, under a grant that
+	// names an organisation; Holder, the person to ask for a word when the grant's default
+	// (Grant.Asks) is not the one (docs/odoo-gate.md).
+	Chain  []string `json:"chain,omitempty"`
+	Holder string   `json:"holder,omitempty"`
 }
 
 // maxSubmission is what one submission may weigh. Eight MiB was the first number, sized for
@@ -516,37 +576,54 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Extension["agbom_digest"] = canonical.Tag(digest)
 	}
-	v := g.SubmitWith(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature, req.Capability)
-	if v.Verdict == "FAIL_CLOSED" {
-		writeJSON(w, 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token})
+	// A write that needs a person's word and came without one waits for it (pending.go).
+	if s.asksWord(w, g, req, body, signature) {
 		return
+	}
+	v := g.SubmitChained(req.Run, req.Action, req.Principal, req.Extension, req.Premises, body, signature, req.Capability, req.Chain)
+	status, out := s.settle(r.Context(), g, req, v)
+	writeJSON(w, status, out)
+}
+
+// settle is what follows a judgement: what the hand handed in kept beside the request record,
+// the effect performed when allowed, and the effect and result records, so every action has
+// all three. It answers the status and the body the hand receives.
+func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequest, v gateway.Verdict) (int, map[string]any) {
+	if v.Verdict == "FAIL_CLOSED" {
+		return 503, map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "token": v.Token}
 	}
 	if req.Agbom != nil {
 		if err := s.store.Attach(req.Agent, v.Step, "agbom", req.Agbom); err != nil {
-			writeJSON(w, 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the bill of materials could not be kept beside the record: " + err.Error(), "step": v.Step})
-			return
+			return 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the bill of materials could not be kept beside the record: " + err.Error(), "step": v.Step}
 		}
 	}
 	if req.Capability != "" && v.Allowed() {
 		// The capability as presented, beside the record that names its digest: a stranger
 		// can then re-verify the principal's word against the key the identity log publishes,
 		// instead of taking the gateway's verification on trust (row 4.1.6: the exact content
-		// the human approved is the capability's own payload).
-		if err := s.store.Attach(req.Agent, v.Step, "capability", map[string]any{"capability": req.Capability}); err != nil {
-			writeJSON(w, 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the capability could not be kept beside the record: " + err.Error(), "step": v.Step})
-			return
+		// the human approved is the capability's own payload). A passkey word comes with the
+		// registry chain that vouches for its key, kept with it for the same reason.
+		kept := map[string]any{"capability": req.Capability}
+		if len(req.Chain) > 0 {
+			kept["chain"] = req.Chain
+		}
+		if err := s.store.Attach(req.Agent, v.Step, "capability", kept); err != nil {
+			return 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the capability could not be kept beside the record: " + err.Error(), "step": v.Step}
 		}
 	}
 	if len(req.Files) > 0 {
 		// What was pushed, beside the record that allowed it, as the working is.
 		if err := s.store.Attach(req.Agent, v.Step, "files", req.Files); err != nil {
-			writeJSON(w, 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the files could not be kept beside the record: " + err.Error(), "step": v.Step})
-			return
+			return 503, map[string]any{"verdict": "FAIL_CLOSED", "reason": "the files could not be kept beside the record: " + err.Error(), "step": v.Step}
 		}
 	}
 	principal := req.Principal
 	if principal == "" {
 		principal = s.cfg.Agents[req.Agent].Grant.Principal
+	}
+	if v.Signer != nil {
+		// The person whose word allowed it, as the request record names them.
+		principal = v.Signer.ID
 	}
 	// The effect, as performed, is the second record of the action; a refusal or a dry
 	// run records that nothing was performed and why, so every action has all three.
@@ -563,13 +640,14 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 			o := effects.Outcome{Error: effects.ErrNoAdapter.Error()}
 			outcome, effectReason = o, "not performed: "+o.Error
 		} else {
-			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			// The far end gets the evidence with the effect (row 8.3.5): a dispatch
 			// carries the signed record and the capability as inputs, a pull request
 			// carries them in its footer, so a runner or a merge check can refuse
 			// what nobody judged. The hand's parameters stay as recorded; this is
 			// the gateway's own addition, and the outcome names it.
-			o := adapter.Perform(ctx, withEvidence(req.Action, s.cfg.kinds()[req.Action.Kind].Adapter, v.Token, req.Capability))
+			kind := s.cfg.kinds()[req.Action.Kind]
+			o := adapter.Perform(ctx, withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer))
 			cancel()
 			outcome = o
 			if o.OK {
@@ -581,22 +659,56 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	e := g.Follow(req.Run, v.ActionID, gateway.PhaseEffect, req.Action, principal, v.Verdict, effectReason, outcome)
 	if e.Verdict == "FAIL_CLOSED" {
-		writeJSON(w, 503, map[string]any{"verdict": e.Verdict, "reason": "the effect record could not be written: " + e.Reason, "action": v.ActionID})
-		return
+		return 503, map[string]any{"verdict": e.Verdict, "reason": "the effect record could not be written: " + e.Reason, "action": v.ActionID}
 	}
 	out := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "action": v.ActionID, "token": v.Token, "effect": nil, "steps": []int{v.Step, e.Step}}
 	if v.Allowed() && !s.cfg.Dry {
-		out["effect"] = outcome
+		out["effect"] = handed(outcome)
 	}
-	// The result, as handed back, is the third: its digest covers the answer above.
+	// The result, as handed back, is the third: its digest covers the answer above, with what
+	// an outcome keeps private named by its digest only.
 	answer := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "action": v.ActionID, "effect": outcome}
 	rr := g.Follow(req.Run, v.ActionID, gateway.PhaseResult, req.Action, principal, v.Verdict, "result returned", answer)
 	if rr.Verdict == "FAIL_CLOSED" {
-		writeJSON(w, 503, map[string]any{"verdict": rr.Verdict, "reason": "the result record could not be written: " + rr.Reason, "action": v.ActionID})
-		return
+		return 503, map[string]any{"verdict": rr.Verdict, "reason": "the result record could not be written: " + rr.Reason, "action": v.ActionID}
 	}
 	out["steps"] = []int{v.Step, e.Step, rr.Step}
-	writeJSON(w, 200, out)
+	return 200, out
+}
+
+// handed is the outcome as the hand receives it: with what it keeps off the record (the rows
+// of a read) put back beside the detail.
+func handed(outcome any) any {
+	o, ok := outcome.(effects.Outcome)
+	if !ok || o.Private == nil {
+		return outcome
+	}
+	out := map[string]any{"ok": o.OK}
+	if o.Detail != nil {
+		out["detail"] = o.Detail
+	}
+	if o.Error != "" {
+		out["error"] = o.Error
+	}
+	for k, v := range o.Private {
+		out[k] = v
+	}
+	return out
+}
+
+// withCeiling adds to an Odoo action the ceiling of the person whose word allowed it, from the
+// registry entry the gateway verified: the adapter holds the order's total to it, and refuses
+// a write that comes without one.
+func withCeiling(a policy.Action, adapter string, signer *registry.Entry) policy.Action {
+	if adapter != policy.OdooAdapter || signer == nil {
+		return a
+	}
+	params := map[string]any{}
+	for k, v := range a.Params {
+		params[k] = v
+	}
+	params[effects.OdooCeilingParam] = signer.CeilingEUR
+	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
 }
 
 // accessed writes an access record for every read of evidence (row 7.6.4): what
