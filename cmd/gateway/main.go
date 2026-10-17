@@ -894,8 +894,8 @@ func (s *service) attachment(w http.ResponseWriter, r *http.Request) {
 	}
 	step, err := strconv.Atoi(r.URL.Query().Get("step"))
 	name := r.URL.Query().Get("name")
-	if err != nil || (name != "premises" && name != "action" && name != "outcome" && name != "grant") {
-		writeJSON(w, 400, map[string]any{"error": "step must be a number and name one of premises, action, outcome, grant"})
+	if err != nil || (name != "premises" && name != "action" && name != "outcome" && name != "grant" && name != "capability") {
+		writeJSON(w, 400, map[string]any{"error": "step must be a number and name one of premises, action, outcome, grant, capability"})
 		return
 	}
 	var data any
@@ -903,6 +903,13 @@ func (s *service) attachment(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
+	}
+	// A capability is served only when it is a passkey word (wa1) with its chain: what a
+	// receipt needs to show who allowed the act. Other tokens stay beside the record unserved.
+	if found && name == "capability" {
+		kept, _ := data.(map[string]any)
+		tok, _ := kept["capability"].(string)
+		found = strings.HasPrefix(tok, "wa1.")
 	}
 	if !found {
 		writeJSON(w, 404, map[string]any{"error": "no such attachment"})
