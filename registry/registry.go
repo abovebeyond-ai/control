@@ -43,9 +43,12 @@ type Entry struct {
 	Role         string   `json:"role"`
 	Kinds        []string `json:"kinds"`
 	CeilingEUR   int64    `json:"ceiling_eur"` // the highest order total this holder may put a word to
-	MayDelegate  bool     `json:"may_delegate"`
-	IssuedAt     int64    `json:"iat"`
-	Expires      int64    `json:"exp"`
+	// DailyEUR, when set, is the most the orders this holder puts a word to may add up to in one
+	// day (Europe/Brussels); absent, only the ceiling per order holds.
+	DailyEUR    int64 `json:"daily_eur,omitempty"`
+	MayDelegate bool  `json:"may_delegate"`
+	IssuedAt    int64 `json:"iat"`
+	Expires     int64 `json:"exp"`
 }
 
 // JWK is a public key as a JSON Web Key: {"kty":"OKP","crv":"Ed25519","x"} or
@@ -125,8 +128,9 @@ func Parse(token string) (Entry, []byte, []byte, error) {
 // VerifyChain holds a chain, root first, to the organisation's pinned root key and to the
 // narrowing rule, and returns its entries; the last is the one whose holder speaks. Every
 // entry must be in date, signed by its parent's key, belong to one organisation, and give no
-// more than its parent: kinds a subset, a ceiling and an end no higher, and only a parent that
-// may delegate signs children.
+// more than its parent: kinds a subset, a ceiling, a daily allowance and an end no higher, and
+// only a parent that may delegate signs children. A parent with a daily allowance gives none
+// wider, and no child goes without one under it.
 func VerifyChain(chain []string, roots map[string]ed25519.PublicKey, now time.Time) ([]Entry, error) {
 	if len(chain) == 0 {
 		return nil, errors.New("no registry chain")
@@ -192,12 +196,18 @@ func VerifyChain(chain []string, roots map[string]ed25519.PublicKey, now time.Ti
 			if e.CeilingEUR > parent.CeilingEUR {
 				return nil, fmt.Errorf("registry entry %s has a ceiling of %d EUR, above the %d EUR of %s", e.ID, e.CeilingEUR, parent.CeilingEUR, parent.ID)
 			}
+			if parent.DailyEUR > 0 && (e.DailyEUR == 0 || e.DailyEUR > parent.DailyEUR) {
+				return nil, fmt.Errorf("registry entry %s has a daily allowance of %d EUR, wider than the %d EUR of %s", e.ID, e.DailyEUR, parent.DailyEUR, parent.ID)
+			}
 			if e.Expires > parent.Expires {
 				return nil, fmt.Errorf("registry entry %s ends after %s does", e.ID, parent.ID)
 			}
 		}
 		if e.CeilingEUR < 0 {
 			return nil, fmt.Errorf("registry entry %s has a negative ceiling", e.ID)
+		}
+		if e.DailyEUR < 0 {
+			return nil, fmt.Errorf("registry entry %s has a negative daily allowance", e.ID)
 		}
 		if !ed25519.Verify(signer, raw, sig) {
 			return nil, fmt.Errorf("registry entry %s is not signed by its parent %s", e.ID, e.Parent)

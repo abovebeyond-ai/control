@@ -150,3 +150,33 @@ func TestAnEntryInAnotherFormIsRefused(t *testing.T) {
 		t.Fatal("a point off the curve must be refused")
 	}
 }
+
+// A daily allowance only narrows down a chain: a parent without one puts no bound, a parent
+// with one gives none wider and no child goes without one under it.
+func TestADailyAllowanceOnlyNarrows(t *testing.T) {
+	root := ed25519.NewKeyFromSeed([]byte("acme-root-seed-acme-root-seed-32"))
+	tom := ed25519.NewKeyFromSeed([]byte("tom-seed-tom-seed-tom-seed-tom-3"))
+	_, pk := ec(t)
+	roots := map[string]ed25519.PublicKey{"acme": root.Public().(ed25519.PublicKey)}
+	kinds := []string{"odoo.order_draft"}
+	director := Entry{ID: "acme#tom", Org: "acme", Parent: "acme", Holder: okp(tom.Public().(ed25519.PublicKey)), Role: "director", Kinds: kinds, CeilingEUR: 25000, MayDelegate: true, IssuedAt: now.Unix() - 100, Expires: now.Unix() + 86400*30}
+	buyer := Entry{ID: "acme#shane", Org: "acme", Parent: "acme#tom", Holder: pk, Role: "buyer", Kinds: kinds, CeilingEUR: 5000, IssuedAt: now.Unix() - 50, Expires: now.Unix() + 86400*7}
+	check := func(d, b int64) error {
+		dd, bb := director, buyer
+		dd.DailyEUR, bb.DailyEUR = d, b
+		_, err := VerifyChain([]string{issue(t, dd, root), issue(t, bb, tom)}, roots, now)
+		return err
+	}
+	for _, c := range []struct {
+		director, buyer int64
+		ok              bool
+	}{{0, 0, true}, {0, 7500, true}, {20000, 7500, true}, {20000, 20000, true}, {20000, 25000, false}, {20000, 0, false}, {0, -1, false}} {
+		if err := check(c.director, c.buyer); (err == nil) != c.ok {
+			t.Errorf("director %d, buyer %d: %v", c.director, c.buyer, err)
+		}
+	}
+	entries, err := VerifyChain([]string{issue(t, director, root), issue(t, func() Entry { b := buyer; b.DailyEUR = 7500; return b }(), tom)}, roots, now)
+	if err != nil || entries[1].DailyEUR != 7500 {
+		t.Fatalf("%v %+v", err, entries)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -313,4 +314,105 @@ func TestAnOrgGrantNeedsItsRootAndParty(t *testing.T) {
 func mustJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
+}
+
+// A buyer with a daily allowance: the first draft fits and is counted, the record names the
+// allowance and the day as it stood; the second would take the day over and Odoo is not asked
+// to create it. The day's sum is kept in the store, so a gateway started again knows it.
+func TestADailyAllowanceHoldsAcrossDrafts(t *testing.T) {
+	var mu sync.Mutex
+	creates := 0
+	odoo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch strings.TrimPrefix(r.URL.Path, "/json/2/") {
+		case "product.product/read":
+			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Corner Desk","standard_price":600.0,"purchase_ok":true}]`))
+		case "purchase.order/create":
+			creates++
+			_, _ = w.Write([]byte(`[13]`))
+		case "purchase.order/read":
+			_, _ = w.Write([]byte(`[{"id":13,"name":"P00013","state":"draft","amount_total":1200.0,"currency_id":[1,"EUR"],"company_id":[1,"Acme"],"order_line":[30]}]`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer odoo.Close()
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(201) }))
+	defer relay.Close()
+
+	now := time.Now()
+	root := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0xac}, 32))
+	tom := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x70}, 32))
+	shane, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kinds := policy.Builtin.Of(policy.OdooAdapter)
+	tomTok, _ := registry.Issue(registry.Entry{ID: "acme#tom", Org: "acme", Parent: "acme", Holder: registry.JWK{Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(tom.Public().(ed25519.PublicKey))},
+		Role: "director", Kinds: kinds, CeilingEUR: 25000, MayDelegate: true, IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, root)
+	shaneTok, _ := registry.Issue(registry.Entry{ID: "acme#shane", Org: "acme", Parent: "acme#tom", Holder: p256JWK(shane), Role: "buyer", Kinds: kinds,
+		CeilingEUR: 5000, DailyEUR: 2000, IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, tom)
+	chain := []string{tomTok, shaneTok}
+
+	dir := t.TempDir()
+	secrets := filepath.Join(dir, "secrets")
+	_ = os.MkdirAll(secrets, 0o700)
+	_ = os.WriteFile(filepath.Join(secrets, "odoo-key-acme"), []byte("odoo-secret\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	agent := "did:web:bextrust.abovebeyond.ai:acme#procurement-agent"
+	issuer := "https://gate.example/control"
+	s := &service{key: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32)), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{},
+		cfg: config{Issuer: issuer, Store: filepath.Join(dir, "store"), Secrets: secrets, RelayURL: relay.URL,
+			Orgs: map[string]string{"acme": hex.EncodeToString(root.Public().(ed25519.PublicKey))}, Passkey: odooParty,
+			Agents: map[string]struct {
+				Grant policy.Grant `json:"grant"`
+			}{agent: {Grant: policy.Grant{Principal: "acme", Kinds: kinds, Resources: []string{"odoo:acme/*"}, Org: "acme", Asks: "acme#shane"}}}}}
+	s.effects.Add(effects.Odoo{SecretsDir: secrets, Instances: map[string]effects.OdooInstance{"acme": {Base: odoo.URL, DB: "acme"}}})
+
+	draft := policy.Action{Kind: "odoo.order_draft", Resource: "odoo:acme/purchase.order", Params: map[string]any{"partner_id": float64(8), "lines": []any{map[string]any{"product_id": float64(19), "qty": float64(2)}}}}
+	approve := func() map[string]any {
+		t.Helper()
+		raw, _ := json.Marshal(submitRequest{Agent: agent, Action: draft})
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var asked map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &asked)
+		payload, _ := base64.RawURLEncoding.DecodeString(asked["payload"].(string))
+		id := asked["pending"].(string)
+		body, _ := json.Marshal(map[string]any{"capability": signWord(t, shane, payload), "chain": chain})
+		req := httptest.NewRequest("POST", "/v1/pending/x/word", bytes.NewReader(body))
+		req.SetPathValue("id", id)
+		rec = httptest.NewRecorder()
+		s.word(rec, req)
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+
+	out := approve()
+	detail := out["effect"].(map[string]any)["detail"].(map[string]any)
+	if out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true || detail["daily_eur"] != float64(2000) || detail["spent_today_eur"] != "1200.00" {
+		t.Fatalf("%v", out)
+	}
+	records, _ := store.Records(agent)
+	cc := records[int(out["step"].(float64))].Claims()["control_chain"].(map[string]any)
+	if fmt.Sprint(cc["daily_eur"]) != "2000" || cc["spent_today_eur"] != "0.00" || fmt.Sprint(cc["ceiling_eur"]) != "5000" {
+		t.Fatalf("the record names the allowance and the day before the act: %v", cc)
+	}
+
+	out = approve()
+	if out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != false || !strings.Contains(out["effect"].(map[string]any)["error"].(string), "over acme#shane's daily allowance: EUR 2400.00 of 2000.00") {
+		t.Fatalf("the second draft goes over the day: %v", out)
+	}
+	records, _ = store.Records(agent)
+	if cc := records[int(out["step"].(float64))].Claims()["control_chain"].(map[string]any); cc["spent_today_eur"] != "1200.00" {
+		t.Fatalf("the day as it stood: %v", cc)
+	}
+	again, _ := log.Open(filepath.Join(dir, "store"))
+	if n, _ := again.SpentOn("acme#shane", log.AllowanceDay(time.Now())); n != 120000 {
+		t.Fatalf("the day is kept: %d", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if creates != 1 {
+		t.Fatalf("Odoo created %d orders; one fits the day", creates)
+	}
 }

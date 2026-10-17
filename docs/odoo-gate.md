@@ -23,6 +23,7 @@ token (`registry` package): the entry as canonical JSON, signed by the parent.
 | `holder` | the child's public key as a JWK: OKP/Ed25519 to sign entries, EC/P-256 for a passkey |
 | `credential_id` | the passkey's id, for the relay; the gate checks the key, not the id |
 | `role`, `kinds`, `ceiling_eur`, `may_delegate`, `iat`, `exp` | what the holder may do, up to which order total in whole euros, until when |
+| `daily_eur` (optional) | the most the orders under the holder's word may add up to in one day (Europe/Brussels), in whole euros |
 
 The gateway holds a chain, root first, to these rules (`registry.VerifyChain`):
 
@@ -31,6 +32,7 @@ The gateway holds a chain, root first, to these rules (`registry.VerifyChain`):
   that entry's Ed25519 key;
 - only a parent with `may_delegate` signs children, so a passkey holder signs none;
 - a child's kinds are a subset of its parent's, its ceiling and its end no higher;
+- under a parent with a `daily_eur`, a child has one too, no higher; a parent without one puts no bound;
 - every entry is in date, its id lies under its org, no entry appears twice, at most eight;
 - the payload bytes are canonical JSON and carry no field the contract does not name, so the
   bytes Acme signed have one reading.
@@ -105,6 +107,15 @@ addition from the verified entry (`ceiling_eur`), never the hand's, and it is co
 order's `amount_total` (taxes included) in the instance's currency; an order in another
 currency is refused. A write that arrives at the adapter without a ceiling is refused.
 
+When the signer's entry has a `daily_eur`, the gateway also hands the adapter what the signer's
+orders came to today (`spent_today_cents`, from `allowance.jsonl` in its store) and holds the
+read, the check and the add under one lock. A draft counts with its `amount_total`, a quantity
+change with how much the total moved (going down counts back); a cancel or a request for approval
+adds nothing. What would take the day over is refused the way the ceiling is: at cost before
+creating, and cancelled or set back when Odoo's own total goes over ("over acme#shane's daily
+allowance: EUR 6519.00 of 5000.00 would be used"). The effect's detail carries `daily_eur` and
+`spent_today_eur` after the act.
+
 ## Waiting for a word
 
 A write that needs a word and comes without one is judged against the grant first, without a
@@ -135,7 +146,8 @@ minute). A decided write answers 409 to a second word.
 Every outcome, the word, the refusal and the expiry, is three records like any action: the
 request, the effect, the result. A request under a word names the person as `initiating_user`
 (`acme#elise`), the word in `control_capability` and `control_task`, the chain in
-`control_chain` (ids, digest, role and ceiling of the entry that spoke), and a spent word in
+`control_chain` (ids, digest, role and ceiling of the entry that spoke, and its `daily_eur` with
+`spent_today_eur` as the day stood before the act when it has one), and a spent word in
 `control_word`. The word and its chain are kept beside the record (`capability` attachment), so
 a stranger can replay both against Acme's root key. A refusal by the person carries
 `control_refused` with who the relay says refused.

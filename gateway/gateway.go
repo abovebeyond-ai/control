@@ -472,7 +472,8 @@ func (g *Gateway) heldWord(p capability.Payload, action policy.Action, merged ma
 
 // orgWord verifies a passkey capability and the registry chain behind it, for a grant that
 // names an organisation, and adds what it found to the record: the capability's digest, the
-// task, and the chain by its ids and digest with the role and ceiling of the entry that spoke.
+// task, and the chain by its ids and digest with the role and ceiling of the entry that spoke,
+// and its daily allowance with what was spent against it today when it has one.
 func (g *Gateway) orgWord(run string, action policy.Action, token string, chain []string, merged map[string]any) (capability.Payload, *registry.Entry, string) {
 	org := g.cfg.Policy.Grant.Org
 	var p capability.Payload
@@ -515,7 +516,17 @@ func (g *Gateway) orgWord(run string, action policy.Action, token string, chain 
 	}
 	merged["control_capability"] = capability.Digest(token)
 	merged["control_task"] = map[string]any{"playbook": p.Task.Playbook, "project": p.Task.Project, "jti": p.ID, "exp": p.Expires, "iss": p.Issuer}
-	merged["control_chain"] = map[string]any{"entries": registry.IDs(entries), "digest": registry.Digest(chain), "role": leaf.Role, "ceiling_eur": leaf.CeilingEUR}
+	chained := map[string]any{"entries": registry.IDs(entries), "digest": registry.Digest(chain), "role": leaf.Role, "ceiling_eur": leaf.CeilingEUR}
+	if leaf.DailyEUR > 0 {
+		// The day as it stood before this act; the effect record says where it ends up.
+		spent, err := g.cfg.Store.SpentOn(leaf.ID, log.AllowanceDay(g.cfg.Clock()))
+		if err != nil {
+			return p, nil, "the day's allowance of " + leaf.ID + " could not be read: " + err.Error()
+		}
+		chained["daily_eur"] = leaf.DailyEUR
+		chained["spent_today_eur"] = fmt.Sprintf("%d.%02d", spent/100, spent%100)
+	}
+	merged["control_chain"] = chained
 	if !containsString(leaf.Kinds, action.Kind) {
 		return p, nil, "the registry gives " + leaf.ID + " no " + action.Kind
 	}

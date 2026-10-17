@@ -56,6 +56,34 @@ const OdooAgentParam = "odoo_agent"
 // whole euros, from the registry entry it verified.
 const OdooCeilingParam = "ceiling_eur"
 
+// The parameters the gateway adds when the signer's entry carries a daily allowance: the
+// allowance in whole euros, what the signer's orders already came to today in cents, and who
+// the signer is, for the refusal to name. Without them only the ceiling per order holds.
+const (
+	OdooDailyParam  = "daily_eur"
+	OdooSpentParam  = "spent_today_cents"
+	OdooSignerParam = "signer"
+)
+
+// limits are what an order's total is held to: the signer's ceiling per order and, when the
+// entry has one, the day's allowance and what was spent against it already.
+type limits struct {
+	ceiling, daily, spent int64
+	signer                string
+}
+
+// day says why adding cents to the signer's day goes over the allowance, or "".
+func (l limits) day(add int64) string {
+	if l.daily <= 0 || add <= 0 || l.spent+add <= l.daily*100 {
+		return ""
+	}
+	who := l.signer
+	if who == "" {
+		who = "the signer"
+	}
+	return fmt.Sprintf("over %s's daily allowance: EUR %s of %s would be used", who, money(l.spent+add), money(l.daily*100))
+}
+
 // key is the Odoo API key an action goes with: the agent's own user's when the secrets hold one,
 // else the instance's. The agent's name is the gateway's addition, never the hand's, and is
 // held to letters, digits and dashes before it becomes part of a file name.
@@ -111,12 +139,18 @@ func (o Odoo) Perform(ctx context.Context, a policy.Action) Outcome {
 	if !ok || ceiling < 0 {
 		return Outcome{Error: "an Odoo write needs the ceiling of the person whose word it carries, and none came with it"}
 	}
+	lim := limits{ceiling: ceiling}
+	if daily, ok := wholeParam(a.Params, OdooDailyParam); ok && daily > 0 {
+		lim.daily = daily
+		lim.spent, _ = wholeParam(a.Params, OdooSpentParam)
+		lim.signer, _ = a.Params[OdooSignerParam].(string)
+	}
 	var out Outcome
 	switch a.Kind {
 	case "odoo.order_draft":
-		out = c.draft(ctx, a.Params, ceiling)
+		out = c.draft(ctx, a.Params, lim)
 	case "odoo.order_line_set":
-		out = c.lineSet(ctx, a.Params, ceiling)
+		out = c.lineSet(ctx, a.Params, lim)
 	case "odoo.order_cancel":
 		out = c.cancel(ctx, a.Params)
 	case "odoo.order_request_approval":
@@ -127,6 +161,10 @@ func (o Odoo) Perform(ctx context.Context, a policy.Action) Outcome {
 	if out.Detail != nil {
 		out.Detail["resource"] = a.Resource
 		out.Detail[OdooCeilingParam] = ceiling
+		if lim.daily > 0 {
+			out.Detail[OdooDailyParam] = lim.daily
+			out.Detail["spent_today_eur"] = money(lim.spent + out.Counted)
+		}
 	}
 	return out
 }
@@ -250,7 +288,8 @@ func (o order) detail() map[string]any {
 // ceiling before anything is created; then the order in draft, and its total as Odoo computed
 // it (from the supplier's price) held to the ceiling again. A draft Odoo priced above it is
 // cancelled at once, and the outcome says so.
-func (c odooClient) draft(ctx context.Context, params map[string]any, ceiling int64) Outcome {
+func (c odooClient) draft(ctx context.Context, params map[string]any, lim limits) Outcome {
+	ceiling := lim.ceiling
 	partner, _ := wholeParam(params, "partner_id")
 	lines, _ := params["lines"].([]any)
 	productIDs := make([]int64, 0, len(lines))
@@ -284,6 +323,9 @@ func (c odooClient) draft(ctx context.Context, params map[string]any, ceiling in
 	if estimate > ceiling*100 {
 		return Outcome{Error: fmt.Sprintf("the order comes to %s at the products' cost, above the signer's ceiling of %d; nothing was created", money(estimate), ceiling)}
 	}
+	if reason := lim.day(estimate); reason != "" {
+		return Outcome{Error: "at the products' cost the order is " + reason + "; nothing was created"}
+	}
 	var created []int64
 	if _, err := c.call(ctx, policy.OdooOrderModel, "create", map[string]any{"vals_list": []any{map[string]any{"partner_id": partner, "order_line": commands}}}, &created); err != nil {
 		return Outcome{Error: err.Error()}
@@ -295,7 +337,11 @@ func (c odooClient) draft(ctx context.Context, params map[string]any, ceiling in
 	if err != nil {
 		return Outcome{Error: fmt.Sprintf("purchase order %d was created, and reading it back failed: %v", created[0], err)}
 	}
-	if reason := c.held(o.Total, o.Currency, ceiling); reason != "" {
+	reason := c.held(o.Total, o.Currency, ceiling)
+	if day := lim.day(o.Total); reason == "" && day != "" {
+		reason = "is " + day
+	}
+	if reason != "" {
 		_, cerr := c.call(ctx, policy.OdooOrderModel, "button_cancel", map[string]any{"ids": []int64{o.ID}}, nil)
 		if cerr != nil {
 			return Outcome{Error: fmt.Sprintf("%s was created as a draft and %s; cancelling it failed: %v", o.Name, reason, cerr), Detail: o.detail()}
@@ -303,13 +349,14 @@ func (c odooClient) draft(ctx context.Context, params map[string]any, ceiling in
 		o.State = "cancel"
 		return Outcome{Error: fmt.Sprintf("%s was created as a draft and %s, so it was cancelled", o.Name, reason), Detail: o.detail()}
 	}
-	return Outcome{OK: true, Detail: o.detail()}
+	return Outcome{OK: true, Detail: o.detail(), Counted: o.Total}
 }
 
 // lineSet is odoo.order_line_set: one line's quantity on a draft order, the new total
 // estimated at the line's own price and refused above the ceiling, then held again as Odoo
 // computed it, and set back when Odoo's price for the new quantity crosses it.
-func (c odooClient) lineSet(ctx context.Context, params map[string]any, ceiling int64) Outcome {
+func (c odooClient) lineSet(ctx context.Context, params map[string]any, lim limits) Outcome {
+	ceiling := lim.ceiling
 	id, _ := wholeParam(params, "order")
 	line, _ := wholeParam(params, "line")
 	q, _ := wholeParam(params, "qty")
@@ -339,6 +386,9 @@ func (c odooClient) lineSet(ctx context.Context, params map[string]any, ceiling 
 	if reason := c.held(estimate, o.Currency, ceiling); reason != "" {
 		return Outcome{Error: "with that quantity " + reason + "; nothing was changed"}
 	}
+	if reason := lim.day(estimate - o.Total); reason != "" {
+		return Outcome{Error: "with that quantity the order is " + reason + "; nothing was changed"}
+	}
 	setQty := func(n any) error {
 		_, err := c.call(ctx, "purchase.order.line", "write", map[string]any{"ids": []int64{line}, "vals": map[string]any{"product_qty": n}}, nil)
 		return err
@@ -350,7 +400,13 @@ func (c odooClient) lineSet(ctx context.Context, params map[string]any, ceiling 
 	if err != nil {
 		return Outcome{Error: fmt.Sprintf("the quantity on %s was set, and reading the order back failed: %v", o.Name, err)}
 	}
-	if reason := c.held(after.Total, after.Currency, ceiling); reason != "" {
+	reason := c.held(after.Total, after.Currency, ceiling)
+	if reason == "" {
+		if day := lim.day(after.Total - o.Total); day != "" {
+			reason = "the order is " + day
+		}
+	}
+	if reason != "" {
 		if err := setQty(was); err != nil {
 			return Outcome{Error: fmt.Sprintf("the quantity on %s was set and %s; setting it back failed: %v", o.Name, reason, err), Detail: after.detail()}
 		}
@@ -358,7 +414,7 @@ func (c odooClient) lineSet(ctx context.Context, params map[string]any, ceiling 
 	}
 	d := after.detail()
 	d["line"], d["qty"], d["was"] = line, q, number(was)
-	return Outcome{OK: true, Detail: d}
+	return Outcome{OK: true, Detail: d, Counted: after.Total - o.Total}
 }
 
 // cancel is odoo.order_cancel: only an order nobody has received or approved, a draft or one

@@ -32,6 +32,9 @@ type Outcome struct {
 	// client's system, which the open attachment endpoint would otherwise serve to anyone who
 	// can reach the gateway. Detail then carries their digest, so the record still names them.
 	Private map[string]any `json:"-"`
+	// Counted is what an Odoo write added to its signer's day, in cents (negative when an order
+	// went down): the gateway adds it to the day's sum once the write stands.
+	Counted int64 `json:"-"`
 }
 
 // Adapter performs one kind of effect.

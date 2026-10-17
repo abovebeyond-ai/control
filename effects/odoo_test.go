@@ -391,3 +391,44 @@ func TestOdooKeyPerAgent(t *testing.T) {
 		}
 	}
 }
+
+// With a daily allowance, a draft or a larger quantity that takes the signer's day over it is
+// refused, named by the signer; what stands is counted, and the detail says how far the day is.
+func TestAnOrderIsHeldToTheSignersDailyAllowance(t *testing.T) {
+	f := newFakeOdoo()
+	o := odooFor(t, f)
+	day := func(spent int64) map[string]any {
+		return map[string]any{OdooCeilingParam: int64(5000), OdooDailyParam: int64(1000), OdooSpentParam: spent, OdooSignerParam: "acme#shane"}
+	}
+	draft := func(p, q float64, spent int64) Outcome {
+		params := day(spent)
+		params["partner_id"], params["lines"] = float64(8), []any{map[string]any{"product_id": p, "qty": q}}
+		return o.Perform(context.Background(), act("odoo.order_draft", params))
+	}
+	// 3 chairs cost 360 and Odoo prices them at 391.50; 700 already spent today is over at cost.
+	if out := draft(31, 3, 70000); out.OK || !strings.Contains(out.Error, "over acme#shane's daily allowance: EUR 1060.00 of 1000.00") || f.wrote() {
+		t.Fatalf("over the day at cost, nothing may be created: %+v %v", out, f.calls)
+	}
+	if out := draft(31, 3, 62000); out.OK || !strings.Contains(out.Error, "is over acme#shane's daily allowance: EUR 1011.50 of 1000.00") || !strings.Contains(out.Error, "so it was cancelled") {
+		t.Fatalf("over the day at Odoo's price, the draft is cancelled: %+v", out)
+	}
+	out := draft(31, 3, 50000)
+	if !out.OK || out.Counted != 39150 || out.Detail["spent_today_eur"] != "891.50" || out.Detail[OdooDailyParam] != int64(1000) {
+		t.Fatalf("%+v", out)
+	}
+	// A quantity change counts by how much the order moved.
+	set := func(qty float64, spent int64) Outcome {
+		params := day(spent)
+		params["order"], params["line"], params["qty"] = float64(7), float64(15), qty
+		return o.Perform(context.Background(), act("odoo.order_line_set", params))
+	}
+	if out := set(8, 70000); out.OK || !strings.Contains(out.Error, "daily allowance") || f.lines[15].qty != 5 {
+		t.Fatalf("over the day with the new quantity: %+v", out)
+	}
+	if out := set(8, 0); !out.OK || out.Counted != 39150 || out.Detail["spent_today_eur"] != "391.50" {
+		t.Fatalf("%+v", out)
+	}
+	if out := set(2, 99000); !out.OK || out.Counted != -78300 {
+		t.Fatalf("going down is never over the day: %+v", out)
+	}
+}

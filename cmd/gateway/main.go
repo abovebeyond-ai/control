@@ -169,6 +169,8 @@ type service struct {
 	// The writes waiting for a person's word (pending.go).
 	pendMu  sync.Mutex
 	pending map[string]*pendingWord
+	// allowMu holds a daily allowance's read, check and add together (settle).
+	allowMu sync.Mutex
 }
 
 func main() {
@@ -647,13 +649,34 @@ func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequ
 			// what nobody judged. The hand's parameters stay as recorded; this is
 			// the gateway's own addition, and the outcome names it.
 			kind := s.cfg.kinds()[req.Action.Kind]
-			o := adapter.Perform(ctx, withOdooAgent(withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer), kind.Adapter, req.Agent))
+			// A signer with a daily allowance: the day's sum is read, held and added under one
+			// lock, so two writes at once cannot both fit in what is left for one.
+			day, spent, dayErr := "", int64(0), error(nil)
+			if kind.Adapter == policy.OdooAdapter && v.Signer != nil && v.Signer.DailyEUR > 0 {
+				s.allowMu.Lock()
+				day = log.AllowanceDay(time.Now())
+				spent, dayErr = s.store.SpentOn(v.Signer.ID, day)
+			}
+			var o effects.Outcome
+			if dayErr != nil {
+				o = effects.Outcome{Error: "the day's allowance could not be read: " + dayErr.Error()}
+			} else {
+				o = adapter.Perform(ctx, withOdooAgent(withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer, spent), kind.Adapter, req.Agent))
+			}
 			cancel()
 			outcome = o
 			if o.OK {
 				effectReason = "effect performed"
 			} else {
 				effectReason = "effect failed: " + o.Error
+			}
+			if day != "" {
+				if o.OK && o.Counted != 0 {
+					if err := s.store.AddSpent(v.Signer.ID, day, o.Counted, v.ActionID); err != nil {
+						effectReason += "; the day's allowance could not be updated: " + err.Error()
+					}
+				}
+				s.allowMu.Unlock()
 			}
 		}
 	}
@@ -698,8 +721,9 @@ func handed(outcome any) any {
 
 // withCeiling adds to an Odoo action the ceiling of the person whose word allowed it, from the
 // registry entry the gateway verified: the adapter holds the order's total to it, and refuses
-// a write that comes without one.
-func withCeiling(a policy.Action, adapter string, signer *registry.Entry) policy.Action {
+// a write that comes without one. When the entry has a daily allowance, that and what the
+// signer's orders came to today (cents) come along, and the adapter holds the day to it too.
+func withCeiling(a policy.Action, adapter string, signer *registry.Entry, spentToday int64) policy.Action {
 	if adapter != policy.OdooAdapter || signer == nil {
 		return a
 	}
@@ -708,6 +732,11 @@ func withCeiling(a policy.Action, adapter string, signer *registry.Entry) policy
 		params[k] = v
 	}
 	params[effects.OdooCeilingParam] = signer.CeilingEUR
+	if signer.DailyEUR > 0 {
+		params[effects.OdooDailyParam] = signer.DailyEUR
+		params[effects.OdooSpentParam] = spentToday
+		params[effects.OdooSignerParam] = signer.ID
+	}
 	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
 }
 
