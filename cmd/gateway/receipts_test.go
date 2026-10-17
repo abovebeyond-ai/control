@@ -318,6 +318,23 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 		t.Fatalf("%v %v", p["acme#shane"]["seq"], p["acme#obs-leiestad"])
 	}
 	checkInclusion(hop)
+	// SEALED_SAMPLE_OUT=<path> writes these plaintexts for the anchor's checker to read
+	// (gate-demo-box/anchor/verify, TestControlsSealedReceiptsCheckOut).
+	if path := os.Getenv("SEALED_SAMPLE_OUT"); path != "" {
+		var full, summary json.RawMessage
+		for _, e := range got {
+			raw, _ := openReceipt(keys[e.Holder], e)
+			switch e.Holder {
+			case "acme#obs-hopperij":
+				full = raw
+			case "acme#obs-leiestad":
+				summary = raw
+			}
+		}
+		out, _ := json.MarshalIndent(map[string]any{"about": "Two opened receipts from control's cmd/gateway/receipts_test.go: a supplier's full one and an insurer's summary.",
+			"gate_key": hex.EncodeToString(gateKey.Public().(ed25519.PublicKey)), "root": hex.EncodeToString(root.Public().(ed25519.PublicKey)), "full": full, "summary": summary}, "", "  ")
+		_ = os.WriteFile(path, append(out, '\n'), 0o644)
+	}
 	if left, _ := filepath.Glob(filepath.Join(s.outboxDir(), "*.json")); len(left) != 1 || filepath.Base(left[0]) != "seq.json" {
 		t.Fatalf("the outbox keeps only its counts once delivered: %v", left)
 	}
