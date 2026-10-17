@@ -203,11 +203,13 @@ func (s *service) flushReceipts() {
 		}
 		status, err := s.postReceipt(raw)
 		switch {
-		case err != nil || status >= 500:
-			fmt.Fprintf(os.Stderr, "receipt: %s for %s not delivered (%d %v), tried again later\n", e.ID, e.Holder, status, err)
-			return // the relay is away; the rest waits for the next round
-		case status/100 == 2:
+		case err == nil && status/100 == 2:
 			_ = os.Remove(path)
+		case err != nil || (status != 400 && status != 413 && status != 422):
+			// Away, or not taking receipts yet (a relay without the mailbox answers 404): the
+			// rest waits for the next round.
+			fmt.Fprintf(os.Stderr, "receipt: %s for %s not delivered (%d %v), tried again later\n", e.ID, e.Holder, status, err)
+			return
 		default:
 			fmt.Fprintf(os.Stderr, "receipt: the relay refused %s for %s (%d), set aside\n", e.ID, e.Holder, status)
 			_ = os.Rename(path, path+".refused")
