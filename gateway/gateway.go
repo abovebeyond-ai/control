@@ -798,6 +798,18 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 // request. The verdict repeats the binding decision; the reason says what the phase
 // did. It folds nothing into the run's path: the request already counted.
 func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, principal, verdict, reason string, outcome any) Verdict {
+	return g.follow(run, actionID, phase, action, principal, verdict, reason, outcome, nil)
+}
+
+// Event writes one record of something the gateway itself underwent rather than an action a
+// hand proposed: control_event names it (provisioning, in Confidential Space), there is no
+// action id, so no request or effect is expected beside it, and its phase is a result, so the
+// checkpoint after it is anchored like an action's end.
+func (g *Gateway) Event(name string, action policy.Action, principal, reason string, outcome any) Verdict {
+	return g.follow("", "", PhaseResult, action, principal, "ALLOW", reason, outcome, map[string]any{"control_event": name})
+}
+
+func (g *Gateway) follow(run, actionID, phase string, action policy.Action, principal, verdict, reason string, outcome any, extra map[string]any) Verdict {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if phase != PhaseEffect && phase != PhaseResult {
@@ -831,7 +843,13 @@ func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, prin
 		"policy_bundle_hash": canonical.Tag(g.cfg.Policy.BundleHash()), "target_resource": action.Resource,
 		"canonical_snapshot_hash": canonical.Tag(snapshotDigest), "path_summary_hash": canonical.Tag(phi.Digest()),
 		"verdict": verdict, "reason": reason, "alg": "EdDSA",
-		"control_action": actionID, "control_phase": phase, "control_outcome": canonical.Tag(outcomeDigest),
+		"control_phase": phase, "control_outcome": canonical.Tag(outcomeDigest),
+	}
+	if actionID != "" {
+		claims["control_action"] = actionID
+	}
+	for k, v := range extra {
+		claims[k] = v
 	}
 	if run != "" {
 		claims["control_run"] = run

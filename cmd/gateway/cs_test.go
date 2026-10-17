@@ -193,7 +193,7 @@ func TestAGatewayInConfidentialSpaceIsProvisionedByTheOrgAndSaysSoInItsRecords(t
 		t.Fatalf("one record per provisioning, got %d", len(recs))
 	}
 	raw, _ := json.Marshal(recs[0])
-	if strings.Contains(string(raw), "provisioned-secret") || !strings.Contains(string(raw), `"control_action":"provision-`) {
+	if strings.Contains(string(raw), "provisioned-secret") || !strings.Contains(string(raw), `"control_event":"provision"`) || strings.Contains(string(raw), "control_action") {
 		t.Fatalf("the provisioning record: %s", raw)
 	}
 
@@ -283,5 +283,18 @@ func TestAClientTokenByItsHashGuardsSubmit(t *testing.T) {
 		if rec.Code != want {
 			t.Errorf("token %q: %d, want %d", tok, rec.Code, want)
 		}
+	}
+}
+
+func TestReceiptIDsNameTheLogInConfidentialSpace(t *testing.T) {
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, 32))
+	pub := hex.EncodeToString(key.Public().(ed25519.PublicKey))
+	soft := &service{key: key}
+	if got := soft.receiptID("did:web:x#a", 7); got != "did:web:x#a/7" {
+		t.Fatalf("software: %s", got)
+	}
+	cs := &service{key: key, cfg: config{Attestation: attestationCS}}
+	if got := cs.receiptID("did:web:x#a", 7); got != "did:web:x#a/"+pub[:16]+"/7" {
+		t.Fatalf("confidential space: %s", got)
 	}
 }

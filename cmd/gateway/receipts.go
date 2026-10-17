@@ -104,7 +104,7 @@ func (s *service) receipt(g *gateway.Gateway, req submitRequest, verdicts []gate
 		fmt.Fprintf(os.Stderr, "receipt: %s/%d has nobody to go to\n", req.Agent, last)
 		return
 	}
-	id := fmt.Sprintf("%s/%d", req.Agent, last)
+	id := s.receiptID(req.Agent, last)
 	at := time.Now().Unix()
 	effect := receiptEffect(outcome)
 	records := make([]any, len(verdicts))
@@ -655,4 +655,15 @@ func openReceipt(priv *ecdh.PrivateKey, e envelope) ([]byte, error) {
 func fileKey(holder, id, kid string) string {
 	sum := sha256.Sum256([]byte(holder + "\x00" + id + "\x00" + kid))
 	return hex.EncodeToString(sum[:12])
+}
+
+// receiptID names an action's receipt: "<agent>/<last step>". A gateway in Confidential Space
+// starts a new log with every new key, so its steps start at zero again; its ids name the log
+// too, "<agent>/<first 16 hex of the record key>/<last step>", or a receipt after a restart
+// would carry the id of an earlier one, and the relay and the phone keep the first they saw.
+func (s *service) receiptID(agent string, last int) string {
+	if s.cfg.Attestation == attestationCS {
+		return fmt.Sprintf("%s/%s/%d", agent, hex.EncodeToString(s.key.Public().(ed25519.PublicKey))[:16], last)
+	}
+	return fmt.Sprintf("%s/%d", agent, last)
 }

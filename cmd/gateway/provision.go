@@ -30,7 +30,6 @@ import (
 	"sync"
 
 	"github.com/abovebeyond-ai/control/canonical"
-	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/registry"
 )
@@ -241,9 +240,8 @@ func (s *service) provision(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		outcome := map[string]any{"files": names, "sealed_to": e.Kid, "by": e.Org, "envelope": canonical.Tag(canonical.SHA256([]byte(e.Enc + "." + e.CT)))}
-		v := g.Follow("", "provision-"+e.Kid, gateway.PhaseResult, policy.Action{Kind: "control.provision", Resource: "control:secrets",
-			Params: map[string]any{"files": names}}, s.cfg.Agents[agent].Grant.Principal, "ALLOW",
-			"provisioned in memory by an organisation that checked the attestation; no secret in this record", outcome)
+		v := g.Event("provision", policy.Action{Kind: "control.provision", Resource: "control:secrets", Params: map[string]any{"files": names}},
+			e.Org, "provisioned in memory by "+e.Org+" after checking the attestation; no secret in this record", outcome)
 		if v.Token != nil {
 			recorded[agent] = v.Step
 		}

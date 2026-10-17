@@ -237,7 +237,8 @@ signed by anyone else is ignored, so whoever serves the list can withhold one, n
   serves in Portal's format; until it does, a mandate ends at its `exp`.
 - **Revoking a registry entry** before its `exp`. A chain holds until its first entry ends.
 - **The passkey's signature counter** is not tracked; phone passkeys mostly send zero.
-- **Waiting writes survive no restart**: they live in memory. Nothing was judged for them; the
+- **Waiting writes survive no restart**: they live in memory. In Confidential Space nothing
+  does: the key, the log and the provisioned keys are new after every restart. Nothing was judged for them; the
   agent asks again.
 - **A refusal is not signed.** Refusing only keeps something from happening, so the relay's
   word is taken; the record says it is the relay's.
@@ -270,3 +271,54 @@ two-step approval) and gives the gateway its API key as `odoo-key-<instance>-<ag
 instance's user. Disabling an agent's user in Odoo stops that agent at Odoo too, whatever the gate
 does. People are never Odoo users of the gate: who allowed a write is in the record, and the
 irreversible steps happen in Odoo under each person's own login.
+
+## In Google Confidential Space
+
+Added on 17 October 2026, late: the gateway runs in Google Confidential Space on Intel TDX
+(`attestation: "confidential-space"`). The demo's `docs/contract.md` (The gate in Confidential
+Space) has the deployment; this is what the gateway does.
+
+Why not the plain TDX VM this repository's `deploy/gcp` runs: there the startup script is not
+measured, so whoever operates the VM could change what runs, and read the gateway's memory,
+without the quote changing. In Confidential Space the operator chooses the container image and
+nothing else; Google's launcher, boot chain and kernel are measured, there is no SSH, and Google
+Cloud Attestation signs a token naming the image digest. The image holds the binary and the
+configuration, so the digest covers the policy too.
+
+- **The key and the token** (`cmd/gateway/cs.go`). The record key is made in memory at start
+  and never written; each key writes its own log directory. The launcher (`POST /v1/token` on
+  `/run/container_launcher/teeserver.sock`, `token_type` OIDC, `audience` the issuer) gives a
+  token whose `eat_nonce` is the hex SHA-256 of the record key (`attest.KeyNonce`); a new one
+  every day, each kept by its digest. Records carry `submods.attestation` = platform
+  `GCP_INTEL_TDX`, software `CONFIDENTIAL_SPACE`, measurement `sha-256:<image digest>`,
+  `image_digest`, and `token` (the digest of the token in force); checkpoints carry the token's
+  digest under their signature.
+- **Checking it** (`attest.VerifyCS`, used by `attest.Verify` and `cmd/verify --expect-digest`):
+  RS256 under Google's keys from the OIDC discovery document at
+  `https://confidentialcomputing.googleapis.com/.well-known/openid-configuration`; `iss` that
+  host; `hwmodel` `GCP_INTEL_TDX`; `swname` `CONFIDENTIAL_SPACE`; `dbgstat`
+  `disabled-since-boot`; `submods.container.image_digest` the expected digest; `eat_nonce` (string
+  or array) containing the key's nonce. Claim names as Google documents them
+  (confidential-space/docs/reference/token-claims), and as the first live token showed.
+- **Nothing secret in the environment.** The launcher copies the container's environment into the
+  token (`submods.container.env`), which is public. So the client token comes as its SHA-256
+  (`client_token_sha256`, `CLIENT_TOKEN_SHA256`), and the gateway refuses to start in this mode
+  with a client token in the clear. (Found on the first deploy, which passed the tokens
+  themselves; they were replaced.)
+- **Attested provisioning** (`cmd/gateway/provision.go`). `GET /v1/provision-key` answers a P-256
+  key made in memory, signed by the record key; `POST /v1/provision` takes an HPKE envelope (the
+  receipts' suite, `info` "bextrust provision v1") of named files, signed by the org's pinned root
+  (`odoo-key-*` only) or by a configured provisioner (`provisioners`, its key and its files: the
+  relay's operator with `relay-token`). The files stay in memory; the Odoo adapter reads them
+  first and, in this mode, nothing else (`effects.Odoo.OnlyProvisioned`); until they come the
+  gateway answers Odoo work with 503 and the plain reason. Each provisioning writes one record,
+  `control_event: "provision"` with no action id, naming the files, the key sealed to, the signer
+  and the envelope's digest, never a secret.
+- **The relay's door.** `relay_token` (or the provisioned `relay-token`) goes as a bearer token on
+  every relay call: requests, receipts, chains, observers, revocations.
+- **Receipt ids** name the log: `<agent>/<first 16 hex of the record key>/<last step>`, since a
+  new key starts at step 0 and the relay and the phone keep the first receipt of an id.
+
+What a restart costs: a new key, an empty log, the daily allowance's sum and the receipts'
+sequence numbers start again, waiting writes are gone, and the organisation must provision
+again and sign its gate entry for the new key. The anchor follows the new key on Google's word.
