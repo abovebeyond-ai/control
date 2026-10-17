@@ -84,6 +84,10 @@ type Config struct {
 	// capability holds to its signature and expiry on its own; this is what lets ending a
 	// word at Portal reach an action the hand already holds a token for.
 	Revoked func(jti string) (since string, revoked bool)
+	// RevokedEntry answers the signed revocation (rv1) of a registry entry by its digest, or "":
+	// a person who enrolled a new phone has the old entry revoked by whoever signed it, so the
+	// old passkey stops speaking even where a relay still serves its entry.
+	RevokedEntry func(digest string) string
 	// Orgs are the root keys pinned per organisation, for a grant that names one: the start of
 	// every registry chain (docs/odoo-gate.md).
 	Orgs map[string]ed25519.PublicKey
@@ -500,6 +504,9 @@ func (g *Gateway) orgWord(run string, action policy.Action, token string, chain 
 	entries, err := registry.VerifyChain(chain, g.cfg.Orgs, g.cfg.Clock())
 	if err != nil {
 		return p, nil, err.Error()
+	}
+	if why := registry.Revoked(chain, entries, g.cfg.Orgs, g.cfg.RevokedEntry); why != "" {
+		return p, nil, why
 	}
 	leaf := entries[len(entries)-1]
 	if leaf.Org != org {

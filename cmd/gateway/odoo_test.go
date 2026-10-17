@@ -416,3 +416,63 @@ func TestADailyAllowanceHoldsAcrossDrafts(t *testing.T) {
 		t.Fatalf("Odoo created %d orders; one fits the day", creates)
 	}
 }
+
+// Shane enrolled a new phone: Tom revoked the entry of the old passkey. A mandate the old passkey
+// signed no longer reads, whatever chain the agent presents; one signed by the new passkey does.
+func TestARevokedPasskeyNoLongerSpeaks(t *testing.T) {
+	odoo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":7,"name":"P00007","state":"draft","amount_total":12.0}]`))
+	}))
+	defer odoo.Close()
+	now := time.Now()
+	root := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0xac}, 32))
+	tom := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x70}, 32))
+	oldPhone, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	newPhone, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kinds := policy.Builtin.Of(policy.OdooAdapter)
+	tomTok, _ := registry.Issue(registry.Entry{ID: "acme#tom", Org: "acme", Parent: "acme", Holder: registry.JWK{Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(tom.Public().(ed25519.PublicKey))},
+		Role: "director", Kinds: kinds, CeilingEUR: 25000, MayDelegate: true, IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, root)
+	entry := func(k *ecdsa.PrivateKey, cred string) string {
+		tok, _ := registry.Issue(registry.Entry{ID: "acme#shane", Org: "acme", Parent: "acme#tom", Holder: p256JWK(k), CredentialID: cred, Role: "buyer", Kinds: kinds,
+			CeilingEUR: 5000, IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, tom)
+		return tok
+	}
+	oldTok, newTok := entry(oldPhone, "b2xk"), entry(newPhone, "bmV3")
+	rv, _ := registry.IssueRevocation(registry.Revocation{Revokes: registry.EntryDigest(oldTok), ID: "acme#shane", By: "acme#tom", IssuedAt: now.Unix()}, tom)
+
+	dir := t.TempDir()
+	secrets := filepath.Join(dir, "secrets")
+	_ = os.MkdirAll(secrets, 0o700)
+	_ = os.WriteFile(filepath.Join(secrets, "odoo-key-acme"), []byte("k\n"), 0o600)
+	store, _ := log.Open(filepath.Join(dir, "store"))
+	agent := "did:web:bextrust.abovebeyond.ai:acme#procurement-agent"
+	issuer := "https://gate.example/control"
+	s := &service{key: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32)), store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}, revoked: newRevokedList(time.Now),
+		cfg: config{Issuer: issuer, Store: filepath.Join(dir, "store"), Secrets: secrets,
+			Orgs: map[string]string{"acme": hex.EncodeToString(root.Public().(ed25519.PublicKey))}, Passkey: odooParty,
+			Agents: map[string]struct {
+				Grant policy.Grant `json:"grant"`
+			}{agent: {Grant: policy.Grant{Principal: "acme", Kinds: kinds, Resources: []string{"odoo:acme/*"}, Org: "acme", Asks: "acme#shane"}}}}}
+	s.effects.Add(effects.Odoo{SecretsDir: secrets, Instances: map[string]effects.OdooInstance{"acme": {Base: odoo.URL, DB: "acme"}}})
+	s.revoked.registry[registry.EntryDigest(oldTok)] = rv
+	read := policy.Action{Kind: "odoo.read", Resource: "odoo:acme/purchase.order", Params: map[string]any{"model": "purchase.order"}}
+	mandate := func(k *ecdsa.PrivateKey, jti string) string {
+		raw, _ := canonical.Encode(capability.Payload{Issuer: "acme#shane", Subject: agent, Audience: issuer, Task: capability.Task{Project: "acme"},
+			Kinds: []string{"odoo.read"}, Resources: []string{"odoo:acme/*"}, IssuedAt: now.Unix(), Expires: now.Add(time.Hour).Unix(), ID: jti})
+		return signWord(t, k, raw)
+	}
+	submit := func(word, entryTok string) map[string]any {
+		raw, _ := json.Marshal(submitRequest{Agent: agent, Action: read, Capability: word, Chain: []string{tomTok, entryTok}})
+		rec := httptest.NewRecorder()
+		s.submit(rec, httptest.NewRequest("POST", "/v1/submit", bytes.NewReader(raw)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+	if out := submit(mandate(oldPhone, "m-old"), oldTok); out["verdict"] != "DENY" || !strings.Contains(fmt.Sprint(out["reason"]), "revoked by acme#tom") {
+		t.Fatalf("the old phone's mandate: %v", out)
+	}
+	if out := submit(mandate(newPhone, "m-new"), newTok); out["verdict"] != "ALLOW" {
+		t.Fatalf("the new phone's mandate: %v", out)
+	}
+}

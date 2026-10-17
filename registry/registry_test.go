@@ -296,3 +296,48 @@ func other(t *testing.T) ed25519.PublicKey {
 	}
 	return pub
 }
+
+// A revocation signed by whoever signed the entry ends it; one signed by anyone else, or naming
+// another entry, is ignored.
+func TestARevokedEntryNoLongerHolds(t *testing.T) {
+	root := ed25519.NewKeyFromSeed([]byte("acme-root-seed-acme-root-seed-32"))
+	tom := ed25519.NewKeyFromSeed([]byte("tom-seed-tom-seed-tom-seed-tom-3"))
+	roots := map[string]ed25519.PublicKey{"acme": root.Public().(ed25519.PublicKey)}
+	_, pk := ec(t)
+	tomTok := issue(t, Entry{ID: "acme#tom", Org: "acme", Parent: "acme", Holder: okp(tom.Public().(ed25519.PublicKey)), Role: "director", Kinds: []string{"odoo.read"}, MayDelegate: true, IssuedAt: now.Unix() - 9, Expires: now.Unix() + 999}, root)
+	oldTok := issue(t, Entry{ID: "acme#shane", Org: "acme", Parent: "acme#tom", Holder: pk, CredentialID: "b2xk", Role: "buyer", Kinds: []string{"odoo.read"}, IssuedAt: now.Unix() - 5, Expires: now.Unix() + 99}, tom)
+	chain := []string{tomTok, oldTok}
+	entries, err := VerifyChain(chain, roots, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rv := func(r Revocation, k ed25519.PrivateKey) func(string) string {
+		tok, _ := IssueRevocation(r, k)
+		return func(d string) string {
+			if d == r.Revokes {
+				return tok
+			}
+			return ""
+		}
+	}
+	good := Revocation{Revokes: EntryDigest(oldTok), ID: "acme#shane", By: "acme#tom", IssuedAt: now.Unix()}
+	if why := Revoked(chain, entries, roots, rv(good, tom)); !strings.Contains(why, "revoked by acme#tom") {
+		t.Fatalf("a revocation by the signer: %q", why)
+	}
+	other := ed25519.NewKeyFromSeed([]byte("other-seed-other-seed-other-see!"))
+	for name, lookup := range map[string]func(string) string{
+		"signed by someone else": rv(good, other),
+		"by another name":        rv(Revocation{Revokes: good.Revokes, ID: "acme#shane", By: "acme#anna", IssuedAt: now.Unix()}, tom),
+		"for another id":         rv(Revocation{Revokes: good.Revokes, ID: "acme#robby", By: "acme#tom", IssuedAt: now.Unix()}, tom),
+		"nothing":                nil,
+	} {
+		if why := Revoked(chain, entries, roots, lookup); why != "" {
+			t.Errorf("%s: %q", name, why)
+		}
+	}
+	// The root ends a director.
+	byRoot := Revocation{Revokes: EntryDigest(tomTok), ID: "acme#tom", By: "acme", IssuedAt: now.Unix()}
+	if why := Revoked(chain, entries, roots, rv(byRoot, root)); why == "" {
+		t.Fatal("the root's revocation of a director")
+	}
+}

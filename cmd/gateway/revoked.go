@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/abovebeyond-ai/control/registry"
 )
 
 // revokedConfig is where the gateway reads the capabilities the owner ended before they
@@ -35,12 +37,16 @@ type revokedEntry struct {
 type revokedList struct {
 	mu      sync.RWMutex
 	entries map[string]revokedEntry
-	read    time.Time
-	clock   func() time.Time
+	// registry holds signed revocations of registry entries (rv1) by the entry's digest. They
+	// are kept for as long as the gateway runs: a revocation never needs to leave, and the
+	// gateway checks each one's signature where it is used (registry.Revoked).
+	registry map[string]string
+	read     time.Time
+	clock    func() time.Time
 }
 
 func newRevokedList(clock func() time.Time) *revokedList {
-	return &revokedList{entries: map[string]revokedEntry{}, clock: clock}
+	return &revokedList{entries: map[string]revokedEntry{}, registry: map[string]string{}, clock: clock}
 }
 
 // Revoked is the gateway's question: has the owner ended this capability, and since when.
@@ -52,6 +58,13 @@ func (l *revokedList) Revoked(jti string) (string, bool) {
 		return "", false
 	}
 	return e.Since, true
+}
+
+// RevokedEntry is the signed revocation of the registry entry with this digest, or "".
+func (l *revokedList) RevokedEntry(digest string) string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.registry[digest]
 }
 
 // pull reads the list once and merges it into what is held; entries past their expiry go.
@@ -75,6 +88,7 @@ func (l *revokedList) pull(client *http.Client, url, token string) error {
 	}
 	var page struct {
 		Revoked []revokedEntry `json:"revoked"`
+		Entries []string       `json:"entries"` // rv1 tokens
 	}
 	if err := json.Unmarshal(body, &page); err != nil {
 		return fmt.Errorf("revocations: %w", err)
@@ -85,6 +99,11 @@ func (l *revokedList) pull(client *http.Client, url, token string) error {
 	for _, e := range page.Revoked {
 		if e.JTI != "" && e.Exp > now {
 			l.entries[e.JTI] = e
+		}
+	}
+	for _, tok := range page.Entries {
+		if r, _, _, err := registry.ParseRevocation(tok); err == nil {
+			l.registry[r.Revokes] = tok
 		}
 	}
 	for jti, e := range l.entries {

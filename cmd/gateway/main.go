@@ -483,6 +483,7 @@ func (s *service) gateway(agent string) (*gateway.Gateway, error) {
 		Orgs: orgs, Passkey: s.cfg.Passkey}
 	if s.revoked != nil {
 		gcfg.Revoked = s.revoked.Revoked
+		gcfg.RevokedEntry = s.revoked.RevokedEntry
 	}
 	g, err := gateway.Open(gcfg)
 	if err != nil {
