@@ -204,3 +204,95 @@ func TestAnEncryptionKeyRidesInTheSignedEntry(t *testing.T) {
 		t.Fatalf("a kid that is not the key's: %v", err)
 	}
 }
+
+// An observer acts on nothing, has a key, and looks inside its organisation until its entry
+// ends; only the root gives a view of the whole organisation. It sees a holder when its view
+// lies on the holder's chain and whoever signed it stands at or above that point.
+func TestAnObserverSeesOnlyWhatItsSignerMayShow(t *testing.T) {
+	root := ed25519.NewKeyFromSeed([]byte("acme-root-seed-acme-root-seed-32"))
+	tom := ed25519.NewKeyFromSeed([]byte("tom-seed-tom-seed-tom-seed-tom-3"))
+	anna := ed25519.NewKeyFromSeed([]byte("anna-seed-anna-seed-anna-seed-32"))
+	roots := map[string]ed25519.PublicKey{"acme": root.Public().(ed25519.PublicKey)}
+	_, shanePK := ec(t)
+	_, encJWK := ec(t)
+	pub, _ := encJWK.ECDSA()
+	point, _ := pub.Bytes()
+	enc := &EncKey{Kty: "EC", Crv: "P-256", X: encJWK.X, Y: encJWK.Y, Kid: EncKid(point)}
+	kinds := []string{"odoo.read", "odoo.order_draft"}
+	exp := now.Unix() + 86400
+	dir := func(id string, k ed25519.PrivateKey) Entry {
+		return Entry{ID: id, Org: "acme", Parent: "acme", Holder: okp(k.Public().(ed25519.PublicKey)), Role: "director", Kinds: kinds, CeilingEUR: 25000, MayDelegate: true, IssuedAt: now.Unix() - 10, Expires: exp}
+	}
+	tomTok, annaTok := issue(t, dir("acme#tom", tom), root), issue(t, dir("acme#anna", anna), root)
+	shane := Entry{ID: "acme#shane", Org: "acme", Parent: "acme#tom", Holder: shanePK, CredentialID: "Y3JlZA", Role: "buyer", Kinds: kinds, CeilingEUR: 5000, IssuedAt: now.Unix() - 5, Expires: exp}
+	holder, err := VerifyChain([]string{tomTok, issue(t, shane, tom)}, roots, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := func(id, parent, under, detail string) Entry {
+		return Entry{ID: id, Org: "acme", Parent: parent, Holder: okp(other(t)), Role: RoleObserver, Kinds: []string{}, Enc: enc,
+			Sees: &Sees{Under: under, Detail: detail, Until: exp}, IssuedAt: now.Unix() - 5, Expires: exp}
+	}
+	chainOf := func(e Entry) ([]Entry, error) {
+		switch e.Parent {
+		case "acme":
+			return VerifyChain([]string{issue(t, e, root)}, roots, now)
+		case "acme#tom":
+			return VerifyChain([]string{tomTok, issue(t, e, tom)}, roots, now)
+		default:
+			return VerifyChain([]string{annaTok, issue(t, e, anna)}, roots, now)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		e    Entry
+		sees bool
+	}{
+		{"the insurer, under the whole of acme, from the root", obs("acme#obs-leiestad", "acme", "acme", "summary"), true},
+		{"Tom's assistant, under Tom", obs("acme#obs-assistant", "acme#tom", "acme#tom", "full"), true},
+		{"Tom's view of Shane alone", obs("acme#obs-shane", "acme#tom", "acme#shane", "full"), true},
+		{"Tom's view of someone not on Shane's chain", obs("acme#obs-robby", "acme#tom", "acme#robby", "full"), false},
+		{"Anna's view of Tom's part", obs("acme#obs-anna", "acme#anna", "acme#tom", "full"), false},
+	} {
+		chain, err := chainOf(c.e)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := Covers(chain, holder, now); got != c.sees {
+			t.Errorf("%s: sees %v", c.name, got)
+		}
+	}
+	// Ended, the view sees nothing.
+	ended := obs("acme#obs-old", "acme", "acme", "summary")
+	ended.Sees.Until = now.Unix() + 1
+	if chain, _ := chainOf(ended); Covers(chain, holder, now.Add(time.Minute)) {
+		t.Error("an ended view still sees")
+	}
+	refused := map[string]Entry{
+		"the whole organisation from a director": obs("acme#obs-x", "acme#tom", "acme", "full"),
+		"kinds": func() Entry {
+			e := obs("acme#obs-x", "acme", "acme", "full")
+			e.Kinds = []string{"odoo.read"}
+			return e
+		}(),
+		"no key":            func() Entry { e := obs("acme#obs-x", "acme", "acme", "full"); e.Enc = nil; return e }(),
+		"another detail":    obs("acme#obs-x", "acme", "acme", "everything"),
+		"outside the org":   obs("acme#obs-x", "acme", "other#tom", "full"),
+		"past its entry":    func() Entry { e := obs("acme#obs-x", "acme", "acme", "full"); e.Sees.Until = exp + 1; return e }(),
+		"a delegator":       func() Entry { e := obs("acme#obs-x", "acme", "acme", "full"); e.MayDelegate = true; return e }(),
+		"a view on a buyer": func() Entry { e := shane; e.Sees = &Sees{Under: "acme", Detail: "full", Until: exp}; return e }(),
+	}
+	for name, e := range refused {
+		if _, err := chainOf(e); err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}
+
+func other(t *testing.T) ed25519.PublicKey {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pub
+}

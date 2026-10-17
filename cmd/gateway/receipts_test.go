@@ -20,9 +20,12 @@ import (
 	"testing/cryptotest"
 	"time"
 
+	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/effects"
+	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
 	"github.com/abovebeyond-ai/control/log"
+	"github.com/abovebeyond-ai/control/merkle"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/registry"
 )
@@ -92,21 +95,25 @@ func hexOf(b64 string) string {
 	return hex.EncodeToString(raw)
 }
 
-// Every action under an organisation's grant ends in a receipt: a read refused for want of a
-// mandate goes to the holder the grant asks, whose key the gate reads from their chain at the
-// relay and verifies from the pinned root; a draft on a word goes to the word's signer, whose
-// key the verified chain carried. Each is sealed to the holder and to the audit key, carries
-// the action's three signed records, and opens to what happened. A relay that is away keeps the
-// envelopes in the outbox until it is back.
-func TestEveryActionEndsInASealedReceipt(t *testing.T) {
+// Every action under an organisation's grant ends in receipts: for the person it was taken for,
+// for their managers who hold a key, for the observers whose view covers them (a supplier only
+// for its own orders, an insurer as a summary), and for the audit key. Each is signed by the
+// gate, numbered per recipient, and carries the proof of the action's records into the
+// checkpoint that closes the action, which the gate serves among its action ends. A relay that
+// is away keeps the envelopes in the outbox until it is back.
+func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 	odoo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			VL []map[string]any `json:"vals_list"`
+		}
 		switch strings.TrimPrefix(r.URL.Path, "/json/2/") {
 		case "product.product/read":
-			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Corner Desk","standard_price":600.0,"purchase_ok":true}]`))
+			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Hops Saaz","standard_price":24.5,"purchase_ok":true}]`))
 		case "purchase.order/create":
+			_ = json.NewDecoder(r.Body).Decode(&in)
 			_, _ = w.Write([]byte(`[13]`))
 		case "purchase.order/read":
-			_, _ = w.Write([]byte(`[{"id":13,"name":"P00013","state":"draft","amount_total":1200.0,"currency_id":[1,"EUR"],"company_id":[1,"Acme"],"order_line":[30]}]`))
+			_, _ = w.Write([]byte(`[{"id":13,"name":"P00013","state":"draft","amount_total":49.0,"currency_id":[1,"EUR"],"company_id":[1,"Acme"],"partner_id":[76,"Hopperij Westland"],"order_line":[30]}]`))
 		default:
 			w.WriteHeader(404)
 		}
@@ -114,17 +121,40 @@ func TestEveryActionEndsInASealedReceipt(t *testing.T) {
 	defer odoo.Close()
 
 	now := time.Now()
+	exp := now.Unix() + 86400
 	root := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0xac}, 32))
 	tom := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x70}, 32))
 	shane, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	phone, _ := ecdh.P256().GenerateKey(rand.Reader)
-	audit, _ := ecdh.P256().GenerateKey(rand.Reader)
+	keys := map[string]*ecdh.PrivateKey{}
+	for _, id := range []string{"acme#shane", "acme#tom", "acme#audit", "acme#obs-leiestad", "acme#obs-hopperij", "acme#obs-robby"} {
+		keys[id], _ = ecdh.P256().GenerateKey(rand.Reader)
+	}
 	kinds := policy.Builtin.Of(policy.OdooAdapter)
-	tomTok, _ := registry.Issue(registry.Entry{ID: "acme#tom", Org: "acme", Parent: "acme", Holder: registry.JWK{Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(tom.Public().(ed25519.PublicKey))},
-		Role: "director", Kinds: kinds, CeilingEUR: 25000, MayDelegate: true, IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, root)
+	okp := func(k ed25519.PrivateKey) registry.JWK {
+		return registry.JWK{Kty: "OKP", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(k.Public().(ed25519.PublicKey))}
+	}
+	tomTok, _ := registry.Issue(registry.Entry{ID: "acme#tom", Org: "acme", Parent: "acme", Holder: okp(tom), Role: "director", Kinds: kinds, CeilingEUR: 25000, MayDelegate: true,
+		Enc: encKeyOf(t, keys["acme#tom"]), IssuedAt: now.Unix() - 60, Expires: exp}, root)
 	shaneTok, _ := registry.Issue(registry.Entry{ID: "acme#shane", Org: "acme", Parent: "acme#tom", Holder: p256JWK(shane), CredentialID: "Y3JlZA", Role: "buyer", Kinds: kinds,
-		CeilingEUR: 5000, Enc: encKeyOf(t, phone), IssuedAt: now.Unix() - 60, Expires: now.Unix() + 86400}, tom)
+		CeilingEUR: 5000, Enc: encKeyOf(t, keys["acme#shane"]), IssuedAt: now.Unix() - 60, Expires: exp}, tom)
 	chain := []string{tomTok, shaneTok}
+	observer := func(id string, signer ed25519.PrivateKey, parent, under, detail string, partners []int64) []string {
+		e := registry.Entry{ID: id, Org: "acme", Parent: parent, Holder: okp(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{byte(len(id))}, 32))), Role: registry.RoleObserver, Kinds: []string{},
+			Enc: encKeyOf(t, keys[id]), Sees: &registry.Sees{Under: under, Detail: detail, Partners: partners, Until: exp}, IssuedAt: now.Unix() - 60, Expires: exp}
+		tok, err := registry.Issue(e, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parent == "acme" {
+			return []string{tok}
+		}
+		return []string{tomTok, tok}
+	}
+	observers := [][]string{
+		observer("acme#obs-leiestad", root, "acme", "acme", "summary", nil),
+		observer("acme#obs-hopperij", tom, "acme#tom", "acme#tom", "full", []int64{76}),
+		observer("acme#obs-robby", tom, "acme#tom", "acme#robby", "full", nil), // not on Shane's chain
+	}
 
 	var mu sync.Mutex
 	var got []envelope
@@ -135,6 +165,8 @@ func TestEveryActionEndsInASealedReceipt(t *testing.T) {
 		switch {
 		case r.URL.Path == "/api/registry/acme#shane":
 			_ = json.NewEncoder(w).Encode(map[string]any{"chain": chain})
+		case r.URL.Path == "/api/registry" && r.URL.Query().Get("role") == "observer":
+			_ = json.NewEncoder(w).Encode(map[string]any{"chains": observers})
 		case r.URL.Path == "/api/receipts" && !relayUp:
 			w.WriteHeader(503)
 		case r.URL.Path == "/api/receipts":
@@ -157,7 +189,7 @@ func TestEveryActionEndsInASealedReceipt(t *testing.T) {
 	issuer := "https://gate.example/control"
 	gateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32))
 	s := &service{key: gateKey, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}, receipts: &outbox{kick: make(chan struct{}, 1)},
-		cfg: config{Issuer: issuer, Store: filepath.Join(dir, "store"), Secrets: secrets, RelayURL: relay.URL, AuditEnc: encKeyOf(t, audit),
+		cfg: config{Issuer: issuer, Store: filepath.Join(dir, "store"), Secrets: secrets, RelayURL: relay.URL, AuditEnc: encKeyOf(t, keys["acme#audit"]),
 			Orgs: map[string]string{"acme": hex.EncodeToString(root.Public().(ed25519.PublicKey))}, Passkey: odooParty,
 			Agents: map[string]struct {
 				Grant policy.Grant `json:"grant"`
@@ -174,70 +206,154 @@ func TestEveryActionEndsInASealedReceipt(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
 		return out
 	}
-	open := func(e envelope, key *ecdh.PrivateKey) map[string]any {
+	opened := func() map[string]map[string]any {
 		t.Helper()
-		raw, err := openReceipt(key, e)
-		if err != nil {
-			t.Fatalf("%s for %s: %v", e.ID, e.Holder, err)
+		out := map[string]map[string]any{}
+		for _, e := range got {
+			raw, err := openReceipt(keys[e.Holder], e)
+			if err != nil {
+				t.Fatalf("%s for %s: %v", e.ID, e.Holder, err)
+			}
+			var p map[string]any
+			_ = json.Unmarshal(raw, &p)
+			// The gate's signature over the plaintext without it.
+			sig, _ := hex.DecodeString(p["sig"].(string))
+			var body map[string]any
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.UseNumber()
+			_ = dec.Decode(&body)
+			delete(body, "sig")
+			signed, _ := canonical.Encode(body)
+			if !ed25519.Verify(gateKey.Public().(ed25519.PublicKey), signed, sig) {
+				t.Fatalf("%s for %s is not signed by the gate", e.ID, e.Holder)
+			}
+			if p["recipient"] != e.Holder || p["id"] != e.ID {
+				t.Fatalf("the plaintext names %v/%v, the header %s/%s", p["recipient"], p["id"], e.Holder, e.ID)
+			}
+			out[e.Holder] = p
 		}
-		var p map[string]any
-		_ = json.Unmarshal(raw, &p)
-		return p
+		return out
+	}
+	// checkInclusion holds each step's proof to the checkpoint, and the checkpoint to the gate.
+	checkInclusion := func(p map[string]any) {
+		t.Helper()
+		inc := p["inclusion"].(map[string]any)
+		cpRaw, _ := json.Marshal(inc["checkpoint"])
+		var cp gateway.Checkpoint
+		_ = json.Unmarshal(cpRaw, &cp)
+		if !gateway.VerifyCheckpoint(cp, gateKey.Public().(ed25519.PublicKey)) || float64(cp.TreeSize) != inc["tree_size"] {
+			t.Fatalf("the checkpoint: %+v", cp)
+		}
+		root, _ := canonical.Untag(cp.Root)
+		rootRaw, _ := hex.DecodeString(root)
+		for i, st := range inc["steps"].([]any) {
+			step := st.(map[string]any)
+			lf := inc["leaves"].([]any)[i].(map[string]any)
+			snap, _ := canonical.Untag(lf["snapshot"].(string))
+			leaf, _ := evidence.Leaf(snap, lf["verdict"].(string))
+			var proof [][]byte
+			for _, h := range step["proof"].([]any) {
+				b, _ := hex.DecodeString(h.(string))
+				proof = append(proof, b)
+			}
+			if !merkle.VerifyInclusion(int(step["step"].(float64)), cp.TreeSize, merkle.LeafHash(leaf), proof, rootRaw) {
+				t.Fatalf("step %v is not in the checkpoint", step["step"])
+			}
+		}
 	}
 
-	// A read without a mandate: refused, and the refusal reaches Shane and Acme's audit.
+	// A read without a mandate: refused; the receipt goes to Shane, Tom, the insurer and the
+	// audit, not to Hopperij (no order of theirs) and not to the view of Robby.
 	read := policy.Action{Kind: "odoo.read", Resource: "odoo:acme/purchase.order", Params: map[string]any{"model": "purchase.order"}}
 	if out := post(s.submit, "/v1/submit", "", submitRequest{Agent: agent, Action: read}); out["verdict"] != "DENY" {
 		t.Fatalf("%v", out)
 	}
 	s.flushReceipts()
-	if len(got) != 2 || got[0].Holder == got[1].Holder {
-		t.Fatalf("one envelope for Shane, one for the audit: %+v", got)
+	p := opened()
+	if len(p) != 4 || p["acme#shane"] == nil || p["acme#tom"] == nil || p["acme#obs-leiestad"] == nil || p["acme#audit"] == nil {
+		t.Fatalf("recipients: %v", keysOf(p))
 	}
-	for _, e := range got {
-		key := phone
-		if e.Holder == "acme#audit" {
-			key = audit
-		}
-		p := open(e, key)
-		if p["holder"] != "acme#shane" || p["verdict"] != "DENY" || p["asked"] != false || p["kind"] != "odoo.read" || len(p["records"].([]any)) != 3 || p["gate_key"] != hex.EncodeToString(gateKey.Public().(ed25519.PublicKey)) || p["id"] != e.ID {
-			t.Fatalf("%v", p)
+	if p["acme#tom"]["role"] != "manager" || p["acme#tom"]["detail"] != "full" || p["acme#shane"]["asked"] != false || len(p["acme#shane"]["records"].([]any)) != 3 {
+		t.Fatalf("%v", p["acme#tom"])
+	}
+	sum := p["acme#obs-leiestad"]
+	for _, k := range []string{"params", "records", "reason", "resource", "effect", "outcome", "chain", "authority"} {
+		if _, ok := sum[k]; ok {
+			t.Fatalf("a summary carries %s: %v", k, sum)
 		}
 	}
+	if sum["reason_class"] != "refused" || sum["detail"] != "summary" || sum["seq"] != float64(1) {
+		t.Fatalf("%v", sum)
+	}
+	checkInclusion(sum)
+	checkInclusion(p["acme#shane"])
 
-	// A draft on Shane's word: the key comes with the verified chain, and the relay is away.
+	// A draft on Shane's word for Hopperij's hops, with the relay away for a while: Hopperij
+	// gets this one, in full; the envelopes wait and go once the relay is back.
 	got, relayUp = nil, false
-	draft := policy.Action{Kind: "odoo.order_draft", Resource: "odoo:acme/purchase.order", Params: map[string]any{"partner_id": float64(8), "lines": []any{map[string]any{"product_id": float64(19), "qty": float64(2)}}}}
+	draft := policy.Action{Kind: "odoo.order_draft", Resource: "odoo:acme/purchase.order", Params: map[string]any{"partner_id": float64(76), "lines": []any{map[string]any{"product_id": float64(19), "qty": float64(2)}}}}
 	asked := post(s.submit, "/v1/submit", "", submitRequest{Agent: agent, Action: draft})
 	payload, _ := base64.RawURLEncoding.DecodeString(asked["payload"].(string))
-	out := post(s.word, "/v1/pending/x/word", asked["pending"].(string), map[string]any{"capability": signWord(t, shane, payload), "chain": chain})
-	if out["verdict"] != "ALLOW" {
+	if out := post(s.word, "/v1/pending/x/word", asked["pending"].(string), map[string]any{"capability": signWord(t, shane, payload), "chain": chain}); out["verdict"] != "ALLOW" {
 		t.Fatalf("%v", out)
 	}
 	s.flushReceipts()
 	waiting, _ := filepath.Glob(filepath.Join(s.outboxDir(), "env-*.json"))
-	if len(got) != 0 || len(waiting) != 2 {
+	if len(got) != 0 || len(waiting) != 5 {
 		t.Fatalf("with the relay away the envelopes wait: %d delivered, %d waiting", len(got), len(waiting))
 	}
 	mu.Lock()
 	relayUp = true
 	mu.Unlock()
 	s.flushReceipts()
-	if len(got) != 2 {
-		t.Fatalf("delivered once the relay is back: %+v", got)
+	p = opened()
+	if len(p) != 5 || p["acme#obs-hopperij"] == nil {
+		t.Fatalf("recipients: %v", keysOf(p))
 	}
-	for _, e := range got {
-		if e.Holder != "acme#shane" {
-			continue
-		}
-		p := open(e, phone)
-		effect := p["effect"].(map[string]any)
-		cc := p["chain"].(map[string]any)
-		if p["asked"] != true || p["verdict"] != "ALLOW" || effect["name"] != "P00013" || effect["ok"] != true || cc["ceiling_eur"] != float64(5000) || len(cc["entries"].([]any)) != 2 {
-			t.Fatalf("%v", p)
-		}
+	hop := p["acme#obs-hopperij"]
+	if hop["detail"] != "full" || hop["effect"].(map[string]any)["name"] != "P00013" || hop["authority"] == nil || hop["outcome"] == nil || hop["seq"] != float64(1) {
+		t.Fatalf("%v", hop)
 	}
-	if left, _ := filepath.Glob(filepath.Join(s.outboxDir(), "*")); len(left) != 0 {
-		t.Fatalf("the outbox is empty once delivered: %v", left)
+	if p["acme#shane"]["seq"] != float64(2) || p["acme#shane"]["asked"] != true || p["acme#obs-leiestad"]["amount_total"] != "49.00" || p["acme#obs-leiestad"]["reason_class"] != "within grant" {
+		t.Fatalf("%v %v", p["acme#shane"]["seq"], p["acme#obs-leiestad"])
 	}
+	checkInclusion(hop)
+	if left, _ := filepath.Glob(filepath.Join(s.outboxDir(), "*.json")); len(left) != 1 || filepath.Base(left[0]) != "seq.json" {
+		t.Fatalf("the outbox keeps only its counts once delivered: %v", left)
+	}
+
+	// The gate serves the checkpoint every receipt names among its action ends, and proves the
+	// log only grew between two of them.
+	g, _ := s.gateway(agent)
+	ends, err := g.ActionEnds(0, 100)
+	if err != nil || len(ends) != 2 || ends[0].TreeSize != 3 || ends[1].TreeSize != 6 {
+		t.Fatalf("%v %+v", err, ends)
+	}
+	if ends[1].Root != hop["inclusion"].(map[string]any)["checkpoint"].(map[string]any)["root"] {
+		t.Fatal("the receipt's checkpoint is not the action end the gate serves")
+	}
+	proof, err := g.Consistency(3, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw [][]byte
+	for _, h := range proof {
+		b, _ := hex.DecodeString(h)
+		raw = append(raw, b)
+	}
+	r3, _ := canonical.Untag(ends[0].Root)
+	r6, _ := canonical.Untag(ends[1].Root)
+	b3, _ := hex.DecodeString(r3)
+	b6, _ := hex.DecodeString(r6)
+	if !merkle.VerifyConsistency(3, 6, b3, b6, raw) {
+		t.Fatal("the consistency proof does not hold")
+	}
+}
+
+func keysOf(m map[string]map[string]any) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

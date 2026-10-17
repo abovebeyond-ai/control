@@ -265,6 +265,8 @@ func main() {
 	mux.HandleFunc("GET /v1/policy", s.accessed("policy", s.policy))
 	mux.HandleFunc("GET /v1/attachment", s.accessed("attachment", s.attachment))
 	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
+	mux.HandleFunc("GET /v1/checkpoints", s.accessed("checkpoints", s.checkpoints))
+	mux.HandleFunc("GET /v1/consistency", s.accessed("consistency", s.consistency))
 	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
 	mux.HandleFunc("GET /v1/proof", s.accessed("proof", s.proof))
 	// The seal key of the review hand (#vera) is made now, so the register can name it
@@ -707,7 +709,7 @@ func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequ
 		return 503, map[string]any{"verdict": rr.Verdict, "reason": "the result record could not be written: " + rr.Reason, "action": v.ActionID}
 	}
 	out["steps"] = []int{v.Step, e.Step, rr.Step}
-	s.receipt(g, req, v, []any{v.Token, e.Token, rr.Token}, rr.Step, outcome)
+	s.receipt(g, req, []gateway.Verdict{v, e, rr}, outcome)
 	return 200, out
 }
 
@@ -990,6 +992,55 @@ func (s *service) checkpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, cp)
+}
+
+// checkpoints is GET /v1/checkpoints?agent=&after=N: the signed checkpoint at the end of every
+// action after tree size N, and the current one, at most 500. An anchor takes these and needs
+// no record: every sealed receipt names one of them.
+func (s *service) checkpoints(w http.ResponseWriter, r *http.Request) {
+	g, err := s.gateway(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": err.Error()})
+		return
+	}
+	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+	if after < 0 {
+		after = 0
+	}
+	cps, err := g.ActionEnds(after, 500)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if cps == nil {
+		cps = []gateway.Checkpoint{}
+	}
+	writeJSON(w, 200, map[string]any{"agent": r.URL.Query().Get("agent"), "after": after, "checkpoints": cps})
+}
+
+// consistency is GET /v1/consistency?agent=&m=&n=: the proof that the tree of size n extends
+// the tree of size m, so an anchor holds the gate to an append-only log without its records.
+func (s *service) consistency(w http.ResponseWriter, r *http.Request) {
+	g, err := s.gateway(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": err.Error()})
+		return
+	}
+	m, err1 := strconv.Atoi(r.URL.Query().Get("m"))
+	n, err2 := strconv.Atoi(r.URL.Query().Get("n"))
+	if err1 != nil || err2 != nil {
+		writeJSON(w, 400, map[string]any{"error": "m and n are tree sizes"})
+		return
+	}
+	proof, err := g.Consistency(m, n)
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": err.Error()})
+		return
+	}
+	if proof == nil {
+		proof = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"m": m, "n": n, "proof": proof})
 }
 
 func (s *service) records(w http.ResponseWriter, r *http.Request) {

@@ -98,6 +98,7 @@ type Gateway struct {
 	alg         string // the measurement's algorithm: sha-256 for software, sha-384 for an MRTD
 	mu          sync.Mutex
 	head        string
+	heads       []string // the chain head after each record, for a checkpoint at any size
 	tree        *merkle.Tree
 	step        int
 	runs        map[string]policy.PathSummary // path summary per run; "" is the run of a hand that names none
@@ -181,6 +182,7 @@ func Open(cfg Config) (*Gateway, error) {
 		leaf, _ := evidence.Leaf(snapshot, verdict)
 		g.tree.Append(leaf)
 		g.head = link
+		g.heads = append(g.heads, link)
 		// The path summary of each run is rebuilt from the action written beside
 		// the record, so a restart does not forget what a run already did.
 		var done stepAction
@@ -715,6 +717,7 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 
 	step := g.step
 	g.head = link
+	g.heads = append(g.heads, link)
 	g.tree = treeAfter
 	g.runs[run] = phi.Fold(action, verdict)
 	g.step++
@@ -798,6 +801,7 @@ func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, prin
 	}
 	step := g.step
 	g.head = link
+	g.heads = append(g.heads, link)
 	g.tree = treeAfter
 	g.step++
 	if err := g.cfg.Store.Attach(g.cfg.Agent, step, "outcome", outcome); err != nil {
@@ -844,6 +848,91 @@ func (g *Gateway) Checkpoint() (Checkpoint, error) {
 	}
 	cp.Signature = hex.EncodeToString(ed25519.Sign(g.cfg.Key, in))
 	return cp, nil
+}
+
+// CheckpointAt signs the tree head as it stood after size records: a receipt names the
+// checkpoint that closes its action, and the anchor anchors every such checkpoint.
+func (g *Gateway) CheckpointAt(size int) (Checkpoint, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.checkpointAt(size)
+}
+
+func (g *Gateway) checkpointAt(size int) (Checkpoint, error) {
+	if size < 1 || size > g.tree.Size() || size > len(g.heads) {
+		return Checkpoint{}, fmt.Errorf("no tree of size %d; the log holds %d records", size, g.tree.Size())
+	}
+	cp := Checkpoint{Agent: g.cfg.Agent, TreeSize: size, Root: canonical.Tag(hex.EncodeToString(g.tree.RootAt(size))), ChainHead: canonical.Tag(g.heads[size-1])}
+	if g.cfg.Attestation != nil {
+		cp.Attestation = canonical.Tag(canonical.SHA256(mustDecodeB64(g.cfg.Attestation.QuoteB64)))
+	}
+	in, err := CheckpointInput(cp)
+	if err != nil {
+		return cp, err
+	}
+	cp.Signature = hex.EncodeToString(ed25519.Sign(g.cfg.Key, in))
+	return cp, nil
+}
+
+// ActionEnds are the signed checkpoints after size after: one at the end of every action (a
+// result record) and the current one, at most limit. The anchor takes these, so every
+// receipt's checkpoint is in a minute without the anchor holding a record.
+func (g *Gateway) ActionEnds(after, limit int) ([]Checkpoint, error) {
+	records, err := g.cfg.Store.Records(g.cfg.Agent)
+	if err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []Checkpoint
+	size := g.tree.Size()
+	for n := after + 1; n <= size && n <= len(records) && len(out) < limit; n++ {
+		if n != size && str(records[n-1].Claims()["control_phase"]) != PhaseResult {
+			continue
+		}
+		cp, err := g.checkpointAt(n)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
+// InclusionAt proves step in the tree of size records, hex hashes.
+func (g *Gateway) InclusionAt(step, size int) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if size > g.tree.Size() {
+		return nil, fmt.Errorf("no tree of size %d", size)
+	}
+	raw, err := g.tree.InclusionProof(step, size)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(raw))
+	for i, p := range raw {
+		out[i] = hex.EncodeToString(p)
+	}
+	return out, nil
+}
+
+// Consistency proves the tree of size n extends the tree of size m, hex hashes.
+func (g *Gateway) Consistency(m, n int) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if m < 1 || n > g.tree.Size() || m > n {
+		return nil, fmt.Errorf("no consistency proof from %d to %d; the log holds %d records", m, n, g.tree.Size())
+	}
+	raw, err := g.tree.ConsistencyProof(m, n)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(raw))
+	for i, p := range raw {
+		out[i] = hex.EncodeToString(p)
+	}
+	return out, nil
 }
 
 // VerifyCheckpoint checks a checkpoint's signature under a public key.

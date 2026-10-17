@@ -173,6 +173,36 @@ verified for the act; without one (a refusal before any word) the gateway fetche
 chain from the relay and verifies it from the pinned root, so a relay cannot slip in a key of its
 own. A person without `enc` gets no envelope, and that is logged.
 
+**Who receives it.** Besides the person and the audit key: every entry above the person on
+their chain that may delegate and has an `enc` (their managers), in full; and every observer
+whose view covers the person. An observer is an entry with role `observer`, no kinds, an `enc`,
+and `sees: {under, detail, partners, until}`. It covers a person when `under` is the organisation
+or an entry on the person's chain, and the entry that signed the observer stands at or above
+`under` on that chain (`registry.Covers`): nobody attaches an observer to a part of the
+organisation outside their own, and only the root gives a view of all of it. With `partners`,
+only the actions on those Odoo partners' orders reach it. The gateway reads the observer chains
+from the relay (`GET {relay_url}/api/registry?org=<org>&role=observer`), verifies each from the
+pinned root, and keeps the list for a minute.
+
+**Summary detail** carries the kind, verdict, a reason class (within grant, refused, over limit,
+expired, failed), the order total, state and currency, the limits used, who and when, and the
+inclusion proof with each step's snapshot digest and verdict: no parameters, records, product
+or partner names, prices or reasons in words. **Full detail** adds the parameters, the effect,
+the records, the outcome as recorded and the passkey word with its chain.
+
+**Proof without the anchor holding records.** Each receipt carries the proof of the action's
+records into the signed checkpoint at the action's end (`inclusion`). The gateway serves those
+checkpoints (`GET /v1/checkpoints?agent=&after=N`, one per action end plus the current one) and
+consistency proofs between them (`GET /v1/consistency?agent=&m=&n=`), so the anchor anchors
+every checkpoint a receipt can name and holds the gate to an append-only log, with nothing but
+hashes. A reader asks the anchor which minute holds the checkpoint's root.
+
+**Gaps.** Every plaintext names its `recipient`, a `seq` (the number of envelopes the gateway
+sealed to that recipient, ever) and `day`/`day_count`, and the gateway signs it (`sig`, Ed25519
+by the record key over the canonical plaintext without `sig`). HPKE base mode does not say who
+sealed; the signature does. A recipient whose `seq` jumps knows a receipt did not reach them,
+and the relay cannot fill the gap. The counts are `outbox/seq.json` in the store.
+
 `receipts.go` keeps this off the request path: settle writes a job to `outbox/` in the store, a
 worker seals one envelope per key and posts it to `{relay_url}/api/receipts`, and what the relay
 does not take waits there for the next round (every minute). A receipt never changes a verdict.

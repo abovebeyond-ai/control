@@ -250,12 +250,13 @@ type order struct {
 	Total    int64 // amount_total in cents
 	Currency string
 	Company  int64
+	Partner  int64 // the supplier, so a receipt can go to the supplier it concerns
 	Lines    []int64
 }
 
 func (c odooClient) order(ctx context.Context, id int64) (order, error) {
 	var rows []map[string]any
-	if _, err := c.call(ctx, policy.OdooOrderModel, "read", map[string]any{"ids": []int64{id}, "fields": []string{"name", "state", "amount_total", "currency_id", "company_id", "order_line"}}, &rows); err != nil {
+	if _, err := c.call(ctx, policy.OdooOrderModel, "read", map[string]any{"ids": []int64{id}, "fields": []string{"name", "state", "amount_total", "currency_id", "company_id", "partner_id", "order_line"}}, &rows); err != nil {
 		return order{}, err
 	}
 	if len(rows) != 1 {
@@ -265,6 +266,7 @@ func (c odooClient) order(ctx context.Context, id int64) (order, error) {
 	o := order{ID: id, Name: odooStr(r["name"]), State: odooStr(r["state"]), Total: cents(r["amount_total"]), Lines: ids(r["order_line"])}
 	_, o.Currency = many2one(r["currency_id"])
 	o.Company, _ = many2one(r["company_id"])
+	o.Partner, _ = many2one(r["partner_id"])
 	return o, nil
 }
 
@@ -281,7 +283,11 @@ func (c odooClient) held(total int64, currency string, ceiling int64) string {
 }
 
 func (o order) detail() map[string]any {
-	return map[string]any{"order": o.ID, "name": o.Name, "state": o.State, "amount_total": money(o.Total), "currency": o.Currency}
+	d := map[string]any{"order": o.ID, "name": o.Name, "state": o.State, "amount_total": money(o.Total), "currency": o.Currency}
+	if o.Partner != 0 {
+		d["partner_id"] = o.Partner
+	}
+	return d
 }
 
 // draft is odoo.order_draft: the lines priced at the products' cost first, refused above the

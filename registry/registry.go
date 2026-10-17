@@ -51,9 +51,13 @@ type Entry struct {
 	// Enc, when set, is the key receipts for this holder are sealed to: a P-256 key the phone
 	// keeps for ECDH (docs/odoo-gate.md, sealed receipts). The parent's signature covers it;
 	// it does not narrow.
-	Enc      *EncKey `json:"enc,omitempty"`
-	IssuedAt int64   `json:"iat"`
-	Expires  int64   `json:"exp"`
+	Enc *EncKey `json:"enc,omitempty"`
+	// Sees makes the entry an observer (role "observer", no kinds): someone the organisation
+	// attaches to the receipts of a part of itself, a manager's assistant, an insurer, a
+	// supplier for its own orders. It acts on nothing.
+	Sees     *Sees `json:"sees,omitempty"`
+	IssuedAt int64 `json:"iat"`
+	Expires  int64 `json:"exp"`
 }
 
 // JWK is a public key as a JSON Web Key: {"kty":"OKP","crv":"Ed25519","x"} or
@@ -63,6 +67,19 @@ type JWK struct {
 	Crv string `json:"crv"`
 	X   string `json:"x"`
 	Y   string `json:"y,omitempty"`
+}
+
+// RoleObserver is the role of an entry that receives receipts and acts on nothing.
+const RoleObserver = "observer"
+
+// Sees is what an observer receives: the receipts of everyone under the entry Under (or the
+// whole organisation when Under is its id), in full or as a summary, only for orders with one
+// of Partners when that is set, until Until.
+type Sees struct {
+	Under    string  `json:"under"`
+	Detail   string  `json:"detail"` // "full" or "summary"
+	Partners []int64 `json:"partners,omitempty"`
+	Until    int64   `json:"until"`
 }
 
 // EncKey is a P-256 public key for HPKE as a JWK, with kid the base64url of the first 16 bytes
@@ -244,6 +261,12 @@ func VerifyChain(chain []string, roots map[string]ed25519.PublicKey, now time.Ti
 		if e.DailyEUR < 0 {
 			return nil, fmt.Errorf("registry entry %s has a negative daily allowance", e.ID)
 		}
+		if err := e.observer(); err != nil {
+			return nil, err
+		}
+		if e.Sees != nil && i > 0 && e.Sees.Under == e.Org {
+			return nil, fmt.Errorf("registry entry %s sees the whole of %s, which only the root may give", e.ID, e.Org)
+		}
 		if e.Enc != nil {
 			if _, err := e.Enc.Point(); err != nil {
 				return nil, fmt.Errorf("registry entry %s: %v", e.ID, err)
@@ -255,6 +278,65 @@ func VerifyChain(chain []string, roots map[string]ed25519.PublicKey, now time.Ti
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// observer holds an observer entry to its shape: no kinds, no children, a key to seal to, and
+// a view inside its organisation that ends with the entry or before; and any other entry to
+// carrying no view.
+func (e Entry) observer() error {
+	if e.Role != RoleObserver {
+		if e.Sees != nil {
+			return fmt.Errorf("registry entry %s carries sees, and only an observer may", e.ID)
+		}
+		return nil
+	}
+	switch {
+	case e.Sees == nil:
+		return fmt.Errorf("observer %s says nothing about what it sees", e.ID)
+	case len(e.Kinds) != 0 || e.MayDelegate || e.CeilingEUR != 0:
+		return fmt.Errorf("observer %s may act on nothing and sign for nobody", e.ID)
+	case e.Enc == nil:
+		return fmt.Errorf("observer %s has no key to seal its receipts to", e.ID)
+	case e.Sees.Detail != "full" && e.Sees.Detail != "summary":
+		return fmt.Errorf("observer %s sees %q; full or summary", e.ID, e.Sees.Detail)
+	case e.Sees.Under != e.Org && !strings.HasPrefix(e.Sees.Under, e.Org+"#"):
+		return fmt.Errorf("observer %s looks under %q, outside %s", e.ID, e.Sees.Under, e.Org)
+	case e.Sees.Until <= 0 || e.Sees.Until > e.Expires:
+		return fmt.Errorf("observer %s sees until %d, which is not within its entry", e.ID, e.Sees.Until)
+	}
+	return nil
+}
+
+// Covers says whether a verified observer chain sees the receipts of a holder whose verified
+// chain is holder, at the time now. The observer's view must lie on the holder's chain (its
+// Under is the organisation or one of the holder's ancestors or the holder), and the entry
+// that signed the observer must stand at or above that point: nobody attaches an observer to
+// a part of the organisation outside their own.
+func Covers(observer, holder []Entry, now time.Time) bool {
+	if len(observer) == 0 || len(holder) == 0 {
+		return false
+	}
+	obs := observer[len(observer)-1]
+	if obs.Role != RoleObserver || obs.Sees == nil || obs.Sees.Until <= now.Unix() || obs.Org != holder[0].Org {
+		return false
+	}
+	signer := obs.Org
+	if len(observer) > 1 {
+		signer = observer[len(observer)-2].ID
+	}
+	at := func(id string) int {
+		if id == obs.Org {
+			return -1
+		}
+		for i, e := range holder {
+			if e.ID == id {
+				return i
+			}
+		}
+		return -2
+	}
+	under, by := at(obs.Sees.Under), at(signer)
+	return under != -2 && by != -2 && by <= under
 }
 
 // IDs lists the entries of a chain by id, root first, for the record.
