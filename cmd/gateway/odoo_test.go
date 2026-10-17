@@ -215,8 +215,12 @@ func TestTheOdooGateReadsUnderAMandateAndWritesOnAWord(t *testing.T) {
 	id = asked["pending"].(string)
 	wordTok := signWord(t, elise, raw)
 	code, out = call(s.word, "/v1/pending/x/word", id, map[string]any{"capability": wordTok, "chain": chain})
-	if code != 200 || out["verdict"] != "ALLOW" || out["effect"].(map[string]any)["ok"] != true || out["effect"].(map[string]any)["detail"].(map[string]any)["ceiling_eur"] != float64(5000) {
-		t.Fatalf("%d %v", code, out)
+	if code != 200 || out["verdict"] != "ALLOW" || out["effect"] != nil {
+		t.Fatalf("the relay hears the verdict, not the effect: %d %v", code, out)
+	}
+	// The agent reads the whole answer from the gate.
+	if _, st := call(s.pendingState, "/v1/pending/"+id, id, nil); st["record"].(map[string]any)["effect"].(map[string]any)["ok"] != true || st["record"].(map[string]any)["effect"].(map[string]any)["detail"].(map[string]any)["ceiling_eur"] != float64(5000) {
+		t.Fatalf("%v", st)
 	}
 	records, _ = store.Records(agent)
 	c = records[int(out["step"].(float64))].Claims()
@@ -382,9 +386,16 @@ func TestADailyAllowanceHoldsAcrossDrafts(t *testing.T) {
 		req.SetPathValue("id", id)
 		rec = httptest.NewRecorder()
 		s.word(rec, req)
-		var out map[string]any
+		// The agent's view: the whole record, from the gate.
+		st := httptest.NewRequest("GET", "/v1/pending/"+id, nil)
+		st.SetPathValue("id", id)
+		rec = httptest.NewRecorder()
+		s.pendingState(rec, st)
+		var out struct {
+			Record map[string]any `json:"record"`
+		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
-		return out
+		return out.Record
 	}
 
 	out := approve()

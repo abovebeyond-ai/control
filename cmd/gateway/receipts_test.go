@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/hpke"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/abovebeyond-ai/control/canonical"
+	"github.com/abovebeyond-ai/control/capability"
 	"github.com/abovebeyond-ai/control/effects"
 	"github.com/abovebeyond-ai/control/evidence"
 	"github.com/abovebeyond-ai/control/gateway"
@@ -108,7 +110,9 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 		}
 		switch strings.TrimPrefix(r.URL.Path, "/json/2/") {
 		case "product.product/read":
-			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Hops Saaz","standard_price":24.5,"purchase_ok":true}]`))
+			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Hops Saaz","default_code":"BEER-HOP-SAAZ","standard_price":24.5,"purchase_ok":true}]`))
+		case "res.partner/read":
+			_, _ = w.Write([]byte(`[{"id":76,"name":"Hopperij Westland"}]`))
 		case "purchase.order/create":
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			_, _ = w.Write([]byte(`[13]`))
@@ -158,6 +162,7 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []envelope
+	var announced []map[string]any
 	relayUp := true
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -167,6 +172,11 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"chain": chain})
 		case r.URL.Path == "/api/registry" && r.URL.Query().Get("role") == "observer":
 			_ = json.NewEncoder(w).Encode(map[string]any{"chains": observers})
+		case r.URL.Path == "/api/requests":
+			var a map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&a)
+			announced = append(announced, a)
+			w.WriteHeader(201)
 		case r.URL.Path == "/api/receipts" && !relayUp:
 			w.WriteHeader(503)
 		case r.URL.Path == "/api/receipts":
@@ -292,7 +302,64 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 	// gets this one, in full; the envelopes wait and go once the relay is back.
 	got, relayUp = nil, false
 	draft := policy.Action{Kind: "odoo.order_draft", Resource: "odoo:acme/purchase.order", Params: map[string]any{"partner_id": float64(76), "lines": []any{map[string]any{"product_id": float64(19), "qty": float64(2)}}}}
-	asked := post(s.submit, "/v1/submit", "", submitRequest{Agent: agent, Action: draft})
+	asked := post(s.submit, "/v1/submit", "", submitRequest{Agent: agent, Action: draft, Reason: "Saaz is below its reorder point"})
+	// The relay is told who, until when, and the bytes to sign; the request itself is sealed.
+	for i := 0; i < 200; i++ {
+		mu.Lock()
+		n := len(announced)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	ann := announced[0]
+	mu.Unlock()
+	rawAnn, _ := json.Marshal(ann)
+	for _, leak := range []string{"Hopperij", "Saaz", "partner_id", "24.5", "reorder", "odoo.order_draft"} {
+		if strings.Contains(string(rawAnn), leak) {
+			t.Fatalf("the announcement carries %q: %s", leak, rawAnn)
+		}
+	}
+	if ann["holder"] != "acme#shane" || ann["payload"] == "" || len(ann["sealed"].([]any)) != 2 {
+		t.Fatalf("%s", rawAnn)
+	}
+	for _, x := range ann["sealed"].([]any) {
+		env := x.(map[string]any)
+		if env["holder"] != "acme#shane" {
+			continue
+		}
+		k, _ := hpke.NewDHKEMPrivateKey(keys["acme#shane"])
+		enc, _ := base64.RawURLEncoding.DecodeString(env["enc"].(string))
+		ct, _ := base64.RawURLEncoding.DecodeString(env["ct"].(string))
+		aad, _ := canonical.Encode(map[string]any{"holder": "acme#shane", "pending": env["pending"], "exp": int64(env["exp"].(float64)), "kid": env["kid"]})
+		rcpt, err := hpke.NewRecipient(enc, k, hpke.HKDFSHA256(), hpke.AES128GCM(), []byte("bextrust request v1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain, err := rcpt.Open(aad, ct)
+		if err != nil {
+			t.Fatalf("the phone cannot open its request: %v", err)
+		}
+		var p map[string]any
+		_ = json.Unmarshal(plain, &p)
+		d := p["display"].(map[string]any)
+		line := d["lines"].([]any)[0].(map[string]any)
+		if d["partner"] != "Hopperij Westland" || line["code"] != "BEER-HOP-SAAZ" || line["unit_cost"] != "24.50" || p["reason"] != "Saaz is below its reorder point" || p["act"] != capability.ActDigest(draft) {
+			t.Fatalf("%s", plain)
+		}
+		var body map[string]any
+		dec := json.NewDecoder(bytes.NewReader(plain))
+		dec.UseNumber()
+		_ = dec.Decode(&body)
+		sig, _ := hex.DecodeString(body["sig"].(string))
+		delete(body, "sig")
+		signed, _ := canonical.Encode(body)
+		if !ed25519.Verify(gateKey.Public().(ed25519.PublicKey), signed, sig) {
+			t.Fatal("the request is not signed by the gate")
+		}
+	}
 	payload, _ := base64.RawURLEncoding.DecodeString(asked["payload"].(string))
 	if out := post(s.word, "/v1/pending/x/word", asked["pending"].(string), map[string]any{"capability": signWord(t, shane, payload), "chain": chain}); out["verdict"] != "ALLOW" {
 		t.Fatalf("%v", out)

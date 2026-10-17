@@ -114,7 +114,7 @@ func (s *service) asksWord(w http.ResponseWriter, g *gateway.Gateway, req submit
 	s.pendMu.Unlock()
 	asked := map[string]any{"pending": id, "holder": holder, "payload": base64.RawURLEncoding.EncodeToString(raw), "challenge": capability.Challenge(raw),
 		"action": map[string]any{"kind": req.Action.Kind, "resource": req.Action.Resource, "params": req.Action.Params}}
-	go s.announce(asked)
+	go s.announceSealed(p)
 	writeJSON(w, 202, asked)
 	return true
 }
@@ -126,8 +126,8 @@ func orNobody(s string) string {
 	return s
 }
 
-// announce tells the relay a word is wanted. The relay is a channel and holds no key: an
-// announcement that does not arrive delays the write, it cannot forge one.
+// announce posts what announceSealed made to the relay. The relay is a channel and holds no key:
+// an announcement that does not arrive delays the write, it cannot forge one.
 func (s *service) announce(asked map[string]any) {
 	base := s.cfg.RelayURL
 	if base == "" {
@@ -248,7 +248,7 @@ func (s *service) word(w http.ResponseWriter, r *http.Request) {
 	v := g.SubmitChained(req.Run, req.Action, p.Holder, req.Extension, req.Premises, p.Body, p.Signature, req.Capability, req.Chain)
 	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "done", status, out)
-	writeJSON(w, status, out)
+	writeJSON(w, status, forRelay(out))
 }
 
 // refuse is POST /v1/pending/{id}/refuse: the person said no. A refusal is not signed, since
@@ -279,7 +279,19 @@ func (s *service) refuse(w http.ResponseWriter, r *http.Request) {
 	req.asked = p.Holder
 	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "refused", status, out)
-	writeJSON(w, status, out)
+	writeJSON(w, status, forRelay(out))
+}
+
+// forRelay is what the relay is told of a decided write: the verdict and where it is recorded.
+// What was done, to which order, for how much, the person and the agent read in their receipts.
+func forRelay(out map[string]any) map[string]any {
+	m := map[string]any{}
+	for _, k := range []string{"verdict", "reason", "step", "action", "error"} {
+		if v, ok := out[k]; ok {
+			m[k] = v
+		}
+	}
+	return m
 }
 
 // pendingState is GET /v1/pending/{id}: waiting, done, refused or expired, with the record

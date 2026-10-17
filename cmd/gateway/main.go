@@ -515,6 +515,10 @@ type submitRequest struct {
 	// (Grant.Asks) is not the one (docs/odoo-gate.md).
 	Chain  []string `json:"chain,omitempty"`
 	Holder string   `json:"holder,omitempty"`
+	// Reason is the agent's own words for why it asks, shown to the person sealed with the
+	// request and marked as the agent's. Outside the act digest, so it binds nothing the person
+	// signs; inside the submission the agent signed.
+	Reason string `json:"reason,omitempty"`
 	// asked is the holder whose word was asked for this action, set when a waiting write is
 	// decided (pending.go); the receipt says so and goes to them.
 	asked string

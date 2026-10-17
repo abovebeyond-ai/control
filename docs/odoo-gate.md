@@ -208,6 +208,28 @@ worker seals one envelope per key and posts it to `{relay_url}/api/receipts`, an
 does not take waits there for the next round (every minute). A receipt never changes a verdict.
 The relay stores ciphertext; what it still sees is who gets a receipt, when, and how large.
 
+## Sealed requests
+
+When a write waits for a person's word, the gateway reads from Odoo, with the instance key and
+only reading, what the person needs to decide (`effects.Odoo.Display`): for a draft the supplier's
+name and each product's name, code, quantity and cost with the total at cost; for a quantity
+change, cancel or approval request the order's name, state, supplier and current total. It seals
+`{v, pending, holder, exp, agent, action, act, display, reason, payload_digest, gate_key,
+recipient, sig}` (HPKE as receipts, info `bextrust request v1`, aad the canonical JSON of
+`{holder, pending, exp, kid}`) to the person's current entry's `enc` (their chain at the relay,
+verified and not revoked) and to `audit_enc`, signs it with the record key, and tells the relay
+only `{pending, holder, exp, payload, challenge, sealed}`: no action, no names. `act` is
+`capability.ActDigest(action)`, the digest the payload names, so the phone can hold the screen to
+what the passkey signs. `reason` is the agent's own words, sent with the submission
+(`reason` in the body, outside the act digest, inside what the agent signed). The relay hears
+only the verdict, reason, step and action id of a decided write; the agent reads the whole
+record from the gateway (`GET /v1/pending/{id}`).
+
+**A re-enrolled person's old passkey.** The revocation list may carry `entries`, signed
+revocations (`rv1`) of registry entries by the digest of their exact text, signed by whoever
+signed the entry. A chain with a revoked entry is refused (`registry.Revoked`); a revocation
+signed by anyone else is ignored, so whoever serves the list can withhold one, never invent one.
+
 ## Not built
 
 - **Ending a mandate early.** The relay's `/api/mandates/{id}/end` and `/api/stop-all` are not

@@ -589,32 +589,39 @@ func (s *service) postReceipt(body []byte) (int, error) {
 // HKDF-SHA256, AES-128-GCM, info "bextrust receipt v1", and as aad the canonical JSON of the
 // envelope's header, so the relay cannot move a receipt to another holder, id or time.
 func sealReceipt(key registry.EncKey, holder, id string, at int64, plaintext []byte) (envelope, error) {
-	point, err := key.Point()
-	if err != nil {
-		return envelope{}, err
-	}
-	pub, err := ecdh.P256().NewPublicKey(point)
-	if err != nil {
-		return envelope{}, err
-	}
-	pk, err := hpke.NewDHKEMPublicKey(pub)
-	if err != nil {
-		return envelope{}, err
-	}
 	aad, err := receiptAAD(holder, id, at, key.Kid)
 	if err != nil {
 		return envelope{}, err
 	}
-	enc, sender, err := hpke.NewSender(pk, hpke.HKDFSHA256(), hpke.AES128GCM(), []byte(receiptInfo))
-	if err != nil {
-		return envelope{}, err
-	}
-	ct, err := sender.Seal(aad, plaintext)
+	enc, ct, err := hpkeSeal(key, receiptInfo, aad, plaintext)
 	if err != nil {
 		return envelope{}, err
 	}
 	b64 := base64.RawURLEncoding.EncodeToString
 	return envelope{Holder: holder, ID: id, At: at, Kid: key.Kid, Enc: b64(enc), CT: b64(ct)}, nil
+}
+
+// hpkeSeal is the one suite every envelope uses: base mode, DHKEM(P-256, HKDF-SHA256),
+// HKDF-SHA256, AES-128-GCM; info names what is sealed, aad binds the envelope's header.
+func hpkeSeal(key registry.EncKey, info string, aad, plaintext []byte) (enc, ct []byte, err error) {
+	point, err := key.Point()
+	if err != nil {
+		return nil, nil, err
+	}
+	pub, err := ecdh.P256().NewPublicKey(point)
+	if err != nil {
+		return nil, nil, err
+	}
+	pk, err := hpke.NewDHKEMPublicKey(pub)
+	if err != nil {
+		return nil, nil, err
+	}
+	enc, sender, err := hpke.NewSender(pk, hpke.HKDFSHA256(), hpke.AES128GCM(), []byte(info))
+	if err != nil {
+		return nil, nil, err
+	}
+	ct, err = sender.Seal(aad, plaintext)
+	return enc, ct, err
 }
 
 // receiptAAD is the canonical JSON of {"holder","id","at","kid"}.

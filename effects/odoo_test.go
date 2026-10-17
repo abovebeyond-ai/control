@@ -92,6 +92,12 @@ func (f *fakeOdoo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rows = append(rows, map[string]any{"id": id, "state": o.state, "amount_total": f.total(id)})
 		}
 		answer(rows)
+	case "res.partner/read":
+		rows := []any{}
+		for _, id := range idsOf() {
+			rows = append(rows, map[string]any{"id": id, "name": fmt.Sprintf("Supplier %d", id)})
+		}
+		answer(rows)
 	case "product.product/read":
 		rows := []any{}
 		for _, id := range idsOf() {
@@ -430,5 +436,28 @@ func TestAnOrderIsHeldToTheSignersDailyAllowance(t *testing.T) {
 	}
 	if out := set(2, 99000); !out.OK || out.Counted != -78300 {
 		t.Fatalf("going down is never over the day: %+v", out)
+	}
+}
+
+// What a person sees before a draft is Odoo's own: the supplier's name, each product's name,
+// code and cost, the total at cost; for a change to an order, its name, state and total.
+func TestTheDisplayIsOdoosWord(t *testing.T) {
+	f := newFakeOdoo()
+	o := odooFor(t, f)
+	d, err := o.Display(context.Background(), act("odoo.order_draft", map[string]any{"partner_id": float64(8), "lines": []any{map[string]any{"product_id": float64(31), "qty": float64(3)}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := d["lines"].([]any)
+	l := lines[0].(map[string]any)
+	if d["total_at_cost"] != "360.00" || l["name"] != "Office Chair" || l["unit_cost"] != "120.00" || l["qty"] != int64(3) {
+		t.Fatalf("%v", d)
+	}
+	d, err = o.Display(context.Background(), act("odoo.order_cancel", map[string]any{"order": float64(7)}))
+	if err != nil || d["state"] != "draft" || d["total"] == "" {
+		t.Fatalf("%v %v", d, err)
+	}
+	if f.wrote() {
+		t.Fatal("the display wrote to Odoo")
 	}
 }
