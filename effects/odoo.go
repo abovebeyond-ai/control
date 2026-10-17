@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -34,7 +35,16 @@ type Odoo struct {
 	SecretsDir string
 	Instances  map[string]OdooInstance
 	Client     *http.Client
+	// Provisioned answers a key file by name from what the organisation sealed to the gateway
+	// (cmd/gateway/provision.go); it is read before the secrets directory. With OnlyProvisioned
+	// the directory is not read at all: a gateway in Confidential Space holds no key on disk,
+	// and until the organisation provisions it, it refuses every Odoo call and says why.
+	Provisioned     func(name string) ([]byte, bool)
+	OnlyProvisioned bool
 }
+
+// ErrNotProvisioned is the plain reason an Odoo call is refused before the keys arrive.
+var ErrNotProvisioned = errors.New("the gate holds no Odoo key yet: the organisation has not provisioned this gate since it started")
 
 // OdooInstance is where one client's Odoo is: an address and a database, configuration and
 // not a secret.
@@ -88,12 +98,31 @@ func (l limits) day(add int64) string {
 // else the instance's. The agent's name is the gateway's addition, never the hand's, and is
 // held to letters, digits and dashes before it becomes part of a file name.
 func (o Odoo) key(instance string, params map[string]any) ([]byte, error) {
+	names := []string{}
 	if agent, _ := params[OdooAgentParam].(string); agent != "" && odooSlug.MatchString(agent) {
-		if raw, err := os.ReadFile(filepath.Join(o.SecretsDir, "odoo-key-"+instance+"-"+agent)); err == nil {
+		names = append(names, "odoo-key-"+instance+"-"+agent)
+	}
+	names = append(names, "odoo-key-"+instance)
+	if o.Provisioned != nil {
+		for _, n := range names {
+			if raw, ok := o.Provisioned(n); ok {
+				return raw, nil
+			}
+		}
+	}
+	if o.OnlyProvisioned {
+		return nil, ErrNotProvisioned
+	}
+	for _, n := range names[:len(names)-1] {
+		if raw, err := os.ReadFile(filepath.Join(o.SecretsDir, n)); err == nil {
 			return raw, nil
 		}
 	}
-	return os.ReadFile(filepath.Join(o.SecretsDir, "odoo-key-"+instance))
+	raw, err := os.ReadFile(filepath.Join(o.SecretsDir, names[len(names)-1]))
+	if err != nil {
+		return nil, errors.New("no Odoo key for " + instance + " in the gateway's secrets")
+	}
+	return raw, nil
 }
 
 var odooSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -122,7 +151,7 @@ func (o Odoo) Perform(ctx context.Context, a policy.Action) Outcome {
 	}
 	raw, err := o.key(instance, a.Params)
 	if err != nil {
-		return Outcome{Error: "no Odoo key for " + instance + " in the gateway's secrets"}
+		return Outcome{Error: err.Error()}
 	}
 	client := o.Client
 	if client == nil {

@@ -14,14 +14,17 @@
 // chain says which policy judged and the rest must agree with it. With
 // --attestation the hardware's quote is verified under Intel's roots, it must
 // bind the key given, and its MRTD becomes the measurement every record must
-// carry: that is what makes the chain Tier 3 to a stranger.
+// carry: that is what makes the chain Tier 3 to a stranger. A gateway in Google
+// Confidential Space presents a Google-signed token instead of a quote: it is held to
+// Google's keys, to Intel TDX, Confidential Space, debugging disabled since boot, the key's
+// nonce and, with --expect-digest, the container image you checked; the image digest is
+// then the measurement every record carries.
 package main
 
 import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha512"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -57,6 +60,7 @@ func main() {
 	gatewayURL := flag.String("gateway", "", "read everything from a running gateway at this URL instead of a store directory")
 	endorsement := flag.String("endorsement", "", "Google's launch endorsement for the firmware (a .binarypb); default: fetched by MRTD unless --offline")
 	releaseSHA384 := flag.String("release-sha384", "", "the SHA-384 of the release binary the machine should have measured into RTMR3 (from the release asset)")
+	expectDigest := flag.String("expect-digest", "", "for a gateway in Confidential Space: the container image digest (sha256:...) its attestation token must name")
 	didLog := flag.String("did-log", "", "the did.jsonl (file or URL) whose #control-gateway history supplies the keys: the current one for the attestation, and for each chain the one that signed it (instead of --key)")
 	flag.Parse()
 	var src source
@@ -127,27 +131,35 @@ func main() {
 	}
 	var quoteDigest string
 	if haveAttestation {
-		if raw, err := base64.StdEncoding.DecodeString(rec.QuoteB64); err == nil {
-			quoteDigest = canonical.Tag(canonical.SHA256(raw))
+		if ev := rec.Evidence(); len(ev) > 0 {
+			quoteDigest = canonical.Tag(canonical.SHA256(ev))
 		}
 		if rec.PublicKey != *keyHex {
 			fmt.Printf("BROKEN attestation: it binds key %s, not %s\n", rec.PublicKey, *keyHex)
 			os.Exit(1)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		err = attest.Verify(ctx, &rec, attest.Options{Collateral: !*offline})
+		err = attest.Verify(ctx, &rec, attest.Options{Collateral: !*offline, ImageDigest: *expectDigest})
 		cancel()
 		if err != nil {
 			fmt.Printf("BROKEN attestation: %v\n", err)
 			os.Exit(1)
 		}
 		_, *measurement, _ = canonical.UntagAny(rec.Measurement())
-		fmt.Printf("holds  attestation: %s quote binds the key, MRTD %s\n", rec.Platform, rec.MRTD)
+		if rec.IsConfidentialSpace() {
+			// Google's token names the image; nothing below it is the operator's to change.
+			fmt.Printf("holds  attestation: Google's token for %s / %s, debugging disabled since boot, binds the key, image %s\n", rec.Platform, rec.Software, rec.ImageDigest)
+			if *expectDigest == "" {
+				fmt.Printf("note   attestation: no --expect-digest, so the image is the one the token names, not one you checked\n")
+			}
+		} else {
+			fmt.Printf("holds  attestation: %s quote binds the key, MRTD %s\n", rec.Platform, rec.MRTD)
+		}
 		// The release the machine says it runs, from its newest record: the asset at that
 		// tag is what RTMR3 must carry. The checker's own tag is not the reference (13
 		// September 2026: the watcher moved to v0.16.3 for its checker while the machine
 		// stayed on v0.16.2, and held the machine to the wrong binary).
-		if *releaseSHA384 == "" && !*offline {
+		if !rec.IsConfidentialSpace() && *releaseSHA384 == "" && !*offline {
 			tag, sha256Hex := releaseFromAttestation(&rec)
 			if tag == "" {
 				tag, sha256Hex = releaseOf(src, agents)
@@ -162,7 +174,9 @@ func main() {
 				}
 			}
 		}
-		broken += bootLayers(&rec, *endorsement, *releaseSHA384, *offline)
+		if !rec.IsConfidentialSpace() {
+			broken += bootLayers(&rec, *endorsement, *releaseSHA384, *offline)
+		}
 	}
 	for _, agent := range agents {
 		records, err := src.Records(agent)
@@ -362,12 +376,12 @@ func main() {
 						case err != nil || !found:
 							fmt.Printf("BROKEN %s: the anchored checkpoint commits to attestation %s, which is not kept\n", agent, r.Checkpoint.Attestation[:20])
 							broken++
-						case earlier.PublicKey != rec.PublicKey || earlier.MRTD != rec.MRTD:
+						case earlier.PublicKey != rec.PublicKey || earlier.Measurement() != rec.Measurement():
 							fmt.Printf("BROKEN %s: the anchored attestation binds another key or measurement than the one presented\n", agent)
 							broken++
 						default:
 							ctx2, cancel2 := context.WithTimeout(context.Background(), time.Minute)
-							err := attest.Verify(ctx2, &earlier, attest.Options{Collateral: !*offline})
+							err := attest.Verify(ctx2, &earlier, attest.Options{Collateral: !*offline, ImageDigest: *expectDigest})
 							cancel2()
 							if err != nil {
 								fmt.Printf("BROKEN %s: the anchored attestation does not verify: %v\n", agent, err)

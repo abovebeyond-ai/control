@@ -145,7 +145,7 @@ func (s *service) announce(asked map[string]any) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := s.relayDo(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "relay: the word for %v was not announced: %v\n", asked["pending"], err)
 		return

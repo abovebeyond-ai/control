@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/abovebeyond-ai/control/canonical"
@@ -66,6 +67,11 @@ type Record struct {
 	// The checker holds RTMR3 to that release's asset; the newest record's release is the
 	// fallback, and lags after an upgrade until the first new record (13 September 2026).
 	Release string `json:"release,omitempty"`
+	// Confidential Space (cs.go): the token Google signed for the workload, the software it
+	// names and the container image digest it carries. A record has a quote or a token.
+	Software    string `json:"software,omitempty"`
+	Token       string `json:"token,omitempty"`
+	ImageDigest string `json:"image_digest,omitempty"`
 }
 
 // Input is one extension of RTMR3: what it was and its SHA-384. A small input
@@ -79,7 +85,13 @@ type Input struct {
 
 // Measurement is the tagged digest the token carries under this record: the
 // MRTD, a SHA-384 of the initial contents of the trust domain.
-func (r Record) Measurement() string { return "sha-384:" + r.MRTD }
+func (r Record) Measurement() string {
+	if r.Token != "" {
+		// In Confidential Space what runs is the container image Google names in the token.
+		return "sha-256:" + strings.TrimPrefix(r.ImageDigest, "sha256:")
+	}
+	return "sha-384:" + r.MRTD
+}
 
 // Parse a raw DCAP v4 quote.
 func Parse(raw []byte) (*pb.QuoteV4, error) {
@@ -186,12 +198,35 @@ type Options struct {
 	Collateral bool
 	// Now is the time certificates are checked against; zero means now.
 	Now time.Time
+	// ImageDigest is the container image a Confidential Space record must name ("sha256:...");
+	// empty accepts the image the record names, which the caller then compares itself.
+	ImageDigest string
+	// JWKS overrides Google's keys for a Confidential Space token (tests).
+	JWKS *JWKS
 }
 
 // Verify a record: the quote verifies under Intel's roots (and collateral when
 // asked), it binds the key the record names, and its MRTD is the record's.
 // The caller then compares Measurement() with what the tokens carry.
 func Verify(ctx context.Context, r *Record, opts Options) error {
+	if r.IsConfidentialSpace() {
+		pub, err := hex.DecodeString(r.PublicKey)
+		if err != nil || len(pub) != ed25519.PublicKeySize {
+			return errors.New("the record names no valid public key")
+		}
+		want := opts.ImageDigest
+		if want == "" {
+			want = r.ImageDigest
+		}
+		c, err := VerifyCS(ctx, r.Token, CSOptions{ImageDigest: want, Key: ed25519.PublicKey(pub), JWKS: opts.JWKS, Now: opts.Now})
+		if err != nil {
+			return err
+		}
+		if c.ImageDigest != r.ImageDigest {
+			return errors.New("the record's image digest is not the token's")
+		}
+		return nil
+	}
 	if r.Platform != PlatformTDX {
 		return fmt.Errorf("platform %s is not hardware-attested", r.Platform)
 	}

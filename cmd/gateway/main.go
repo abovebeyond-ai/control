@@ -71,9 +71,10 @@ type config struct {
 	// and judges within grants; without this, anyone who can reach the port can
 	// make it act. The reading endpoints stay open: evidence is for strangers.
 	ClientToken string `json:"client_token"`
-	// Attestation is "software" (the default: the operator vouches) or "tdx":
+	// Attestation is "software" (the default: the operator vouches), "tdx":
 	// the gateway asks the hardware for a quote binding its key at start and
-	// refuses to run without one. A gateway configured to prove and unable to
+	// refuses to run without one, or "confidential-space" (cs.go): the launcher's
+	// Google-signed token names the image and binds a key made in memory. A gateway configured to prove and unable to
 	// must not judge, because its evidence would claim what it cannot show.
 	Attestation string `json:"attestation"`
 	// Release names this gateway's own build, "v0.11.0 sha256:…", written by the boot
@@ -111,6 +112,10 @@ type config struct {
 	// RelayURL is where a write waiting for a person's word is announced (POST /api/requests);
 	// RELAY_URL in the environment when this is empty, and nobody is told when both are.
 	RelayURL string `json:"relay_url,omitempty"`
+	// RelayToken, when set, goes as a bearer token on every call to the relay (requests,
+	// receipts, chains, observers, revocations): the relay's door for the gate. RELAY_TOKEN in
+	// the environment overrides it, as CLIENT_TOKEN overrides client_token.
+	RelayToken string `json:"relay_token,omitempty"`
 	// Odoo maps an instance, the first part of an odoo:<instance>/<model> resource, to its
 	// address and database; its API key is odoo-key-<instance> in the secrets.
 	Odoo map[string]effects.OdooInstance `json:"odoo,omitempty"`
@@ -162,7 +167,9 @@ func (c config) orgKeys() (map[string]ed25519.PublicKey, error) {
 }
 
 type service struct {
-	cfg      config
+	cfg config
+	// prov holds the provisioning key and what the organisation sealed to it (provision.go).
+	prov     *provisioner
 	key      ed25519.PrivateKey
 	attested *attest.Record
 	store    *log.Store
@@ -219,9 +226,22 @@ func main() {
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:8471"
 	}
+	envOverrides(&cfg)
+	cs := cfg.Attestation == attestationCS
+	var key ed25519.PrivateKey
+	if cs {
+		// Made in memory, never written; its log is its own (cs.go).
+		key, err = memoryKey()
+		fail(err)
+		cfg.Store = csStore(cfg.Store, key.Public().(ed25519.PublicKey))
+		if cfg.ClientToken == "" {
+			fail(errNoClientToken)
+		}
+	} else {
+		key, err = loadKey(filepath.Join(cfg.Secrets, "control-signing.key"))
+		fail(err)
+	}
 	store, err := log.Open(cfg.Store)
-	fail(err)
-	key, err := loadKey(filepath.Join(cfg.Secrets, "control-signing.key"))
 	fail(err)
 	if *attestOnly {
 		r, err := acquire(cfg, key)
@@ -230,20 +250,32 @@ func main() {
 		return
 	}
 	s := &service{cfg: cfg, key: key, store: store, effects: effects.Registry{}, gateways: map[string]*gateway.Gateway{}}
+	s.prov, err = newProvisioner()
+	fail(err)
 	if cfg.Revocations != nil {
 		s.revoked = newRevokedList(time.Now)
-		s.revoked.follow(*cfg.Revocations, portalToken(cfg.Secrets))
+		token := cfg.RelayToken
+		if token == "" {
+			token = portalToken(cfg.Secrets)
+		}
+		s.revoked.follow(*cfg.Revocations, token)
 	}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets, Reviewer: cfg.Reviewer})
 	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.Forge{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.System{Bases: cfg.Systems, Table: cfg.kinds()})
-	s.effects.Add(effects.Odoo{SecretsDir: cfg.Secrets, Instances: cfg.Odoo})
+	s.effects.Add(effects.Odoo{SecretsDir: cfg.Secrets, Instances: cfg.Odoo, Provisioned: s.prov.key, OnlyProvisioned: cs})
 	_, err = cfg.orgKeys()
 	fail(err)
-	s.attested, err = attestation(cfg, key)
-	fail(err)
+	if cs {
+		s.attested, err = csAttest(cfg, key, launcherTokens)
+		fail(err)
+		go s.refreshAttestation(launcherTokens)
+	} else {
+		s.attested, err = attestation(cfg, key)
+		fail(err)
+	}
 	// Every agent's chain is opened now, not at its first request: an action the last
 	// run was stopped in the middle of gets its closing records at boot.
 	for agent := range cfg.Agents {
@@ -279,6 +311,8 @@ func main() {
 	})
 	mux.HandleFunc("GET /v1/attestation", s.accessed("attestation", s.attestation))
 	mux.HandleFunc("GET /v1/attestations", s.accessed("attestations", s.attestations))
+	mux.HandleFunc("GET /v1/provision-key", s.accessed("provision-key", s.provisionKey))
+	mux.HandleFunc("POST /v1/provision", s.provision)
 	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s, %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, s.platform(), map[bool]string{true: ", dry", false: ""}[cfg.Dry])
 	fail(http.ListenAndServe(cfg.Listen, mux))
 }
@@ -296,6 +330,8 @@ func attestation(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 	switch cfg.Attestation {
 	case "", "software":
 		return nil, nil
+	case attestationCS:
+		return nil, errors.New("confidential-space is attested by csAttest")
 	case "tdx":
 		if r, err := stored(cfg, key); err == nil {
 			return r, nil
@@ -306,7 +342,7 @@ func attestation(cfg config, key ed25519.PrivateKey) (*attest.Record, error) {
 		}
 		return r, nil
 	}
-	return nil, fmt.Errorf("attestation %q: software or tdx", cfg.Attestation)
+	return nil, fmt.Errorf("attestation %q: software, tdx or confidential-space", cfg.Attestation)
 }
 
 // rtmr3Inputs: the running binary and the carried configuration, when there is one.
@@ -548,6 +584,12 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	var req submitRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, 400, map[string]any{"error": "bad request: " + err.Error()})
+		return
+	}
+	// A gateway that takes its Odoo keys from the organisation refuses Odoo work until they
+	// came, before anything is judged or asked of a person (provision.go).
+	if s.cfg.Attestation == attestationCS && strings.HasPrefix(req.Action.Resource, "odoo:") && len(s.prov.names()) == 0 {
+		writeJSON(w, 503, map[string]any{"error": effects.ErrNotProvisioned.Error()})
 		return
 	}
 	// The hand's signature over exactly these bytes, hex, in Control-Signature.

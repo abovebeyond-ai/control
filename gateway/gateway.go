@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abovebeyond-ai/control/attest"
@@ -106,6 +107,9 @@ type Gateway struct {
 	tree        *merkle.Tree
 	step        int
 	runs        map[string]policy.PathSummary // path summary per run; "" is the run of a hand that names none
+	// att is the attestation in force: a Confidential Space token is taken again every day
+	// (SetAttestation), and each record names the one it was written under.
+	att atomic.Pointer[attest.Record]
 	// agboms remembers, per action, the digest of the bill of materials the hand
 	// submitted with the request, so the effect and result records name the same one.
 	agboms map[string]string
@@ -138,18 +142,17 @@ func Open(cfg Config) (*Gateway, error) {
 	}
 	alg := canonical.Algorithm
 	if cfg.Attestation != nil {
-		// A quote that binds another key is somebody else's attestation.
-		quote, err := attest.Parse(mustDecodeB64(cfg.Attestation.QuoteB64))
-		if err != nil || !attest.BindsKey(quote, cfg.Key.Public().(ed25519.PublicKey)) {
-			return nil, errors.New("gateway: the attestation does not bind this gateway's key")
+		if err := bindsKey(cfg.Attestation, cfg.Key.Public().(ed25519.PublicKey)); err != nil {
+			return nil, err
 		}
-		cfg.Platform = attest.PlatformTDX
+		cfg.Platform = cfg.Attestation.Platform
 		alg, measurement, err = canonical.UntagAny(cfg.Attestation.Measurement())
 		if err != nil {
 			return nil, err
 		}
 	}
 	g := &Gateway{cfg: cfg, measurement: measurement, alg: alg, head: evidence.GenesisHead(), tree: merkle.New(), runs: map[string]policy.PathSummary{}}
+	g.att.Store(cfg.Attestation)
 	records, err := cfg.Store.Records(cfg.Agent)
 	if err != nil {
 		return nil, err
@@ -304,7 +307,52 @@ func (g *Gateway) Measurement() string { return g.measurement }
 func (g *Gateway) Platform() string { return g.cfg.Platform }
 
 // Attestation is the hardware's record, or nil when software attests.
-func (g *Gateway) Attestation() *attest.Record { return g.cfg.Attestation }
+func (g *Gateway) Attestation() *attest.Record { return g.att.Load() }
+
+// SetAttestation replaces the attestation in force by a newer one of the same key and the same
+// measurement: the daily token of a gateway in Confidential Space.
+func (g *Gateway) SetAttestation(r *attest.Record) error {
+	if r == nil {
+		return errors.New("gateway: no attestation")
+	}
+	if err := bindsKey(r, g.cfg.Key.Public().(ed25519.PublicKey)); err != nil {
+		return err
+	}
+	if _, m, err := canonical.UntagAny(r.Measurement()); err != nil || m != g.measurement || r.Platform != g.cfg.Platform {
+		return errors.New("gateway: the new attestation names another platform or measurement")
+	}
+	g.att.Store(r)
+	return nil
+}
+
+// bindsKey: a quote whose REPORTDATA, or a token whose nonce, binds another key is somebody
+// else's attestation.
+func bindsKey(r *attest.Record, pub ed25519.PublicKey) error {
+	if r.IsConfidentialSpace() {
+		c, err := attest.ParseCSClaims(r.Token)
+		if err != nil || !c.HasNonce(attest.KeyNonce(pub)) || r.ImageDigest == "" || c.ImageDigest != r.ImageDigest {
+			return errors.New("gateway: the attestation token does not bind this gateway's key to its image")
+		}
+		return nil
+	}
+	quote, err := attest.Parse(mustDecodeB64(r.QuoteB64))
+	if err != nil || !attest.BindsKey(quote, pub) {
+		return errors.New("gateway: the attestation does not bind this gateway's key")
+	}
+	return nil
+}
+
+// submods is the attestation part of a record: the platform and measurement, and under
+// Confidential Space the software and the digest of the token in force.
+func (g *Gateway) submods() map[string]any {
+	a := map[string]any{"platform": g.cfg.Platform, "measurement": g.alg + ":" + g.measurement}
+	if r := g.att.Load(); r.IsConfidentialSpace() {
+		a["software"] = r.Software
+		a["image_digest"] = r.ImageDigest
+		a["token"] = canonical.Tag(canonical.SHA256([]byte(r.Token)))
+	}
+	return map[string]any{"attestation": a}
+}
 
 // PublicKey of the evidence signer.
 func (g *Gateway) PublicKey() ed25519.PublicKey { return g.cfg.Key.Public().(ed25519.PublicKey) }
@@ -709,7 +757,7 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 	token := evidence.Token{
 		"iss": g.cfg.Issuer, "iat": g.cfg.Clock().Unix(), "nonce": "n-" + hex.EncodeToString(nonce),
 		"eat_profile": evidence.Profile, "poc_claims": claims,
-		"submods": map[string]any{"attestation": map[string]any{"platform": g.cfg.Platform, "measurement": g.alg + ":" + g.measurement}},
+		"submods": g.submods(),
 	}
 	if err := evidence.Sign(token, g.cfg.Key); err != nil {
 		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the token cannot be signed: " + err.Error()}
@@ -797,7 +845,7 @@ func (g *Gateway) Follow(run, actionID, phase string, action policy.Action, prin
 	token := evidence.Token{
 		"iss": g.cfg.Issuer, "iat": g.cfg.Clock().Unix(), "nonce": "n-" + hex.EncodeToString(nonce),
 		"eat_profile": evidence.Profile, "poc_claims": claims,
-		"submods": map[string]any{"attestation": map[string]any{"platform": g.cfg.Platform, "measurement": g.alg + ":" + g.measurement}},
+		"submods": g.submods(),
 	}
 	if err := evidence.Sign(token, g.cfg.Key); err != nil {
 		return Verdict{Verdict: "FAIL_CLOSED", Reason: "the token cannot be signed: " + err.Error()}
@@ -846,8 +894,8 @@ func (g *Gateway) Checkpoint() (Checkpoint, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	cp := Checkpoint{Agent: g.cfg.Agent, TreeSize: g.tree.Size(), Root: canonical.Tag(hex.EncodeToString(g.tree.Root())), ChainHead: canonical.Tag(g.head)}
-	if g.cfg.Attestation != nil {
-		cp.Attestation = canonical.Tag(canonical.SHA256(mustDecodeB64(g.cfg.Attestation.QuoteB64)))
+	if r := g.att.Load(); r != nil {
+		cp.Attestation = canonical.Tag(canonical.SHA256(r.Evidence()))
 	}
 	in, err := CheckpointInput(cp)
 	if err != nil {
@@ -870,8 +918,8 @@ func (g *Gateway) checkpointAt(size int) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("no tree of size %d; the log holds %d records", size, g.tree.Size())
 	}
 	cp := Checkpoint{Agent: g.cfg.Agent, TreeSize: size, Root: canonical.Tag(hex.EncodeToString(g.tree.RootAt(size))), ChainHead: canonical.Tag(g.heads[size-1])}
-	if g.cfg.Attestation != nil {
-		cp.Attestation = canonical.Tag(canonical.SHA256(mustDecodeB64(g.cfg.Attestation.QuoteB64)))
+	if r := g.att.Load(); r != nil {
+		cp.Attestation = canonical.Tag(canonical.SHA256(r.Evidence()))
 	}
 	in, err := CheckpointInput(cp)
 	if err != nil {

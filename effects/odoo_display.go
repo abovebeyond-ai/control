@@ -26,7 +26,7 @@ func (o Odoo) Display(ctx context.Context, a policy.Action) (map[string]any, err
 	}
 	raw, err := o.key(instance, nil)
 	if err != nil {
-		return nil, fmt.Errorf("no Odoo key for %s in the gateway's secrets", instance)
+		return nil, err
 	}
 	client := o.Client
 	if client == nil {
@@ -137,7 +137,7 @@ func (c odooClient) displayLineSet(ctx context.Context, params map[string]any) (
 	was, _ := rows[0]["product_qty"].(float64)
 	unit := cents(rows[0]["price_unit"])
 	d := map[string]any{"order": ord.Name, "state": ord.State, "total": money(ord.Total), "currency": ord.Currency,
-		"line": map[string]any{"product": product, "qty_now": number(was), "qty": q, "unit_price": money(unit)},
+		"line":                 map[string]any{"product": product, "qty_now": number(was), "qty": q, "unit_price": money(unit)},
 		"total_after_estimate": money(ord.Total + unit*(q-int64(was)))}
 	if name, err := c.partnerName(ctx, ord.Partner); err == nil && name != "" {
 		d["partner"] = name

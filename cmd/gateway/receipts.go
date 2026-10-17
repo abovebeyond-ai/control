@@ -422,7 +422,7 @@ func (s *service) relayChain(holder string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/registry/"+url.PathEscape(holder), nil)
-	res, err := http.DefaultClient.Do(req)
+	res, err := s.relayDo(req)
 	if err != nil {
 		return nil, fmt.Errorf("the relay: %w", err)
 	}
@@ -459,7 +459,7 @@ func (s *service) observers(org string, roots map[string]ed25519.PublicKey, now 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/registry?org="+url.QueryEscape(org)+"&role="+registry.RoleObserver, nil)
-	res, err := http.DefaultClient.Do(req)
+	res, err := s.relayDo(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "receipt: the relay's observers of %s: %v\n", org, err)
 		return o.obs
@@ -576,7 +576,7 @@ func (s *service) postReceipt(body []byte) (int, error) {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := s.relayDo(req)
 	if err != nil {
 		return 0, err
 	}
