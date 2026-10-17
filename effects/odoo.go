@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -45,9 +46,29 @@ type OdooInstance struct {
 	Currency string `json:"currency,omitempty"`
 }
 
+// OdooAgentParam is the parameter the gateway adds to every Odoo action: which agent it acts
+// for, as the fragment of the agent's identifier. When the secrets hold odoo-key-<instance>-<it>,
+// the action goes to Odoo as that agent's own Odoo user, so Odoo shows which agent did what;
+// otherwise as the instance's one user. Each such user has the same narrow rights in Odoo.
+const OdooAgentParam = "odoo_agent"
+
 // OdooCeilingParam is the parameter the gateway adds to an Odoo write: the signer's ceiling in
 // whole euros, from the registry entry it verified.
 const OdooCeilingParam = "ceiling_eur"
+
+// key is the Odoo API key an action goes with: the agent's own user's when the secrets hold one,
+// else the instance's. The agent's name is the gateway's addition, never the hand's, and is
+// held to letters, digits and dashes before it becomes part of a file name.
+func (o Odoo) key(instance string, params map[string]any) ([]byte, error) {
+	if agent, _ := params[OdooAgentParam].(string); agent != "" && odooSlug.MatchString(agent) {
+		if raw, err := os.ReadFile(filepath.Join(o.SecretsDir, "odoo-key-"+instance+"-"+agent)); err == nil {
+			return raw, nil
+		}
+	}
+	return os.ReadFile(filepath.Join(o.SecretsDir, "odoo-key-"+instance))
+}
+
+var odooSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 func (o Odoo) Kinds() []string { return policy.Builtin.Of(policy.OdooAdapter) }
 
@@ -71,7 +92,7 @@ func (o Odoo) Perform(ctx context.Context, a policy.Action) Outcome {
 	if !ok || inst.Base == "" || inst.DB == "" {
 		return Outcome{Error: "no Odoo is configured for " + instance}
 	}
-	raw, err := os.ReadFile(filepath.Join(o.SecretsDir, "odoo-key-"+instance))
+	raw, err := o.key(instance, a.Params)
 	if err != nil {
 		return Outcome{Error: "no Odoo key for " + instance + " in the gateway's secrets"}
 	}

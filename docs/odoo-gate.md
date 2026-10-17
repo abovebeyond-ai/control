@@ -173,3 +173,15 @@ Odoo's approval rule), `cmd/gateway` (the whole demo with a fake Odoo and relay)
 `CONTROL_ODOO_IT=1`, `effects` also runs against the Odoo at `http://127.0.0.1:8069` (database
 `acme`, key in `/home/bench/work/odoo-demo/gate.key`): it reads every model, drafts an order,
 changes a quantity, asks for approval and cancels it.
+
+## One Odoo user per agent
+
+Every agent behind the gate can have its own Odoo user, so Odoo itself shows which agent did
+what: Acme creates a user per agent (same narrow rights as the instance user: Purchase/User under
+two-step approval) and gives the gateway its API key as `odoo-key-<instance>-<agent>`, where
+`<agent>` is the fragment of the agent's identifier (`procurement-agent` for
+`did:web:...:acme#procurement-agent`). The gateway adds the agent's name to the action it performs
+(`odoo_agent`, its own addition, never the hand's); an agent without its own key goes as the
+instance's user. Disabling an agent's user in Odoo stops that agent at Odoo too, whatever the gate
+does. People are never Odoo users of the gate: who allowed a write is in the record, and the
+irreversible steps happen in Odoo under each person's own login.

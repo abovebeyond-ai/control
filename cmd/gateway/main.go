@@ -647,7 +647,7 @@ func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequ
 			// what nobody judged. The hand's parameters stay as recorded; this is
 			// the gateway's own addition, and the outcome names it.
 			kind := s.cfg.kinds()[req.Action.Kind]
-			o := adapter.Perform(ctx, withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer))
+			o := adapter.Perform(ctx, withOdooAgent(withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer), kind.Adapter, req.Agent))
 			cancel()
 			outcome = o
 			if o.OK {
@@ -708,6 +708,25 @@ func withCeiling(a policy.Action, adapter string, signer *registry.Entry) policy
 		params[k] = v
 	}
 	params[effects.OdooCeilingParam] = signer.CeilingEUR
+	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
+}
+
+// withOdooAgent adds to an Odoo action which agent it acts for: the fragment of the agent's
+// identifier, lower case. The adapter then calls Odoo as that agent's own user when Acme gave it
+// one, so Odoo itself shows which agent did what (effects.OdooAgentParam).
+func withOdooAgent(a policy.Action, adapter, agent string) policy.Action {
+	if adapter != policy.OdooAdapter {
+		return a
+	}
+	_, frag, ok := strings.Cut(agent, "#")
+	if !ok || frag == "" {
+		return a
+	}
+	params := map[string]any{}
+	for k, v := range a.Params {
+		params[k] = v
+	}
+	params[effects.OdooAgentParam] = strings.ToLower(frag)
 	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
 }
 

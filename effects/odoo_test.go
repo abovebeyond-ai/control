@@ -376,3 +376,18 @@ func TestAgainstALocalOdoo(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// An agent with its own Odoo user goes to Odoo with its own key; an agent without one, or a name
+// that is not a plain slug, goes with the instance's key.
+func TestOdooKeyPerAgent(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "odoo-key-acme"), []byte("instance"), 0o600)
+	os.WriteFile(filepath.Join(dir, "odoo-key-acme-supplier-scout"), []byte("scout"), 0o600)
+	o := Odoo{SecretsDir: dir}
+	for agent, want := range map[string]string{"supplier-scout": "scout", "procurement-agent": "instance", "../acme": "instance", "": "instance"} {
+		raw, err := o.key("acme", map[string]any{OdooAgentParam: agent})
+		if err != nil || string(raw) != want {
+			t.Errorf("agent %q: got %q, %v; want %q", agent, raw, err, want)
+		}
+	}
+}
