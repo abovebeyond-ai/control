@@ -157,6 +157,27 @@ record carries their count and the SHA-256 of Odoo's answer (`records_sha256`), 
 attachment endpoint is open to anyone who reaches the gateway. The answer the agent receives
 therefore carries more than the answer the result record digests.
 
+## Sealed receipts
+
+Under a grant that names an organisation, every action ends with a receipt for the person it was
+taken in the name of: the word's or the mandate's signer, else the person the grant asks
+(`asks`). The plaintext (canonical JSON) names the action, the verdict and reason, whether that
+person's word was asked, the effect's detail, the chain with ceiling, daily allowance and the day
+after the act, the action's signed records as stored, and the gateway's record key (`gate_key`).
+
+It is sealed with HPKE (RFC 9180: base mode, DHKEM(P-256, HKDF-SHA256), HKDF-SHA256,
+AES-128-GCM, info `bextrust receipt v1`, aad the canonical JSON of `{holder, id, at, kid}`) to the
+`enc` key in the person's registry entry, which the parent's signature covers, and a second time
+to the configuration's `audit_enc` under `<org>#audit`. The key comes from the chain the gateway
+verified for the act; without one (a refusal before any word) the gateway fetches the person's
+chain from the relay and verifies it from the pinned root, so a relay cannot slip in a key of its
+own. A person without `enc` gets no envelope, and that is logged.
+
+`receipts.go` keeps this off the request path: settle writes a job to `outbox/` in the store, a
+worker seals one envelope per key and posts it to `{relay_url}/api/receipts`, and what the relay
+does not take waits there for the next round (every minute). A receipt never changes a verdict.
+The relay stores ciphertext; what it still sees is who gets a receipt, when, and how large.
+
 ## Not built
 
 - **Ending a mandate early.** The relay's `/api/mandates/{id}/end` and `/api/stop-all` are not

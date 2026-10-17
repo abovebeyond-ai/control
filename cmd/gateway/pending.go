@@ -213,7 +213,9 @@ func (s *service) expire(p *pendingWord) (int, map[string]any) {
 	}
 	v := g.Refuse(p.Req.Run, p.Req.Action, p.Holder, p.Req.Extension, p.Body, p.Signature,
 		"no word from "+p.Holder+" before "+p.Expires.UTC().Format(time.RFC3339))
-	status, out := s.settle(context.Background(), g, p.Req, v)
+	req := p.Req
+	req.asked = p.Holder
+	status, out := s.settle(context.Background(), g, req, v)
 	s.decided(p, "expired", status, out)
 	return status, out
 }
@@ -242,7 +244,7 @@ func (s *service) word(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := p.Req
-	req.Capability, req.Chain = in.Capability, in.Chain
+	req.Capability, req.Chain, req.asked = in.Capability, in.Chain, p.Holder
 	v := g.SubmitChained(req.Run, req.Action, p.Holder, req.Extension, req.Premises, p.Body, p.Signature, req.Capability, req.Chain)
 	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "done", status, out)
@@ -273,7 +275,9 @@ func (s *service) refuse(w http.ResponseWriter, r *http.Request) {
 	}
 	ext["control_refused"] = map[string]any{"by": in.By, "pending": p.ID}
 	v := g.Refuse(p.Req.Run, p.Req.Action, p.Holder, ext, p.Body, p.Signature, "refused by "+orNobody(in.By))
-	status, out := s.settle(r.Context(), g, p.Req, v)
+	req := p.Req
+	req.asked = p.Holder
+	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "refused", status, out)
 	writeJSON(w, status, out)
 }

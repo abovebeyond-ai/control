@@ -14,6 +14,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -47,8 +48,12 @@ type Entry struct {
 	// day (Europe/Brussels); absent, only the ceiling per order holds.
 	DailyEUR    int64 `json:"daily_eur,omitempty"`
 	MayDelegate bool  `json:"may_delegate"`
-	IssuedAt    int64 `json:"iat"`
-	Expires     int64 `json:"exp"`
+	// Enc, when set, is the key receipts for this holder are sealed to: a P-256 key the phone
+	// keeps for ECDH (docs/odoo-gate.md, sealed receipts). The parent's signature covers it;
+	// it does not narrow.
+	Enc      *EncKey `json:"enc,omitempty"`
+	IssuedAt int64   `json:"iat"`
+	Expires  int64   `json:"exp"`
 }
 
 // JWK is a public key as a JSON Web Key: {"kty":"OKP","crv":"Ed25519","x"} or
@@ -58,6 +63,36 @@ type JWK struct {
 	Crv string `json:"crv"`
 	X   string `json:"x"`
 	Y   string `json:"y,omitempty"`
+}
+
+// EncKey is a P-256 public key for HPKE as a JWK, with kid the base64url of the first 16 bytes
+// of the SHA-256 of the uncompressed point, so an envelope names the key it is sealed to.
+type EncKey struct {
+	Kty string `json:"kty"`
+	Crv string `json:"crv"`
+	X   string `json:"x"`
+	Y   string `json:"y"`
+	Kid string `json:"kid"`
+}
+
+// Point is the key as an uncompressed P-256 point, checked to lie on the curve and to match
+// its kid.
+func (k EncKey) Point() ([]byte, error) {
+	pub, err := JWK{Kty: k.Kty, Crv: k.Crv, X: k.X, Y: k.Y}.ECDSA()
+	if err != nil {
+		return nil, err
+	}
+	point, _ := pub.Bytes()
+	if k.Kid != EncKid(point) {
+		return nil, errors.New("the encryption key's kid is not the start of its point's SHA-256")
+	}
+	return point, nil
+}
+
+// EncKid names an uncompressed P-256 point: base64url of the first 16 bytes of its SHA-256.
+func EncKid(point []byte) string {
+	sum := sha256.Sum256(point)
+	return base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
 // Ed25519 is the key when it is one.
@@ -208,6 +243,11 @@ func VerifyChain(chain []string, roots map[string]ed25519.PublicKey, now time.Ti
 		}
 		if e.DailyEUR < 0 {
 			return nil, fmt.Errorf("registry entry %s has a negative daily allowance", e.ID)
+		}
+		if e.Enc != nil {
+			if _, err := e.Enc.Point(); err != nil {
+				return nil, fmt.Errorf("registry entry %s: %v", e.ID, err)
+			}
 		}
 		if !ed25519.Verify(signer, raw, sig) {
 			return nil, fmt.Errorf("registry entry %s is not signed by its parent %s", e.ID, e.Parent)

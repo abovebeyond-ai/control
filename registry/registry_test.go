@@ -180,3 +180,27 @@ func TestADailyAllowanceOnlyNarrows(t *testing.T) {
 		t.Fatalf("%v %+v", err, entries)
 	}
 }
+
+// An entry may carry the holder's encryption key; it must be a P-256 point whose kid is the
+// start of its SHA-256, and a chain with one holds like any other.
+func TestAnEncryptionKeyRidesInTheSignedEntry(t *testing.T) {
+	root := ed25519.NewKeyFromSeed([]byte("acme-root-seed-acme-root-seed-32"))
+	roots := map[string]ed25519.PublicKey{"acme": root.Public().(ed25519.PublicKey)}
+	_, holder := ec(t)
+	_, encJWK := ec(t)
+	k := &EncKey{Kty: "EC", Crv: "P-256", X: encJWK.X, Y: encJWK.Y}
+	pub, _ := encJWK.ECDSA()
+	point, _ := pub.Bytes()
+	k.Kid = EncKid(point)
+	e := Entry{ID: "acme#shane", Org: "acme", Parent: "acme", Holder: holder, CredentialID: "Y3JlZA", Role: "buyer", Kinds: []string{"odoo.read"}, Enc: k, IssuedAt: now.Unix() - 10, Expires: now.Unix() + 600}
+	entries, err := VerifyChain([]string{issue(t, e, root)}, roots, now)
+	if err != nil || entries[0].Enc == nil || entries[0].Enc.Kid != k.Kid {
+		t.Fatalf("%v %+v", err, entries)
+	}
+	bad := *k
+	bad.Kid = "AAAAAAAAAAAAAAAAAAAAAA"
+	e.Enc = &bad
+	if _, err := VerifyChain([]string{issue(t, e, root)}, roots, now); err == nil || !strings.Contains(err.Error(), "kid") {
+		t.Fatalf("a kid that is not the key's: %v", err)
+	}
+}

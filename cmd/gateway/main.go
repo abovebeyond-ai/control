@@ -114,6 +114,10 @@ type config struct {
 	// Odoo maps an instance, the first part of an odoo:<instance>/<model> resource, to its
 	// address and database; its API key is odoo-key-<instance> in the secrets.
 	Odoo map[string]effects.OdooInstance `json:"odoo,omitempty"`
+	// AuditEnc is the organisation's audit key: every sealed receipt is sealed a second time to
+	// it, under "<org>#audit", so the organisation's trail does not hang on one phone
+	// (receipts.go). Its private half is the organisation's, never the operator's.
+	AuditEnc *registry.EncKey `json:"audit_enc,omitempty"`
 
 	// The versions applied since this configuration, and the head they lead to; read at start.
 	applied []policy.SignedVersion
@@ -171,6 +175,8 @@ type service struct {
 	pending map[string]*pendingWord
 	// allowMu holds a daily allowance's read, check and add together (settle).
 	allowMu sync.Mutex
+	// receipts is the outbox of sealed receipts (receipts.go); nil sends none.
+	receipts *outbox
 }
 
 func main() {
@@ -252,6 +258,8 @@ func main() {
 	mux.HandleFunc("POST /v1/pending/{id}/refuse", s.authed(s.refuse))
 	mux.HandleFunc("GET /v1/pending/{id}", s.authed(s.pendingState))
 	go s.sweepPending(time.Minute)
+	s.receipts = &outbox{kick: make(chan struct{}, 1)}
+	go s.deliverReceipts()
 	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
 	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
 	mux.HandleFunc("GET /v1/policy", s.accessed("policy", s.policy))
@@ -504,6 +512,9 @@ type submitRequest struct {
 	// (Grant.Asks) is not the one (docs/odoo-gate.md).
 	Chain  []string `json:"chain,omitempty"`
 	Holder string   `json:"holder,omitempty"`
+	// asked is the holder whose word was asked for this action, set when a waiting write is
+	// decided (pending.go); the receipt says so and goes to them.
+	asked string
 }
 
 // maxSubmission is what one submission may weigh. Eight MiB was the first number, sized for
@@ -696,6 +707,7 @@ func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequ
 		return 503, map[string]any{"verdict": rr.Verdict, "reason": "the result record could not be written: " + rr.Reason, "action": v.ActionID}
 	}
 	out["steps"] = []int{v.Step, e.Step, rr.Step}
+	s.receipt(g, req, v, []any{v.Token, e.Token, rr.Token}, rr.Step, outcome)
 	return 200, out
 }
 
