@@ -62,6 +62,13 @@ type OdooInstance struct {
 // otherwise as the instance's one user. Each such user has the same narrow rights in Odoo.
 const OdooAgentParam = "odoo_agent"
 
+// OdooPendingParam is the parameter the gateway adds to a write a person's word allowed: the
+// waiting word's id. A draft carries it to Odoo as its origin ("bextrust:<id>"), and before
+// writing the adapter looks for it there; a follow-up whose effect Odoo already shows is not
+// done again. So a word brought back from an older copy of the gate's state cannot make the
+// same write happen twice.
+const OdooPendingParam = "bextrust_pending"
+
 // OdooCeilingParam is the parameter the gateway adds to an Odoo write: the signer's ceiling in
 // whole euros, from the registry entry it verified.
 const OdooCeilingParam = "ceiling_eur"
@@ -325,6 +332,27 @@ func (o order) detail() map[string]any {
 // cancelled at once, and the outcome says so.
 func (c odooClient) draft(ctx context.Context, params map[string]any, lim limits) Outcome {
 	ceiling := lim.ceiling
+	origin := ""
+	if p, _ := params[OdooPendingParam].(string); p != "" {
+		origin = "bextrust:" + p
+		var found []map[string]any
+		if _, err := c.call(ctx, policy.OdooOrderModel, "search_read", map[string]any{"domain": []any{[]any{"origin", "=", origin}}, "fields": []string{"id"}, "limit": 1}, &found); err != nil {
+			return Outcome{Error: "whether this word's draft exists already could not be read: " + err.Error()}
+		}
+		if len(found) == 1 {
+			id, _ := whole64(found[0]["id"])
+			o, err := c.order(ctx, id)
+			if err != nil {
+				return Outcome{Error: err.Error()}
+			}
+			d := o.detail()
+			d["already"] = true
+			if o.State == "cancel" {
+				return Outcome{Error: fmt.Sprintf("%s was created for this word before and is cancelled; nothing was written", o.Name), Detail: d}
+			}
+			return Outcome{OK: true, Detail: d}
+		}
+	}
 	partner, _ := wholeParam(params, "partner_id")
 	lines, _ := params["lines"].([]any)
 	productIDs := make([]int64, 0, len(lines))
@@ -361,8 +389,12 @@ func (c odooClient) draft(ctx context.Context, params map[string]any, lim limits
 	if reason := lim.day(estimate); reason != "" {
 		return Outcome{Error: "at the products' cost the order is " + reason + "; nothing was created"}
 	}
+	vals := map[string]any{"partner_id": partner, "order_line": commands}
+	if origin != "" {
+		vals["origin"] = origin
+	}
 	var created []int64
-	if _, err := c.call(ctx, policy.OdooOrderModel, "create", map[string]any{"vals_list": []any{map[string]any{"partner_id": partner, "order_line": commands}}}, &created); err != nil {
+	if _, err := c.call(ctx, policy.OdooOrderModel, "create", map[string]any{"vals_list": []any{vals}}, &created); err != nil {
 		return Outcome{Error: err.Error()}
 	}
 	if len(created) != 1 {
@@ -399,6 +431,7 @@ func (c odooClient) lineSet(ctx context.Context, params map[string]any, lim limi
 	if err != nil {
 		return Outcome{Error: err.Error()}
 	}
+	_, viaWord := params[OdooPendingParam].(string)
 	if o.State != "draft" {
 		return Outcome{Error: fmt.Sprintf("%s is %s; a quantity changes only on a draft", o.Name, o.State)}
 	}
@@ -413,6 +446,11 @@ func (c odooClient) lineSet(ctx context.Context, params map[string]any, lim limi
 		return Outcome{Error: err.Error()}
 	}
 	was, _ := rows[0]["product_qty"].(float64)
+	if viaWord && was == float64(q) {
+		d := o.detail()
+		d["line"], d["qty"], d["was"], d["already"] = line, q, number(was), true
+		return Outcome{OK: true, Detail: d}
+	}
 	lineTotal := cents(rows[0]["price_total"])
 	estimate := o.Total + cents(rows[0]["price_unit"])*q
 	if was > 0 {
@@ -460,6 +498,11 @@ func (c odooClient) cancel(ctx context.Context, params map[string]any) Outcome {
 	if err != nil {
 		return Outcome{Error: err.Error()}
 	}
+	if _, viaWord := params[OdooPendingParam].(string); viaWord && o.State == "cancel" {
+		d := o.detail()
+		d["already"] = true
+		return Outcome{OK: true, Detail: d}
+	}
 	if o.State != "draft" && o.State != "to approve" {
 		return Outcome{Error: fmt.Sprintf("%s is %s; only a draft or an order waiting for approval is cancelled here", o.Name, o.State)}
 	}
@@ -485,6 +528,11 @@ func (c odooClient) requestApproval(ctx context.Context, params map[string]any, 
 	o, err := c.order(ctx, id)
 	if err != nil {
 		return Outcome{Error: err.Error()}
+	}
+	if _, viaWord := params[OdooPendingParam].(string); viaWord && o.State == "to approve" {
+		d := o.detail()
+		d["already"] = true
+		return Outcome{OK: true, Detail: d}
 	}
 	if o.State != "draft" && o.State != "sent" {
 		return Outcome{Error: fmt.Sprintf("%s is %s; approval is requested for a draft", o.Name, o.State)}

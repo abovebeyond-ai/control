@@ -39,6 +39,7 @@ type fakeOrder struct {
 	state, currency string
 	lines           []int64
 	partner         int64
+	origin          string
 }
 
 // fakeSeller is a supplier's price list entry, product.supplierinfo.
@@ -99,8 +100,16 @@ func (f *fakeOdoo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch path {
 	case "purchase.order/search_read":
 		rows := []any{}
+		origin := ""
+		if d, _ := args["domain"].([]any); len(d) == 1 {
+			if c, _ := d[0].([]any); len(c) == 3 && c[0] == "origin" {
+				origin, _ = c[2].(string)
+			}
+		}
 		for id, o := range f.orders {
-			rows = append(rows, map[string]any{"id": id, "state": o.state, "amount_total": f.total(id)})
+			if origin == "" || o.origin == origin {
+				rows = append(rows, map[string]any{"id": id, "state": o.state, "amount_total": f.total(id)})
+			}
 		}
 		answer(rows)
 	case "res.partner/read":
@@ -122,6 +131,7 @@ func (f *fakeOdoo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		vals := args["vals_list"].([]any)[0].(map[string]any)
 		f.nextOrder++
 		o := &fakeOrder{state: "draft", currency: f.currency, partner: int64(vals["partner_id"].(float64))}
+		o.origin, _ = vals["origin"].(string)
 		for _, c := range vals["order_line"].([]any) {
 			l := c.([]any)[2].(map[string]any)
 			f.nextLine++
@@ -675,5 +685,38 @@ func TestADraftWithoutPriceHistoryStillShows(t *testing.T) {
 	l := d["lines"].([]any)[0].(map[string]any)
 	if l["uom"] != "kg" || l["last_price"] != nil || d["total_at_cost"] != "1519.00" || d["date_planned"] != nil {
 		t.Fatalf("%v", d)
+	}
+}
+
+// A write a word allowed carries the word's id: a draft as its origin, found again instead of
+// made twice; a follow-up whose effect Odoo already shows is not done again.
+func TestAWordsWriteHappensOnce(t *testing.T) {
+	f := newFakeOdoo()
+	o := odooFor(t, f)
+	ctx := context.Background()
+	draft := map[string]any{"partner_id": float64(8), "lines": []any{map[string]any{"product_id": float64(21), "qty": float64(2)}}, OdooCeilingParam: int64(5000), OdooPendingParam: "p1"}
+	first := o.Perform(ctx, act("odoo.order_draft", draft))
+	again := o.Perform(ctx, act("odoo.order_draft", draft))
+	if !first.OK || !again.OK || again.Detail["already"] != true || again.Detail["order"] != first.Detail["order"] || f.orders[first.Detail["order"].(int64)].origin != "bextrust:p1" {
+		t.Fatalf("%+v %+v", first, again)
+	}
+	if len(f.orders) != 4 {
+		t.Fatalf("%d orders", len(f.orders))
+	}
+	// To approve already: not confirmed again. Cancelled already: not cancelled again.
+	f.calls = nil
+	if out := o.Perform(ctx, act("odoo.order_request_approval", map[string]any{"order": float64(12), OdooCeilingParam: int64(5000), OdooPendingParam: "p2"})); !out.OK || out.Detail["already"] != true {
+		t.Fatalf("%+v", out)
+	}
+	f.orders[7].state = "cancel"
+	if out := o.Perform(ctx, act("odoo.order_cancel", map[string]any{"order": float64(7), OdooCeilingParam: int64(5000), OdooPendingParam: "p3"})); !out.OK || out.Detail["already"] != true {
+		t.Fatalf("%+v", out)
+	}
+	if f.wrote() {
+		t.Fatalf("a follow-up already done was written again: %v", f.calls)
+	}
+	// Without a word's id the old rule stands: an order waiting for approval is not asked again.
+	if out := o.Perform(ctx, act("odoo.order_request_approval", map[string]any{"order": float64(12), OdooCeilingParam: int64(5000)})); out.OK {
+		t.Fatalf("%+v", out)
 	}
 }
