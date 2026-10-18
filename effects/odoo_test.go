@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/abovebeyond-ai/control/policy"
 )
@@ -28,6 +29,8 @@ type fakeOdoo struct {
 	threshold float64
 	manager   bool
 	currency  string
+	sellers   []fakeSeller
+	tax       float64 // the tax rate on every line, 0 unless a test sets it
 	nextOrder int64
 	nextLine  int64
 }
@@ -35,6 +38,14 @@ type fakeOdoo struct {
 type fakeOrder struct {
 	state, currency string
 	lines           []int64
+	partner         int64
+}
+
+// fakeSeller is a supplier's price list entry, product.supplierinfo.
+type fakeSeller struct {
+	partner, product int64
+	price, minQty    float64
+	delay            int64
 }
 
 type fakeLine struct {
@@ -50,7 +61,7 @@ type fakeProduct struct {
 
 func newFakeOdoo() *fakeOdoo {
 	return &fakeOdoo{
-		orders:   map[int64]*fakeOrder{7: {state: "draft", currency: "EUR", lines: []int64{15}}, 12: {state: "to approve", currency: "EUR", lines: []int64{24}}, 11: {state: "purchase", currency: "EUR", lines: []int64{22}}},
+		orders:   map[int64]*fakeOrder{7: {state: "draft", currency: "EUR", lines: []int64{15}, partner: 8}, 12: {state: "to approve", currency: "EUR", lines: []int64{24}, partner: 8}, 11: {state: "purchase", currency: "EUR", lines: []int64{22}, partner: 9}},
 		lines:    map[int64]*fakeLine{15: {order: 7, product: 31, qty: 5, price: 130.5}, 24: {order: 12, product: 31, qty: 1, price: 198}, 22: {order: 11, product: 31, qty: 1, price: 900}},
 		products: map[int64]fakeProduct{19: {name: "Corner Desk", cost: 600, seller: 600, purchasable: true}, 21: {name: "Storage Box", cost: 14, seller: 14, purchasable: true}, 31: {name: "Office Chair", cost: 120, seller: 130.5, purchasable: true}, 40: {name: "Cheap on paper", cost: 10, seller: 900, purchasable: true}, 41: {name: "Not for sale", cost: 1, seller: 1}},
 		twoStep:  true, currency: "EUR", nextOrder: 100, nextLine: 1000,
@@ -102,14 +113,15 @@ func (f *fakeOdoo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rows := []any{}
 		for _, id := range idsOf() {
 			if p, ok := f.products[id]; ok {
-				rows = append(rows, map[string]any{"id": id, "display_name": p.name, "standard_price": p.cost, "purchase_ok": p.purchasable})
+				rows = append(rows, map[string]any{"id": id, "display_name": p.name, "default_code": fmt.Sprintf("P-%d", id), "standard_price": p.cost, "purchase_ok": p.purchasable,
+					"uom_id": []any{1, "Units"}, "product_tmpl_id": []any{id + 1000, p.name}})
 			}
 		}
 		answer(rows)
 	case "purchase.order/create":
 		vals := args["vals_list"].([]any)[0].(map[string]any)
 		f.nextOrder++
-		o := &fakeOrder{state: "draft", currency: f.currency}
+		o := &fakeOrder{state: "draft", currency: f.currency, partner: int64(vals["partner_id"].(float64))}
 		for _, c := range vals["order_line"].([]any) {
 			l := c.([]any)[2].(map[string]any)
 			f.nextLine++
@@ -123,7 +135,10 @@ func (f *fakeOdoo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rows := []any{}
 		for _, id := range idsOf() {
 			if o, ok := f.orders[id]; ok {
-				rows = append(rows, map[string]any{"id": id, "name": fmt.Sprintf("P%05d", id), "state": o.state, "amount_total": f.total(id), "currency_id": []any{1, o.currency}, "company_id": []any{1, "Acme"}, "order_line": o.lines})
+				t := f.total(id)
+				rows = append(rows, map[string]any{"id": id, "name": fmt.Sprintf("P%05d", id), "state": o.state, "amount_total": t + t*f.tax, "amount_untaxed": t, "amount_tax": t * f.tax,
+					"currency_id": []any{1, o.currency}, "company_id": []any{1, "Acme"}, "order_line": o.lines,
+					"partner_id": []any{o.partner, fmt.Sprintf("Supplier %d", o.partner)}, "date_order": "2026-10-18 09:12:00", "date_planned": "2026-10-21 10:00:00"})
 			}
 		}
 		answer(rows)
@@ -131,8 +146,37 @@ func (f *fakeOdoo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rows := []any{}
 		for _, id := range idsOf() {
 			if l, ok := f.lines[id]; ok {
-				rows = append(rows, map[string]any{"id": id, "product_qty": l.qty, "price_unit": l.price, "price_total": l.qty * l.price})
+				rows = append(rows, map[string]any{"id": id, "product_id": []any{l.product, f.products[l.product].name}, "name": "[P-" + fmt.Sprint(l.product) + "] " + f.products[l.product].name,
+					"product_qty": l.qty, "product_uom_id": []any{1, "Units"}, "price_unit": l.price, "price_subtotal": l.qty * l.price, "price_total": l.qty * l.price, "display_type": false})
 			}
+		}
+		answer(rows)
+	case "product.supplierinfo/search_read":
+		domain := args["domain"].([]any)
+		partner := int64(domain[0].([]any)[2].(float64))
+		template := int64(domain[1].([]any)[2].(float64))
+		rows := []any{}
+		for _, sl := range f.sellers {
+			if sl.partner == partner && sl.product+1000 == template {
+				rows = append(rows, map[string]any{"product_id": false, "price": sl.price, "min_qty": sl.minQty, "date_start": false, "date_end": false, "delay": sl.delay})
+			}
+		}
+		answer(rows)
+	case "purchase.order.line/search_read":
+		domain := args["domain"].([]any)
+		product := int64(domain[0].([]any)[2].(float64))
+		partner := int64(domain[1].([]any)[2].(float64))
+		rows := []any{}
+		var best int64
+		for id, l := range f.lines {
+			o := f.orders[l.order]
+			if l.product == product && o.partner == partner && (o.state == "purchase" || o.state == "done") && id > best {
+				best = id
+			}
+		}
+		if best != 0 {
+			l := f.lines[best]
+			rows = append(rows, map[string]any{"id": best, "price_unit": l.price, "order_id": []any{l.order, fmt.Sprintf("P%05d", l.order)}, "date_order": "2026-09-30 08:00:00"})
 		}
 		answer(rows)
 	case "purchase.order.line/write":
@@ -460,4 +504,149 @@ func TestTheDisplayIsOdoosWord(t *testing.T) {
 	if f.wrote() {
 		t.Fatal("the display wrote to Odoo")
 	}
+}
+
+// Every word asked on an order shows the whole order as Odoo has it: supplier, dates, each line
+// with its unit, price and subtotal, and the untaxed amount, the tax and the total.
+func TestEveryWordOnAnOrderShowsTheWholeOrder(t *testing.T) {
+	f := newFakeOdoo()
+	f.tax = 0.2
+	o := odooFor(t, f)
+	want := map[string]any{"order": "P00007", "state": "draft", "partner": "Supplier 8", "partner_id": int64(8), "currency": "EUR",
+		"date_order": "2026-10-18", "date_planned": "2026-10-21", "untaxed": "652.50", "tax": "130.50", "total": "783.00"}
+	wantLine := map[string]any{"product_id": int64(31), "name": "[P-31] Office Chair", "code": "P-31", "qty": int64(5), "uom": "Units", "unit_price": "130.50", "subtotal": "652.50"}
+	for _, kind := range []string{"odoo.order_cancel", "odoo.order_request_approval", "odoo.order_line_set"} {
+		d, err := o.Display(context.Background(), act(kind, map[string]any{"order": float64(7), "line": float64(15), "qty": float64(8)}))
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		for k, v := range want {
+			if d[k] != v {
+				t.Fatalf("%s: %s is %v, want %v (%v)", kind, k, d[k], v, d)
+			}
+		}
+		lines := d["lines"].([]any)
+		if len(lines) != 1 {
+			t.Fatalf("%s: %v", kind, lines)
+		}
+		for k, v := range wantLine {
+			if got := lines[0].(map[string]any)[k]; got != v {
+				t.Fatalf("%s: line %s is %v, want %v", kind, k, got, v)
+			}
+		}
+		if kind == "odoo.order_line_set" {
+			// What the current screen reads stays where it was.
+			l := d["line"].(map[string]any)
+			if l["qty_now"] != int64(5) || l["qty"] != int64(8) || d["total_after_estimate"] == nil {
+				t.Fatalf("%v", d)
+			}
+		}
+	}
+	if f.wrote() {
+		t.Fatal("the display wrote to Odoo")
+	}
+}
+
+// A draft's lines carry their unit and the supplier's last price: the price list entry when one
+// holds for the quantity, else the last confirmed order line, else nothing; and the draft the
+// date Odoo plans it for from the supplier's lead time.
+func TestADraftShowsTheSuppliersLastPriceAndLeadTime(t *testing.T) {
+	f := newFakeOdoo()
+	f.sellers = []fakeSeller{{partner: 9, product: 19, price: 580, delay: 3}, {partner: 9, product: 21, price: 11, minQty: 50, delay: 1}}
+	o := odooFor(t, f)
+	d, err := o.Display(context.Background(), act("odoo.order_draft", map[string]any{"partner_id": float64(9), "lines": []any{
+		map[string]any{"product_id": float64(19), "qty": float64(2)},
+		map[string]any{"product_id": float64(31), "qty": float64(1)},
+		map[string]any{"product_id": float64(21), "qty": float64(4)},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := d["lines"].([]any)
+	desk, chair, box := lines[0].(map[string]any), lines[1].(map[string]any), lines[2].(map[string]any)
+	if desk["uom"] != "Units" || desk["last_price"] != "580.00" || desk["last_order"] != nil || desk["last_date"] != nil {
+		t.Fatalf("from the price list: %v", desk)
+	}
+	if chair["last_price"] != "900.00" || chair["last_order"] != "P00011" || chair["last_date"] != "2026-09-30" {
+		t.Fatalf("from the last confirmed order: %v", chair)
+	}
+	if _, ok := box["last_price"]; ok {
+		t.Fatalf("a price list entry for 50 does not hold for 4, and nothing was ordered: %v", box)
+	}
+	if want := time.Now().UTC().AddDate(0, 0, 3).Format("2006-01-02"); d["date_planned"] != want {
+		t.Fatalf("date_planned %v, want %s", d["date_planned"], want)
+	}
+	if d["total_at_cost"] != "1376.00" || d["partner_id"] != int64(9) {
+		t.Fatalf("%v", d)
+	}
+	// Without any lead time there is no planned date.
+	d, err = o.Display(context.Background(), act("odoo.order_draft", map[string]any{"partner_id": float64(8), "lines": []any{map[string]any{"product_id": float64(31), "qty": float64(1)}}}))
+	if err != nil || d["date_planned"] != nil {
+		t.Fatalf("%v %v", d, err)
+	}
+	if f.wrote() {
+		t.Fatal("the display wrote to Odoo")
+	}
+}
+
+// The display against a local Odoo, only reading (CONTROL_ODOO_IT=1, as TestAgainstALocalOdoo):
+// the fields asked for exist in this Odoo, and the last order's display is whole.
+func TestTheDisplayAgainstALocalOdoo(t *testing.T) {
+	if os.Getenv("CONTROL_ODOO_IT") == "" {
+		t.Skip("set CONTROL_ODOO_IT=1 to run against a local Odoo")
+	}
+	keyFile := os.Getenv("CONTROL_ODOO_KEY_FILE")
+	if keyFile == "" {
+		keyFile = "/home/bench/work/odoo-demo/gate.key"
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := os.Getenv("CONTROL_ODOO_URL")
+	if base == "" {
+		base = "http://127.0.0.1:8069"
+	}
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "odoo-key-acme"), key, 0o600)
+	o := Odoo{SecretsDir: dir, Instances: map[string]OdooInstance{"acme": {Base: base, DB: "acme"}}}
+	ctx := context.Background()
+	orders := o.Perform(ctx, policy.Action{Kind: "odoo.read", Resource: "odoo:acme/purchase.order", Params: map[string]any{"model": "purchase.order",
+		"limit": float64(1), "order": "id desc", "domain": []any{[]any{"state", "=", "purchase"}}, "fields": []any{"partner_id", "order_line"}}})
+	if !orders.OK {
+		t.Fatal(orders.Error)
+	}
+	row := orders.Private["records"].([]any)[0].(map[string]any)
+	id := row["id"].(float64)
+	partner, _ := many2one(row["partner_id"])
+	for _, kind := range []string{"odoo.order_cancel", "odoo.order_request_approval"} {
+		d, err := o.Display(ctx, act(kind, map[string]any{"order": id}))
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if ls, _ := d["lines"].([]any); len(ls) == 0 || d["untaxed"] == nil || d["tax"] == nil || d["total"] == nil || d["date_order"] == nil {
+			t.Fatalf("%s: not the whole order: %v", kind, d)
+		}
+		b, _ := json.Marshal(d)
+		t.Logf("%s: %s", kind, b)
+	}
+	lines := o.Perform(ctx, policy.Action{Kind: "odoo.read", Resource: "odoo:acme/purchase.order.line", Params: map[string]any{"model": "purchase.order.line",
+		"domain": []any{[]any{"order_id", "=", id}, []any{"display_type", "=", false}}, "fields": []any{"product_id"}, "limit": float64(1)}})
+	if !lines.OK {
+		t.Fatal(lines.Error)
+	}
+	l := lines.Private["records"].([]any)[0].(map[string]any)
+	product, _ := many2one(l["product_id"])
+	d, err := o.Display(ctx, act("odoo.order_line_set", map[string]any{"order": id, "line": l["id"], "qty": float64(3)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(d)
+	t.Logf("line_set: %s", b)
+	d, err = o.Display(ctx, act("odoo.order_draft", map[string]any{"partner_id": float64(partner), "lines": []any{map[string]any{"product_id": float64(product), "qty": float64(3)}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = json.Marshal(d)
+	t.Logf("draft: %s", b)
 }
