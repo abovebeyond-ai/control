@@ -170,6 +170,7 @@ func (s *service) receipt(g *gateway.Gateway, req submitRequest, verdicts []gate
 		fmt.Fprintf(os.Stderr, "receipt: %s could not be queued: %v\n", id, err)
 		return
 	}
+	s.stateChanged()
 	s.kickReceipts()
 }
 
@@ -501,24 +502,40 @@ func (s *service) kickReceipts() {
 	}
 }
 
-// deliverReceipts runs the outbox: at every kick and once a minute, so what the relay did not
-// take is tried again.
+// deliverReceipts runs the outbox: at every kick and once a minute, and while something waits
+// for the relay, again with backoff (1 s doubling to 60 s). Nothing is dropped for waiting.
 func (s *service) deliverReceipts() {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
+	var b backoff
 	for {
-		s.flushReceipts()
+		var retry <-chan time.Time
+		if s.flushReceipts() {
+			b.reset()
+		} else {
+			retry = time.After(b.next())
+		}
 		select {
+		case <-s.done:
+			return
 		case <-s.receipts.kick:
 		case <-tick.C:
+		case <-retry:
 		}
 	}
 }
 
-// flushReceipts seals every waiting job and posts every waiting envelope, once.
-func (s *service) flushReceipts() {
+// flushReceipts seals every waiting job and posts every waiting envelope, once, and says
+// whether nothing is left waiting for the relay.
+func (s *service) flushReceipts() bool {
 	s.receipts.mu.Lock()
 	defer s.receipts.mu.Unlock()
+	changed, done := false, true
+	defer func() {
+		if changed {
+			s.stateChanged()
+		}
+	}()
 	dir := s.outboxDir()
 	jobs, _ := filepath.Glob(filepath.Join(dir, "job-*.json"))
 	for _, path := range jobs {
@@ -531,9 +548,11 @@ func (s *service) flushReceipts() {
 		}
 		if err := s.seal(job); err != nil {
 			fmt.Fprintf(os.Stderr, "receipt: %s waits: %v\n", job.ID, err)
+			done = false
 			continue
 		}
 		_ = os.Remove(path)
+		changed = true
 	}
 	envs, _ := filepath.Glob(filepath.Join(dir, "env-*.json"))
 	for _, path := range envs {
@@ -547,16 +566,19 @@ func (s *service) flushReceipts() {
 		switch {
 		case err == nil && status/100 == 2:
 			_ = os.Remove(path)
+			changed = true
 		case err != nil || (status != 400 && status != 413 && status != 422):
 			// Away, or not taking receipts yet (a relay without the mailbox answers 404): the
 			// rest waits for the next round.
 			fmt.Fprintf(os.Stderr, "receipt: %s for %s not delivered (%d %v), tried again later\n", e.ID, e.Holder, status, err)
-			return
+			return false
 		default:
 			fmt.Fprintf(os.Stderr, "receipt: the relay refused %s for %s (%d), set aside\n", e.ID, e.Holder, status)
 			_ = os.Rename(path, path+".refused")
+			changed = true
 		}
 	}
+	return done
 }
 
 func (s *service) relayBase() string {

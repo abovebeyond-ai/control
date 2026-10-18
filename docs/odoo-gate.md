@@ -239,6 +239,30 @@ revocations (`rv1`) of registry entries by the digest of their exact text, signe
 signed the entry. A chain with a revoked entry is refused (`registry.Revoked`); a revocation
 signed by anyone else is ignored, so whoever serves the list can withhold one, never invent one.
 
+## Durable state
+
+The organisation provisions, beside the Odoo keys, a `state-key` (32 bytes, as 64 hex
+characters or base64). With it the gate keeps its waiting words (each with the submission as
+the agent signed it, reason and reasoning included, the payload, and the announcement) and its
+receipts outbox (jobs, envelopes, and each recipient's `seq` and `day_count`) in one blob,
+AES-256-GCM under that key, `aad` = `"bextrust gate state v1"` followed by the seq as 8 bytes
+big endian, and puts it at the relay after every change, a burst of changes making one blob:
+`PUT {relay_url}/api/gate/state {"v":1,"seq","at","nonce","ct"}` (nonce and ct base64url), with
+the relay token. Once it holds the key and before it stores anything, it reads the latest
+(`GET /api/gate/state`, 404 when there is none), drops the words whose ten minutes passed and the
+decided ones older than an hour, announces the waiting ones again, and delivers the outbox; the
+counts never go down. A relay that answers 409 to a PUT holds a later seq; the gate goes on from
+there. Announcements and receipts are posted again with backoff (1 s doubling to 60 s) until the
+relay takes them; nothing is dropped for waiting. Without a state key the gate says so and
+keeps everything in memory, as before.
+
+An older blob cannot make a write happen twice. A word's write carries the pending id to the
+adapter (`bextrust_pending`, added after the judgement, like the ceiling): a draft goes to Odoo
+with `origin` = `bextrust:<pending>`, and before creating one the adapter looks for that origin
+and answers with the order it finds (`already: true`, not counted against the day again). A
+request for approval of an order already waiting for approval, a cancel of a cancelled order and
+a quantity already set are answered the same way, without a write.
+
 ## Not built
 
 - **Ending a mandate early.** The relay's `/api/mandates/{id}/end` and `/api/stop-all` are not
@@ -246,9 +270,13 @@ signed by anyone else is ignored, so whoever serves the list can withhold one, n
   serves in Portal's format; until it does, a mandate ends at its `exp`.
 - **Revoking a registry entry** before its `exp`. A chain holds until its first entry ends.
 - **The passkey's signature counter** is not tracked; phone passkeys mostly send zero.
-- **Waiting writes survive no restart**: they live in memory. In Confidential Space nothing
-  does: the key, the log and the provisioned keys are new after every restart. Nothing was judged for them; the
-  agent asks again.
+- **Waiting writes survive no restart without a state key**: they then live in memory only
+  (see *Durable state*). Nothing was judged for them; the agent asks again.
+- **A restored receipt job** that the earlier gate had not sealed yet is signed by the new
+  gate's key, while its records and `gate_key` are the earlier gate's; the phone then shows it
+  as failed. Jobs are sealed at once, so this needs the relay to be away when the chain is asked
+  for, and the gate to restart before it is back.
+- **One gate.** Two gates storing one state would need a lease in the blob.
 - **A refusal is not signed.** Refusing only keeps something from happening, so the relay's
   word is taken; the record says it is the relay's.
 - **Currency conversion.** The ceiling is in euros and compared with an order in the instance's

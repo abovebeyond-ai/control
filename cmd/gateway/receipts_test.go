@@ -114,6 +114,8 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Hops Saaz","default_code":"BEER-HOP-SAAZ","standard_price":24.5,"purchase_ok":true}]`))
 		case "res.partner/read":
 			_, _ = w.Write([]byte(`[{"id":76,"name":"Hopperij Westland"}]`))
+		case "purchase.order/search_read":
+			_, _ = w.Write([]byte(`[]`))
 		case "purchase.order/create":
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			_, _ = w.Write([]byte(`[13]`))

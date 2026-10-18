@@ -112,8 +112,17 @@ func (s *service) announceSealed(p *pendingWord) {
 	if envs == nil {
 		envs = []sealedRequest{}
 	}
-	s.announce(map[string]any{"pending": p.ID, "holder": p.Holder, "exp": p.Expires.Unix(),
+	body, _ := json.Marshal(map[string]any{"pending": p.ID, "holder": p.Holder, "exp": p.Expires.Unix(),
 		"payload": base64.RawURLEncoding.EncodeToString(p.Payload), "challenge": capability.Challenge(p.Payload), "sealed": envs})
+	// Kept with the word, so a restart announces it again as it was, and delivered until the
+	// relay takes it.
+	s.pendMu.Lock()
+	p.Announcement, p.announced = body, false
+	s.pendMu.Unlock()
+	s.stateChanged()
+	if !s.deliverRequests() {
+		s.kickRequests()
+	}
 }
 
 // sealRequest signs the plaintext for one recipient and seals it to their key.

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,6 +72,11 @@ func TestTheOdooGateReadsUnderAMandateAndWritesOnAWord(t *testing.T) {
 		odooCalls = append(odooCalls, path)
 		switch path {
 		case "purchase.order/search_read":
+			// A draft looks for its word's origin first; there is none in this Odoo.
+			if body, _ := io.ReadAll(r.Body); bytes.Contains(body, []byte(`"origin"`)) {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
 			_, _ = w.Write([]byte(`[{"id":7,"name":"P00007","state":"draft","amount_total":1222.5}]`))
 		case "product.product/read":
 			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Corner Desk","standard_price":600.0,"purchase_ok":true}]`))
@@ -332,6 +338,8 @@ func TestADailyAllowanceHoldsAcrossDrafts(t *testing.T) {
 		switch strings.TrimPrefix(r.URL.Path, "/json/2/") {
 		case "product.product/read":
 			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Corner Desk","standard_price":600.0,"purchase_ok":true}]`))
+		case "purchase.order/search_read":
+			_, _ = w.Write([]byte(`[]`))
 		case "purchase.order/create":
 			creates++
 			_, _ = w.Write([]byte(`[13]`))

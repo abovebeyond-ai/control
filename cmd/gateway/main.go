@@ -193,6 +193,14 @@ type service struct {
 	allowMu sync.Mutex
 	// receipts is the outbox of sealed receipts (receipts.go); nil sends none.
 	receipts *outbox
+	// reqMu delivers announcements one round at a time; reqKick wakes the delivery (pending.go).
+	reqMu   sync.Mutex
+	reqKick chan struct{}
+	// state keeps the waiting words and the outbox at the relay, sealed (state.go); nil keeps
+	// them in memory only.
+	state *gateState
+	// done stops the background loops when closed; a running gateway never closes it.
+	done chan struct{}
 }
 
 func main() {
@@ -306,6 +314,13 @@ func main() {
 	go s.sweepPending(time.Minute)
 	s.receipts = &outbox{kick: make(chan struct{}, 1)}
 	go s.deliverReceipts()
+	s.reqKick = make(chan struct{}, 1)
+	go s.deliverRequestsLoop()
+	s.state = newGateState()
+	if _, ok := s.prov.key(stateKeyFile); !ok {
+		fmt.Fprintln(os.Stderr, "state: no state-key provisioned; waiting words and the outbox are kept in memory only until one is")
+	}
+	s.startState()
 	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
 	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
 	mux.HandleFunc("GET /v1/policy", s.accessed("policy", s.policy))
@@ -577,6 +592,9 @@ type submitRequest struct {
 	// asked is the holder whose word was asked for this action, set when a waiting write is
 	// decided (pending.go); the receipt says so and goes to them.
 	asked string
+	// pending is the waiting word this action executes, which the write carries to the far end
+	// so that a word brought back from an older state finds its write already done.
+	pending string
 }
 
 // reasoning is the agent's reasoning as the gateway keeps it: at most maxReasoning sentences,
@@ -786,7 +804,7 @@ func (s *service) settle(ctx context.Context, g *gateway.Gateway, req submitRequ
 			if dayErr != nil {
 				o = effects.Outcome{Error: "the day's allowance could not be read: " + dayErr.Error()}
 			} else {
-				o = adapter.Perform(ctx, withOdooAgent(withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer, spent), kind.Adapter, req.Agent))
+				o = adapter.Perform(ctx, withPending(withOdooAgent(withCeiling(withEvidence(req.Action, kind.Adapter, v.Token, req.Capability), kind.Adapter, v.Signer, spent), kind.Adapter, req.Agent), kind.Adapter, req.pending))
 			}
 			cancel()
 			outcome = o
@@ -882,6 +900,21 @@ func withOdooAgent(a policy.Action, adapter, agent string) policy.Action {
 		params[k] = v
 	}
 	params[effects.OdooAgentParam] = strings.ToLower(frag)
+	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
+}
+
+// withPending adds to an Odoo write the waiting word it executes (effects.OdooPendingParam): the
+// adapter puts it on what it writes and, before writing, looks for it, so a word brought back
+// from an older state answers with the write already done instead of doing it twice.
+func withPending(a policy.Action, adapter, pending string) policy.Action {
+	if adapter != policy.OdooAdapter || pending == "" {
+		return a
+	}
+	params := map[string]any{}
+	for k, v := range a.Params {
+		params[k] = v
+	}
+	params[effects.OdooPendingParam] = pending
 	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
 }
 

@@ -30,10 +30,12 @@ import (
 // The judgement comes with the answer: the word verified or not, the refusal, or the end of
 // the ten minutes, each a request record with its effect and result like every action.
 //
-// The waiting writes live in memory. A restart forgets them; the hand asks again, and the
-// person signs again. A word for a forgotten write still verifies as a word for that act, but
-// only a submission can present it, and a hand that holds the word can do no more with it than
-// the person allowed.
+// The waiting writes live in memory and, once the organisation provisioned a state key, in the
+// gate's sealed state at the relay (state.go): a restart then forgets none of them, and the
+// pending id stays good. Without a state key a restart forgets them; the hand asks again, and
+// the person signs again. A word for a forgotten write still verifies as a word for that act,
+// but only a submission can present it, and a hand that holds the word can do no more with it
+// than the person allowed.
 
 // wordWindow is how long a word for one act is good for, and how long a write waits for it.
 const wordWindow = 10 * time.Minute
@@ -52,7 +54,11 @@ type pendingWord struct {
 	State     string         // waiting, done, refused, expired
 	Record    map[string]any // the answer once it is decided
 	Done      time.Time
-	busy      bool // being decided right now
+	// Announcement is what the relay is told (announceSealed); announced, whether it took it.
+	Announcement json.RawMessage
+	announced    bool
+	restored     bool // came back from the state blob
+	busy         bool // being decided right now
 }
 
 // asksWord holds a write that needs a person's word and came without one, and answers 202 with
@@ -112,6 +118,7 @@ func (s *service) asksWord(w http.ResponseWriter, g *gateway.Gateway, req submit
 	}
 	s.pending[id] = p
 	s.pendMu.Unlock()
+	s.stateChanged()
 	asked := map[string]any{"pending": id, "holder": holder, "payload": base64.RawURLEncoding.EncodeToString(raw), "challenge": capability.Challenge(raw),
 		"action": map[string]any{"kind": req.Action.Kind, "resource": req.Action.Resource, "params": req.Action.Params}}
 	go s.announceSealed(p)
@@ -126,34 +133,88 @@ func orNobody(s string) string {
 	return s
 }
 
-// announce posts what announceSealed made to the relay. The relay is a channel and holds no key:
-// an announcement that does not arrive delays the write, it cannot forge one.
-func (s *service) announce(asked map[string]any) {
-	base := s.cfg.RelayURL
+// announce posts one announcement to the relay. The relay is a channel and holds no key: an
+// announcement that does not arrive delays the write, it cannot forge one.
+func (s *service) announce(body []byte) error {
+	base := s.relayBase()
 	if base == "" {
-		base = os.Getenv("RELAY_URL")
+		return nil
 	}
-	if base == "" {
-		return
-	}
-	body, _ := json.Marshal(asked)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/requests", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/requests", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
-		return
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := s.relayDo(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "relay: the word for %v was not announced: %v\n", asked["pending"], err)
-		return
+		return err
 	}
 	_, _ = io.Copy(io.Discard, res.Body)
 	res.Body.Close()
 	if res.StatusCode/100 != 2 {
-		fmt.Fprintf(os.Stderr, "relay: the word for %v was not announced: %d\n", asked["pending"], res.StatusCode)
+		return fmt.Errorf("the relay answered %d", res.StatusCode)
+	}
+	return nil
+}
+
+// deliverRequests posts every waiting word's announcement the relay has not taken yet, and says
+// whether none is left. A word past its time is not announced; the sweep records it.
+func (s *service) deliverRequests() bool {
+	s.reqMu.Lock()
+	defer s.reqMu.Unlock()
+	now := time.Now()
+	var due []*pendingWord
+	s.pendMu.Lock()
+	for _, p := range s.pending {
+		if p.State == "waiting" && !p.announced && p.Announcement != nil && now.Before(p.Expires) {
+			due = append(due, p)
+		}
+	}
+	s.pendMu.Unlock()
+	for _, p := range due {
+		if err := s.announce(p.Announcement); err != nil {
+			fmt.Fprintf(os.Stderr, "relay: the word for %s was not announced (%v), tried again\n", p.ID, err)
+			return false
+		}
+		s.pendMu.Lock()
+		p.announced = true
+		s.pendMu.Unlock()
+	}
+	return true
+}
+
+func (s *service) kickRequests() {
+	if s.reqKick == nil {
+		return
+	}
+	select {
+	case s.reqKick <- struct{}{}:
+	default:
+	}
+}
+
+// deliverRequestsLoop announces at every kick, and while the relay does not take an
+// announcement, again with backoff.
+func (s *service) deliverRequestsLoop() {
+	var b backoff
+	for {
+		if s.deliverRequests() {
+			b.reset()
+			select {
+			case <-s.done:
+				return
+			case <-s.reqKick:
+			}
+			continue
+		}
+		select {
+		case <-s.done:
+			return
+		case <-s.reqKick:
+		case <-time.After(b.next()):
+		}
 	}
 }
 
@@ -195,6 +256,7 @@ func (s *service) decided(p *pendingWord, state string, status int, out map[stri
 		return
 	}
 	p.State, p.Record, p.Done = state, out, time.Now()
+	go s.stateChanged()
 }
 
 // release gives a claimed write back, still waiting.
@@ -244,7 +306,7 @@ func (s *service) word(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := p.Req
-	req.Capability, req.Chain, req.asked = in.Capability, in.Chain, p.Holder
+	req.Capability, req.Chain, req.asked, req.pending = in.Capability, in.Chain, p.Holder, p.ID
 	v := g.SubmitChained(req.Run, req.Action, p.Holder, req.Extension, req.Premises, p.Body, p.Signature, req.Capability, req.Chain)
 	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "done", status, out)
@@ -328,6 +390,7 @@ func (s *service) sweepPending(every time.Duration) {
 
 func (s *service) sweepOnce(now time.Time) {
 	var due []*pendingWord
+	forgot := false
 	s.pendMu.Lock()
 	for id, p := range s.pending {
 		switch {
@@ -336,9 +399,13 @@ func (s *service) sweepOnce(now time.Time) {
 			due = append(due, p)
 		case p.State != "waiting" && !p.busy && now.Sub(p.Done) > time.Hour:
 			delete(s.pending, id)
+			forgot = true
 		}
 	}
 	s.pendMu.Unlock()
+	if forgot {
+		s.stateChanged()
+	}
 	for _, p := range due {
 		s.expire(p)
 	}

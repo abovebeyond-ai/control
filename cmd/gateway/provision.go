@@ -39,7 +39,8 @@ const (
 	provisionPurpose = "bextrust provision key v1"
 )
 
-// An organisation provisions Odoo API keys: odoo-key-<instance> or odoo-key-<instance>-<agent>.
+// An organisation provisions Odoo API keys: odoo-key-<instance> or odoo-key-<instance>-<agent>;
+// and the state key its gate's state is sealed under (stateKeyFile, state.go).
 var provisionName = regexp.MustCompile(`^odoo-key-[a-z0-9][a-z0-9-]{0,62}$`)
 
 // relayTokenFile is the relay's door token, provisioned by the relay's operator.
@@ -126,7 +127,7 @@ func provisionSigned(e provisionEnvelope) ([]byte, error) {
 // provisioner's key, and says which files that signer may provision.
 func (e provisionEnvelope) signedBy(roots map[string]ed25519.PublicKey, others map[string]provisionerConfig) (func(string) bool, error) {
 	root, ok := roots[e.Org]
-	allowed := func(n string) bool { return provisionName.MatchString(n) }
+	allowed := func(n string) bool { return provisionName.MatchString(n) || n == stateKeyFile }
 	if !ok {
 		p, isProv := others[e.Org]
 		raw, err := hex.DecodeString(p.Key)
@@ -196,6 +197,11 @@ func (p *provisioner) open(e provisionEnvelope, allowed func(string) bool) (map[
 		if v == "" {
 			return nil, fmt.Errorf("%s is empty", name)
 		}
+		if name == stateKeyFile {
+			if _, err := parseStateKey([]byte(v)); err != nil {
+				return nil, err
+			}
+		}
 		out[name] = []byte(v)
 	}
 	return out, nil
@@ -247,5 +253,7 @@ func (s *service) provision(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "provisioned %s\n", strings.Join(names, ", "))
+	// A state key, or the relay token it needs, may be what was missing to restore the state.
+	s.startState()
 	writeJSON(w, 200, map[string]any{"provisioned": s.prov.names(), "records": recorded})
 }

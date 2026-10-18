@@ -237,7 +237,7 @@ func TestAGatewayInConfidentialSpaceIsProvisionedByTheOrgAndSaysSoInItsRecords(t
 	}
 
 	// Every relay call carries the relay token: an announcement, a chain, a receipt.
-	s.announce(map[string]any{"pending": "p1"})
+	_ = s.announce([]byte(`{"pending":"p1"}`))
 	_, _ = s.relayChain("acme#elise")
 	_, _ = s.postReceipt([]byte(`{}`))
 	mu.Lock()
