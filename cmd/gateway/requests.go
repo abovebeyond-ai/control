@@ -161,6 +161,12 @@ func (s *service) announceSealed(p *pendingWord) {
 
 // sealRequest signs the plaintext for one recipient and seals it to their key.
 func (s *service) sealRequest(key registry.EncKey, recipient string, p *pendingWord, base map[string]any) (sealedRequest, error) {
+	return s.sealFor(key, recipient, requestInfo, p.ID, p.Expires.Unix(), base)
+}
+
+// sealFor signs base, with the recipient named, by the gate key and seals it to one key under
+// info. The aad is canonical {"holder","pending","exp","kid"}, without exp when exp is zero.
+func (s *service) sealFor(key registry.EncKey, recipient, info, pending string, exp int64, base map[string]any) (sealedRequest, error) {
 	plain := map[string]any{}
 	for k, v := range base {
 		plain[k] = v
@@ -183,17 +189,20 @@ func (s *service) sealRequest(key registry.EncKey, recipient string, p *pendingW
 	if err != nil {
 		return sealedRequest{}, err
 	}
-	exp := p.Expires.Unix()
-	aad, err := canonical.Encode(map[string]any{"holder": recipient, "pending": p.ID, "exp": exp, "kid": key.Kid})
+	ad := map[string]any{"holder": recipient, "pending": pending, "kid": key.Kid}
+	if exp != 0 {
+		ad["exp"] = exp
+	}
+	aad, err := canonical.Encode(ad)
 	if err != nil {
 		return sealedRequest{}, err
 	}
-	enc, ct, err := hpkeSeal(key, requestInfo, aad, out)
+	enc, ct, err := hpkeSeal(key, info, aad, out)
 	if err != nil {
 		return sealedRequest{}, err
 	}
 	b := base64.RawURLEncoding.EncodeToString
-	return sealedRequest{Holder: recipient, Pending: p.ID, Exp: exp, Kid: key.Kid, Enc: b(enc), CT: b(ct)}, nil
+	return sealedRequest{Holder: recipient, Pending: pending, Exp: exp, Kid: key.Kid, Enc: b(enc), CT: b(ct)}, nil
 }
 
 // holderEntry is the holder's current entry: their chain at the relay, verified from the pinned

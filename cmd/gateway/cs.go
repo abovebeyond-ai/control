@@ -45,6 +45,9 @@ func envOverrides(cfg *config) {
 	if v := os.Getenv("CLIENT_TOKEN_SHA256"); v != "" {
 		cfg.ClientTokenSHA256 = v
 	}
+	if v := os.Getenv("RELAY_CLIENT_TOKEN_SHA256"); v != "" {
+		cfg.RelayClientTokenSHA256 = v
+	}
 	if v := os.Getenv("RELAY_TOKEN"); v != "" {
 		cfg.RelayToken = v
 	}

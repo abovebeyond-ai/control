@@ -263,8 +263,10 @@ func (s *service) claim(id string) (*pendingWord, int, map[string]any) {
 		return nil, 409, map[string]any{"state": "replaced", "by": p.ReplacedBy}
 	}
 	if p.State != "waiting" {
+		// Only the relay decides a waiting write, so a write already decided is answered as
+		// the relay is told of it: the verdict and where it is recorded, never the record.
 		s.pendMu.Unlock()
-		return nil, 409, map[string]any{"state": p.State, "record": p.Record}
+		return nil, 409, map[string]any{"state": p.State, "record": forRelay(p.Record)}
 	}
 	p.busy = true
 	s.pendMu.Unlock()
@@ -273,7 +275,7 @@ func (s *service) claim(id string) (*pendingWord, int, map[string]any) {
 		if status == 200 {
 			status = 410
 		}
-		return nil, status, map[string]any{"state": "expired", "record": out}
+		return nil, status, map[string]any{"state": "expired", "record": forRelay(out)}
 	}
 	return p, 0, nil
 }
@@ -386,9 +388,21 @@ func forRelay(out map[string]any) map[string]any {
 	return m
 }
 
-// pendingState is GET /v1/pending/{id}: waiting, done, refused or expired, with the record
-// once there is one. A write past its ten minutes is recorded as expired when it is asked for.
+// pendingState is GET /v1/pending/{id} for the client: waiting, done, refused or expired, with
+// the record once there is one. A write past its ten minutes is recorded as expired when it is
+// asked for.
 func (s *service) pendingState(w http.ResponseWriter, r *http.Request) {
+	s.answerPending(w, r, true)
+}
+
+// pendingStatus is GET /v1/pending/{id} for the relay: the state alone (waiting, done, refused,
+// expired, or replaced and by which), never the params, the record, the effect or an amount.
+// What was done reaches the person sealed, in their receipt.
+func (s *service) pendingStatus(w http.ResponseWriter, r *http.Request) {
+	s.answerPending(w, r, false)
+}
+
+func (s *service) answerPending(w http.ResponseWriter, r *http.Request, whole bool) {
 	id := r.PathValue("id")
 	s.pendMu.Lock()
 	p, ok := s.pending[id]
@@ -405,7 +419,10 @@ func (s *service) pendingState(w http.ResponseWriter, r *http.Request) {
 		s.expire(p)
 	}
 	s.pendMu.Lock()
-	out := map[string]any{"state": p.State, "record": p.Record}
+	out := map[string]any{"state": p.State}
+	if whole {
+		out["record"] = p.Record
+	}
 	if p.State == "replaced" {
 		out = map[string]any{"state": "replaced", "by": p.ReplacedBy}
 	}

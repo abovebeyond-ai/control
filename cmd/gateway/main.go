@@ -25,7 +25,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -69,7 +68,8 @@ type config struct {
 	// ClientToken, when set, is what a hand must present as a bearer token to
 	// submit. A gateway that is reached from another machine holds credentials
 	// and judges within grants; without this, anyone who can reach the port can
-	// make it act. The reading endpoints stay open: evidence is for strangers.
+	// make it act. The reading endpoints stay open unless readers are named or the gateway
+	// runs in Confidential Space (access.go): then record bodies go to the readers only.
 	ClientToken string `json:"client_token"`
 	// Attestation is "software" (the default: the operator vouches), "tdx":
 	// the gateway asks the hardware for a quote binding its key at start and
@@ -121,6 +121,16 @@ type config struct {
 	// environment into the attestation token, so the token itself never goes there
 	// (CLIENT_TOKEN_SHA256 overrides it).
 	ClientTokenSHA256 string `json:"client_token_sha256,omitempty"`
+	// RelayClientTokenSHA256 is the token the relay presents to this gateway, by its SHA-256
+	// (hex): it posts a person's word, refusal or adjustment and reads a waiting write's state,
+	// and nothing more (access.go). The relay must not hold the client token, which reads every
+	// decided write whole. RELAY_CLIENT_TOKEN_SHA256 overrides it.
+	RelayClientTokenSHA256 string `json:"relay_client_token_sha256,omitempty"`
+	// Readers are the organisation's readers of record bodies, by name, each the SHA-256 (hex)
+	// of its bearer token (access.go). Once one is named, and always in Confidential Space,
+	// records, attachments, proofs and the policy are served to them only. No environment
+	// override: in Confidential Space the operator sets the environment.
+	Readers map[string]string `json:"readers,omitempty"`
 	// Provisioners may seal files to the gateway besides the organisations (provision.go): by
 	// name, an Ed25519 key in hex and the files it may provision, e.g. the relay's operator
 	// with "relay-token", which in Confidential Space cannot travel in the environment.
@@ -244,6 +254,7 @@ func main() {
 		cfg.Listen = "127.0.0.1:8471"
 	}
 	envOverrides(&cfg)
+	fail(cfg.checkDoors())
 	cs := cfg.Attestation == attestationCS
 	var key ed25519.PrivateKey
 	if cs {
@@ -306,12 +317,6 @@ func main() {
 		}
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
-	mux.HandleFunc("POST /v1/pending/{id}/word", s.authed(s.word))
-	mux.HandleFunc("POST /v1/pending/{id}/refuse", s.authed(s.refuse))
-	mux.HandleFunc("POST /v1/pending/{id}/adjust", s.authed(s.adjust))
-	mux.HandleFunc("GET /v1/pending/{id}", s.authed(s.pendingState))
 	go s.sweepPending(time.Minute)
 	s.receipts = &outbox{kick: make(chan struct{}, 1)}
 	go s.deliverReceipts()
@@ -322,29 +327,52 @@ func main() {
 		fmt.Fprintln(os.Stderr, "state: no state-key provisioned; waiting words and the outbox are kept in memory only until one is")
 	}
 	s.startState()
-	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
-	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
-	mux.HandleFunc("GET /v1/policy", s.accessed("policy", s.policy))
-	mux.HandleFunc("GET /v1/attachment", s.accessed("attachment", s.attachment))
-	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
-	mux.HandleFunc("GET /v1/checkpoints", s.accessed("checkpoints", s.checkpoints))
-	mux.HandleFunc("GET /v1/consistency", s.accessed("consistency", s.consistency))
-	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
-	mux.HandleFunc("GET /v1/proof", s.accessed("proof", s.proof))
 	// The seal key of the review hand (#vera) is made now, so the register can name it
 	// before the first review is sealed; it is published beside the gateway's own key.
 	veraKey, err := effects.Vera{SecretsDir: cfg.Secrets}.SealKey()
 	fail(err)
+	if cfg.readersRequired() && len(cfg.Readers) == 0 {
+		fmt.Fprintln(os.Stderr, "readers: none configured; records, attachments, proofs and the policy are served to nobody")
+	}
+	mux := s.routes(veraKey.Public().(ed25519.PublicKey))
+	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s, %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, s.platform(), map[bool]string{true: ", dry", false: ""}[cfg.Dry])
+	fail(http.ListenAndServe(cfg.Listen, mux))
+}
+
+// routes is every door of the gateway and who it opens to (access.go): the client's, the
+// relay's, the organisation's readers', and what stays open for anchors and provisioning.
+func (s *service) routes(veraPub ed25519.PublicKey) *http.ServeMux {
+	mux := http.NewServeMux()
+	both := func(h http.HandlerFunc) http.HandlerFunc {
+		return s.byCaller(map[string]http.HandlerFunc{callerClient: h, callerRelay: h})
+	}
+	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
+	mux.HandleFunc("POST /v1/pending/{id}/word", both(s.word))
+	mux.HandleFunc("POST /v1/pending/{id}/refuse", both(s.refuse))
+	mux.HandleFunc("POST /v1/pending/{id}/adjust", both(s.adjust))
+	mux.HandleFunc("GET /v1/pending/{id}", s.byCaller(map[string]http.HandlerFunc{callerClient: s.pendingState, callerRelay: s.pendingStatus}))
+	mux.HandleFunc("GET /v1/github/read-token", s.authed(s.readToken))
+	// Record bodies, params, outcomes, amounts and reasons: the organisation's readers only.
+	mux.HandleFunc("GET /v1/policy", s.reader("policy", s.policy))
+	mux.HandleFunc("GET /v1/attachment", s.reader("attachment", s.attachment))
+	mux.HandleFunc("GET /v1/records", s.reader("records", s.records))
+	mux.HandleFunc("GET /v1/proof", s.reader("proof", s.proof))
+	// What an anchor reads: tree sizes, roots, keys and attestations, no record.
+	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))
+	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
+	mux.HandleFunc("GET /v1/checkpoints", s.accessed("checkpoints", s.checkpoints))
+	mux.HandleFunc("GET /v1/consistency", s.accessed("consistency", s.consistency))
 	mux.HandleFunc("GET /v1/key", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform(),
-			"keys": map[string]string{"control-gateway": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "vera": hex.EncodeToString(veraKey.Public().(ed25519.PublicKey))}})
+		pub := hex.EncodeToString(s.key.Public().(ed25519.PublicKey))
+		writeJSON(w, 200, map[string]any{"public_key": pub, "issuer": s.cfg.Issuer, "platform": s.platform(),
+			"keys": map[string]string{"control-gateway": pub, "vera": hex.EncodeToString(veraPub)}})
 	})
 	mux.HandleFunc("GET /v1/attestation", s.accessed("attestation", s.attestation))
 	mux.HandleFunc("GET /v1/attestations", s.accessed("attestations", s.attestations))
+	// Provisioning: the key is signed by the record key, the envelope by the organisation.
 	mux.HandleFunc("GET /v1/provision-key", s.accessed("provision-key", s.provisionKey))
 	mux.HandleFunc("POST /v1/provision", s.provision)
-	fmt.Fprintf(os.Stderr, "control gateway on %s, %d agent(s), store %s, %s%s\n", cfg.Listen, len(cfg.Agents), cfg.Store, s.platform(), map[bool]string{true: ", dry", false: ""}[cfg.Dry])
-	fail(http.ListenAndServe(cfg.Listen, mux))
+	return mux
 }
 
 // attestation is the hardware's record binding the key when the configuration
@@ -923,24 +951,33 @@ func withPending(a policy.Action, adapter, pending string) policy.Action {
 }
 
 // accessed writes an access record for every read of evidence (row 7.6.4): what
-// was asked, by which address, when. Reading stays open; it is no longer silent.
+// was asked, by which address, when. For the reads an anchor needs, and for every read on a
+// gateway that names no reader outside Confidential Space; record bodies go through reader.
 func (s *service) accessed(what string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		info := map[string]any{"read": what, "from": r.RemoteAddr, "agent": q.Get("agent")}
-		if v := q.Get("step"); v != "" {
-			info["step"] = v
-		}
-		if v := q.Get("name"); v != "" {
-			info["name"] = v
-		}
-		if v := q.Get("from"); v != "" {
-			info["records_from"] = v
-		}
-		if err := s.store.RecordAccess(info); err != nil {
-			_ = s.store.RecordFailure(map[string]any{"error": "access not recorded: " + err.Error(), "read": what})
-		}
+		s.recordAccess(what, r, nil)
 		next(w, r)
+	}
+}
+
+// recordAccess writes one access record: the read, the address, the query, and extra.
+func (s *service) recordAccess(what string, r *http.Request, extra map[string]any) {
+	q := r.URL.Query()
+	info := map[string]any{"read": what, "from": r.RemoteAddr, "agent": q.Get("agent")}
+	if v := q.Get("step"); v != "" {
+		info["step"] = v
+	}
+	if v := q.Get("name"); v != "" {
+		info["name"] = v
+	}
+	if v := q.Get("from"); v != "" {
+		info["records_from"] = v
+	}
+	for k, v := range extra {
+		info[k] = v
+	}
+	if err := s.store.RecordAccess(info); err != nil {
+		_ = s.store.RecordFailure(map[string]any{"error": "access not recorded: " + err.Error(), "read": what})
 	}
 }
 
@@ -984,25 +1021,6 @@ func withEvidence(a policy.Action, adapter string, tok evidence.Token, capTok st
 		params["capability"] = capTok
 	}
 	return policy.Action{Kind: a.Kind, Resource: a.Resource, Params: params, Classification: a.Classification, Attached: a.Attached}
-}
-
-// authed refuses a submission without the client token when one is configured.
-func (s *service) authed(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if s.cfg.ClientToken != "" && subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.ClientToken)) != 1 {
-			writeJSON(w, 401, map[string]any{"error": "a client token is required to submit"})
-			return
-		}
-		if want := strings.ToLower(s.cfg.ClientTokenSHA256); want != "" {
-			sum := sha256.Sum256([]byte(got))
-			if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(want)) != 1 {
-				writeJSON(w, 401, map[string]any{"error": "a client token is required to submit"})
-				return
-			}
-		}
-		next(w, r)
-	}
 }
 
 // readToken hands the box a read-only GitHub token for one owner, minted from the App

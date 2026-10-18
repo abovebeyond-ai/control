@@ -11,11 +11,21 @@ package main
 // and marks the old one replaced. The agent's submission stays as it signed it; the record says
 // the act was changed by the person, from what to what (control_adjusted), and so does the
 // receipt. The agent asking for the old id hears {"state":"replaced","by":<new id>}.
+//
+// The relay carries the adjustment and its answer, so neither says what the act is: the answer
+// is {"state":"replaced","replaced":<old id>,"by":<new id>,"pending":<new id>}, and the new
+// request, with its labels, values and bounds, reaches the phone sealed in its announcement. A
+// change the gate does not take is answered with a code and a generic text; the detail (which
+// line, its label, the bounds the budget gives) goes only into "sealed", an envelope for the
+// holder's key (HPKE as a sealed request, info "bextrust adjust refusal v1", aad canonical
+// {"holder","pending","kid"}, plaintext {"v","pending","holder","recipient","code","detail","sig"},
+// sig the gate key's Ed25519 over the canonical plaintext without sig).
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -119,19 +129,25 @@ func (s *service) adjust(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, view)
 		return
 	}
-	refuse := func(status int, msg string) {
+	refuse := func(status int, code, detail string) {
 		s.release(p)
-		writeJSON(w, status, map[string]any{"error": msg})
+		out := map[string]any{"error": adjustRefusals[code], "code": code}
+		if detail != "" && in.Holder == p.Holder {
+			if env := s.sealedRefusal(p, code, detail); env != nil {
+				out["sealed"] = []sealedRequest{*env}
+			}
+		}
+		writeJSON(w, status, out)
 	}
 	if in.Holder != p.Holder {
-		refuse(403, "only "+p.Holder+" adjusts this act")
+		refuse(403, "not_holder", "")
 		return
 	}
 	s.pendMu.Lock()
 	specs := append([]adjustSpec{}, p.Adjust...)
 	s.pendMu.Unlock()
 	if len(specs) == 0 {
-		refuse(409, "nothing of this act may be adjusted")
+		refuse(409, "not_adjustable", "")
 		return
 	}
 	// The params through JSON, so the copy shares nothing with the waiting act.
@@ -148,41 +164,41 @@ func (s *service) adjust(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if spec == nil || seen[c.Path] {
-			refuse(400, fmt.Sprintf("%q is not something this act lets you adjust, or named twice", c.Path))
+			refuse(400, "outside_view", fmt.Sprintf("%q is not something this act lets you adjust, or named twice", c.Path))
 			return
 		}
 		seen[c.Path] = true
 		v, err := strconv.ParseInt(strings.TrimSpace(string(c.Value)), 10, 64)
 		if err != nil {
-			refuse(400, fmt.Sprintf("%s takes a whole number", spec.Label))
+			refuse(400, "outside_view", fmt.Sprintf("%s takes a whole number", spec.Label))
 			return
 		}
 		if v < spec.Min || v > spec.Max || (spec.Step > 1 && (v-spec.Min)%spec.Step != 0) {
-			refuse(400, fmt.Sprintf("%s goes from %d to %d", spec.Label, spec.Min, spec.Max))
+			refuse(400, "outside_view", fmt.Sprintf("%s goes from %d to %d", spec.Label, spec.Min, spec.Max))
 			return
 		}
 		if v == spec.Value {
 			continue
 		}
 		if err := applyChange(params, c.Path, v); err != nil {
-			refuse(400, err.Error())
+			refuse(400, "outside_view", err.Error())
 			return
 		}
 		changes = append(changes, adjustChange{Path: c.Path, Label: spec.Label, From: spec.Value, To: v})
 	}
 	if len(changes) == 0 {
-		refuse(400, "nothing changed")
+		refuse(400, "nothing_changed", "")
 		return
 	}
 	g, err := s.gateway(p.Req.Agent)
 	if err != nil {
-		refuse(403, err.Error())
+		refuse(403, "grant", err.Error())
 		return
 	}
 	req := p.Req
 	req.Action = policy.Action{Kind: p.Req.Action.Kind, Resource: p.Req.Action.Resource, Params: params, Classification: p.Req.Action.Classification, Attached: p.Req.Action.Attached}
 	if verdict, why := g.Precheck(req.Run, req.Action); verdict != "ALLOW" {
-		refuse(403, "the grant does not allow the changed act: "+why)
+		refuse(403, "grant", "the grant does not allow the changed act: "+why)
 		return
 	}
 	// The agent's reasoning as it gave it, and a line for what the person changed.
@@ -192,7 +208,7 @@ func (s *service) adjust(w http.ResponseWriter, r *http.Request) {
 	}
 	q, err := s.newPending(req, p.Body, p.Signature, p.Holder, s.cfg.Agents[p.Req.Agent].Grant.Org)
 	if err != nil {
-		refuse(429, err.Error())
+		refuse(429, "busy", "")
 		return
 	}
 	s.pendMu.Lock()
@@ -203,7 +219,35 @@ func (s *service) adjust(w http.ResponseWriter, r *http.Request) {
 	// The new request is sealed and announced before the answer, so the relay has it when it
 	// tells the phone the old one was replaced.
 	s.announceSealed(q)
-	out := askedOf(q)
-	out["state"], out["replaced"], out["by"] = "replaced", p.ID, q.ID
-	writeJSON(w, 200, out)
+	writeJSON(w, 200, map[string]any{"state": "replaced", "replaced": p.ID, "by": q.ID, "pending": q.ID})
+}
+
+// adjustRefusals are the texts the relay may carry of a change the gate did not take: they name
+// no line, label, value or bound.
+var adjustRefusals = map[string]string{
+	"not_holder":      "only the person asked may adjust this act",
+	"not_adjustable":  "nothing of this act may be adjusted",
+	"outside_view":    "the change is outside what the view allows",
+	"nothing_changed": "the change leaves the act as it was",
+	"grant":           "the grant does not allow the changed act",
+	"busy":            "too many writes wait for a word; ask again later",
+}
+
+// adjustRefusalInfo is HPKE's info for the detail of a refused adjustment.
+const adjustRefusalInfo = "bextrust adjust refusal v1"
+
+// sealedRefusal seals why a change was not taken to the holder's key, signed by the gate; nil
+// when the holder has no key the gate can verify.
+func (s *service) sealedRefusal(p *pendingWord, code, detail string) *sealedRequest {
+	entry := s.holderEntry(p.Holder)
+	if entry == nil || entry.Enc == nil {
+		return nil
+	}
+	plain := map[string]any{"v": 1, "pending": p.ID, "holder": p.Holder, "code": code, "detail": detail}
+	env, err := s.sealFor(*entry.Enc, p.Holder, adjustRefusalInfo, p.ID, 0, plain)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adjust %s: the refusal could not be sealed: %v\n", p.ID, err)
+		return nil
+	}
+	return &env
 }

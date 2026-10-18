@@ -57,7 +57,7 @@ func TestAnAdjustedActIsANewWord(t *testing.T) {
 		}
 	}
 	code, out := r.adjust(s, id, map[string]any{"holder": "acme#shane", "changes": []any{map[string]any{"path": "lines.0.qty", "value": 5}}})
-	if code != 200 || out["state"] != "replaced" || out["replaced"] != id || out["by"] == nil || out["by"] != out["pending"] {
+	if code != 200 || out["state"] != "replaced" || out["replaced"] != id || out["by"] == nil || out["by"] != out["pending"] || len(out) != 4 {
 		t.Fatalf("%d %v", code, out)
 	}
 	newID := out["by"].(string)
@@ -92,7 +92,8 @@ func TestAnAdjustedActIsANewWord(t *testing.T) {
 	}
 	s.pendMu.Unlock()
 
-	payload, _ := base64.RawURLEncoding.DecodeString(out["payload"].(string))
+	// The payload to sign comes with the announcement, not with the answer the relay carries.
+	payload, _ := base64.RawURLEncoding.DecodeString(ann["payload"].(string))
 	rec2 := r.word(s, newID, payload)
 	if rec2["verdict"] != "ALLOW" || rec2["effect"].(map[string]any)["ok"] != true {
 		t.Fatalf("%v", rec2)

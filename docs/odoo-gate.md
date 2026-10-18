@@ -130,16 +130,33 @@ The payload is a capability for that one act: `iss` the holder, `sub` the agent,
 is posted to `RELAY_URL/api/requests` (`relay_url`, or the environment); nothing is announced
 when neither is set.
 
-| method | what |
-| --- | --- |
-| `POST /v1/pending/{id}/word` | `{capability, chain}`: judged like any submission; performed when it holds; the answer is the record, as `/v1/submit` gives it |
-| `POST /v1/pending/{id}/refuse` | `{by}`: a refusal on the record ("refused by acme#elise"); nothing performed |
-| `GET /v1/pending/{id}` | `{state: waiting, done, refused or expired, record}` |
+| method | who | what |
+| --- | --- | --- |
+| `POST /v1/pending/{id}/word` | client, relay | `{capability, chain}`: judged like any submission; performed when it holds; the answer is what the relay is told: `{verdict, reason, step, action}` |
+| `POST /v1/pending/{id}/refuse` | client, relay | `{by}`: a refusal on the record ("refused by acme#elise"); nothing performed; answered as a word |
+| `POST /v1/pending/{id}/adjust` | client, relay | below, under the view and adjusting |
+| `GET /v1/pending/{id}` | client | `{state: waiting, done, refused or expired, record}` |
+| `GET /v1/pending/{id}` | relay | `{state}`, or `{state: "replaced", by}`: no params, record, effect or amount |
 
-The three sit behind the client token like a submission. A word that does not hold is a
-refusal on the record and decides the write (`done`, with a DENY); the agent asks again. A
-write whose ten minutes pass is recorded as refused when it is next asked for or swept (every
-minute). A decided write answers 409 to a second word.
+The client token (`client_token`, `client_token_sha256`, `CLIENT_TOKEN_SHA256`) is the agent's.
+The relay has a token of its own (`relay_client_token_sha256`, `RELAY_CLIENT_TOKEN_SHA256`; not
+`relay_token`, which the gate presents to the relay), and the gate refuses to start when the two
+are the same. The relay's token cannot submit. A word that does not hold is a refusal on the
+record and decides the write (`done`, with a DENY); the agent asks again. A write whose ten
+minutes pass is recorded as refused when it is next asked for or swept (every minute). A decided
+write answers 409 to a second word, refusal or adjustment, with `{state, record}` where the record
+is what the relay is told, never the whole record.
+
+**Who reads the records.** `GET /v1/records`, `/v1/attachment`, `/v1/proof` and `/v1/policy` carry
+record bodies, params, outcomes, amounts and reasons. Once `readers` names a reader, and always in
+Confidential Space, they are served only to a bearer token whose SHA-256 is one of
+`"readers": {"<name>": "<hex sha-256>"}`; every read, served or refused, is on the access record,
+the served ones with the reader's name. Readers come from the baked configuration only, never
+from the environment, which the operator sets in Confidential Space; a reader whose token is the
+client token is refused at start. Open to anyone, for an anchor and for provisioning:
+`/v1/key`, `/v1/attestation` (and `?digest=`), `/v1/attestations`, `/v1/agents`,
+`/v1/checkpoint`, `/v1/checkpoints`, `/v1/consistency`, `/v1/provision-key` and
+`POST /v1/provision` (signed by the organisation).
 
 ## What is recorded
 
@@ -241,12 +258,19 @@ wrote from the display. A draft offers each line's quantity (`lines.<i>.qty`), f
 keeps the total at cost within the holder's ceiling and what is left of their day; a quantity
 change offers `qty` within the same bounds on the estimated total and the day's increase; cancel,
 approval and read offer nothing. Without the holder's entry no bound is known and nothing is
-offered. `POST /v1/pending/{id}/adjust {"holder","changes":[{"path","value"}]}` (client token,
-from the relay) checks each change against what was offered, makes the changed act a new waiting
+offered. `POST /v1/pending/{id}/adjust {"holder","changes":[{"path","value"}]}` (the relay's
+token) checks each change against what was offered, makes the changed act a new waiting
 word (new payload, challenge and sealed request; the agent's submission and reasoning as they
 were, plus a line saying who changed what from what to what) and marks the old one `replaced`.
-It answers like a new word plus `{"state":"replaced","replaced":<old>,"by":<new>}`, and the
-announcement of the new word names `replaces`. `GET /v1/pending/{old}` answers
+It answers `{"state":"replaced","replaced":<old>,"by":<new>,"pending":<new>}` and nothing more:
+the relay carries the answer, and the new payload, challenge, labels and values reach it and the
+phone in the announcement of the new word, which names `replaces`. A change the gate does not take
+is answered `{"error","code"}` with a generic text per code (`not_holder`, `not_adjustable`,
+`outside_view`, `nothing_changed`, `grant`, `busy`), naming no line, label, value or bound; the
+detail goes into `sealed`, one envelope for the holder's key (as a sealed request, HPKE info
+`"bextrust adjust refusal v1"`, aad canonical `{"holder","pending","kid"}`, plaintext
+`{"v","pending","holder","recipient","code","detail","sig"}`, `sig` the gate key over the
+canonical plaintext without `sig`), when the holder's entry has one. `GET /v1/pending/{old}` answers
 `{"state":"replaced","by":<new>}`, and a word on it 409 with the same. The request record of the
 new word carries `control_adjusted` {from_pending, by, changes [{path, label, from, to}]}, from
 the gate and never from a submission; the receipt carries it as `adjusted`.
