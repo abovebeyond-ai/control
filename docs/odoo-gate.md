@@ -234,6 +234,23 @@ its place left out; it is sealed into the request and into the receipt of the st
 only the verdict, reason, step and action id of a decided write; the agent reads the whole
 record from the gateway (`GET /v1/pending/{id}`).
 
+**The view and adjusting.** Beside `display` the sealed request carries `view`, which any app
+draws without knowing the kind: `title`, `fields` [{label, value}], `table` {columns, rows},
+`totals` [{label, value}] and `adjust` [{path, label, value, min, max, step}], all text the gate
+wrote from the display. A draft offers each line's quantity (`lines.<i>.qty`), from 1 to what
+keeps the total at cost within the holder's ceiling and what is left of their day; a quantity
+change offers `qty` within the same bounds on the estimated total and the day's increase; cancel,
+approval and read offer nothing. Without the holder's entry no bound is known and nothing is
+offered. `POST /v1/pending/{id}/adjust {"holder","changes":[{"path","value"}]}` (client token,
+from the relay) checks each change against what was offered, makes the changed act a new waiting
+word (new payload, challenge and sealed request; the agent's submission and reasoning as they
+were, plus a line saying who changed what from what to what) and marks the old one `replaced`.
+It answers like a new word plus `{"state":"replaced","replaced":<old>,"by":<new>}`, and the
+announcement of the new word names `replaces`. `GET /v1/pending/{old}` answers
+`{"state":"replaced","by":<new>}`, and a word on it 409 with the same. The request record of the
+new word carries `control_adjusted` {from_pending, by, changes [{path, label, from, to}]}, from
+the gate and never from a submission; the receipt carries it as `adjusted`.
+
 **A re-enrolled person's old passkey.** The revocation list may carry `entries`, signed
 revocations (`rv1`) of registry entries by the digest of their exact text, signed by whoever
 signed the entry. A chain with a revoked entry is refused (`registry.Revoked`); a revocation

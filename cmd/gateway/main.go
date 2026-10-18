@@ -310,6 +310,7 @@ func main() {
 	mux.HandleFunc("POST /v1/submit", s.authed(s.submit))
 	mux.HandleFunc("POST /v1/pending/{id}/word", s.authed(s.word))
 	mux.HandleFunc("POST /v1/pending/{id}/refuse", s.authed(s.refuse))
+	mux.HandleFunc("POST /v1/pending/{id}/adjust", s.authed(s.adjust))
 	mux.HandleFunc("GET /v1/pending/{id}", s.authed(s.pendingState))
 	go s.sweepPending(time.Minute)
 	s.receipts = &outbox{kick: make(chan struct{}, 1)}
@@ -595,6 +596,9 @@ type submitRequest struct {
 	// pending is the waiting word this action executes, which the write carries to the far end
 	// so that a word brought back from an older state finds its write already done.
 	pending string
+	// adjusted is the person's change to the act before their word (adjust.go), from the gate,
+	// never from the submission; the receipt says so.
+	adjusted map[string]any
 }
 
 // reasoning is the agent's reasoning as the gateway keeps it: at most maxReasoning sentences,

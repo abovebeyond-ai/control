@@ -351,7 +351,8 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 		d := p["display"].(map[string]any)
 		line := d["lines"].([]any)[0].(map[string]any)
 		if d["partner"] != "Hopperij Westland" || line["code"] != "BEER-HOP-SAAZ" || line["unit_cost"] != "24.50" || p["reason"] != "Saaz is below its reorder point" || p["act"] != capability.ActDigest(draft) ||
-			fmt.Sprint(p["reasoning"]) != "[Saaz stock is 18 kg against a reorder point of 40. Hopperij Westland has the shortest lead-time.]" {
+			fmt.Sprint(p["reasoning"]) != "[Saaz stock is 18 kg against a reorder point of 40. Hopperij Westland has the shortest lead-time.]" ||
+			p["view"].(map[string]any)["title"] != "Draft an order at Hopperij Westland" {
 			t.Fatalf("%s", plain)
 		}
 		var body map[string]any

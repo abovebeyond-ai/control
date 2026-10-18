@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +60,13 @@ type pendingWord struct {
 	announced    bool
 	restored     bool // came back from the state blob
 	busy         bool // being decided right now
+	// Adjust is what the person may change before giving their word, as their view showed it.
+	// A word made from an adjustment names the word it replaces and the changes; the replaced
+	// one names the word that took its place (adjust.go).
+	Adjust     []adjustSpec
+	Adjusted   []adjustChange
+	Replaces   string
+	ReplacedBy string
 }
 
 // asksWord holds a write that needs a person's word and came without one, and answers 202 with
@@ -88,17 +96,35 @@ func (s *service) asksWord(w http.ResponseWriter, g *gateway.Gateway, req submit
 		writeJSON(w, status, out)
 		return true
 	}
+	p, err := s.newPending(req, body, signature, holder, grant.Org)
+	if err != nil {
+		if errors.Is(err, errTooManyWaiting) {
+			writeJSON(w, 429, map[string]any{"error": err.Error()})
+			return true
+		}
+		return false
+	}
+	go s.announceSealed(p)
+	writeJSON(w, 202, askedOf(p))
+	return true
+}
+
+var errTooManyWaiting = fmt.Errorf("%d writes already wait for a word", maxWaiting)
+
+// newPending writes the payload the holder's passkey is to sign for this one act, ten minutes
+// long, and keeps the write waiting under a new id.
+func (s *service) newPending(req submitRequest, body, signature []byte, holder, org string) (*pendingWord, error) {
 	now := time.Now()
 	idRaw := make([]byte, 16)
 	_, _ = rand.Read(idRaw)
 	id := hex.EncodeToString(idRaw)
 	payload := capability.Payload{Issuer: holder, Subject: req.Agent, Audience: s.cfg.Issuer,
-		Task:  capability.Task{Project: grant.Org},
+		Task:  capability.Task{Project: org},
 		Kinds: []string{req.Action.Kind}, Resources: []string{req.Action.Resource},
 		IssuedAt: now.Unix(), Expires: now.Add(wordWindow).Unix(), ID: "word-" + id, Act: capability.ActDigest(req.Action)}
 	raw, err := canonical.Encode(payload)
 	if err != nil {
-		return false
+		return nil, err
 	}
 	p := &pendingWord{ID: id, Holder: holder, Req: req, Body: body, Signature: signature, Payload: raw, Expires: time.Unix(payload.Expires, 0), State: "waiting"}
 	s.pendMu.Lock()
@@ -113,17 +139,18 @@ func (s *service) asksWord(w http.ResponseWriter, g *gateway.Gateway, req submit
 	}
 	if waiting >= maxWaiting {
 		s.pendMu.Unlock()
-		writeJSON(w, 429, map[string]any{"error": fmt.Sprintf("%d writes already wait for a word", waiting)})
-		return true
+		return nil, errTooManyWaiting
 	}
 	s.pending[id] = p
 	s.pendMu.Unlock()
 	s.stateChanged()
-	asked := map[string]any{"pending": id, "holder": holder, "payload": base64.RawURLEncoding.EncodeToString(raw), "challenge": capability.Challenge(raw),
-		"action": map[string]any{"kind": req.Action.Kind, "resource": req.Action.Resource, "params": req.Action.Params}}
-	go s.announceSealed(p)
-	writeJSON(w, 202, asked)
-	return true
+	return p, nil
+}
+
+// askedOf is what the agent is answered for a waiting write.
+func askedOf(p *pendingWord) map[string]any {
+	return map[string]any{"pending": p.ID, "holder": p.Holder, "payload": base64.RawURLEncoding.EncodeToString(p.Payload), "challenge": capability.Challenge(p.Payload),
+		"action": map[string]any{"kind": p.Req.Action.Kind, "resource": p.Req.Action.Resource, "params": p.Req.Action.Params}}
 }
 
 func orNobody(s string) string {
@@ -231,6 +258,10 @@ func (s *service) claim(id string) (*pendingWord, int, map[string]any) {
 		s.pendMu.Unlock()
 		return nil, 409, map[string]any{"state": p.State, "error": "the write is being decided"}
 	}
+	if p.State == "replaced" {
+		s.pendMu.Unlock()
+		return nil, 409, map[string]any{"state": "replaced", "by": p.ReplacedBy}
+	}
 	if p.State != "waiting" {
 		s.pendMu.Unlock()
 		return nil, 409, map[string]any{"state": p.State, "record": p.Record}
@@ -273,10 +304,10 @@ func (s *service) expire(p *pendingWord) (int, map[string]any) {
 		s.release(p)
 		return 503, map[string]any{"error": err.Error()}
 	}
-	v := g.Refuse(p.Req.Run, p.Req.Action, p.Holder, p.Req.Extension, p.Body, p.Signature,
+	v := g.Refuse(p.Req.Run, p.Req.Action, p.Holder, adjustedExtension(p.Req.Extension, p), p.Body, p.Signature,
 		"no word from "+p.Holder+" before "+p.Expires.UTC().Format(time.RFC3339))
 	req := p.Req
-	req.asked = p.Holder
+	req.asked, req.adjusted = p.Holder, adjustedRecord(p)
 	status, out := s.settle(context.Background(), g, req, v)
 	s.decided(p, "expired", status, out)
 	return status, out
@@ -307,6 +338,8 @@ func (s *service) word(w http.ResponseWriter, r *http.Request) {
 	}
 	req := p.Req
 	req.Capability, req.Chain, req.asked, req.pending = in.Capability, in.Chain, p.Holder, p.ID
+	req.Extension = adjustedExtension(req.Extension, p)
+	req.adjusted = adjustedRecord(p)
 	v := g.SubmitChained(req.Run, req.Action, p.Holder, req.Extension, req.Premises, p.Body, p.Signature, req.Capability, req.Chain)
 	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "done", status, out)
@@ -331,14 +364,11 @@ func (s *service) refuse(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]any{"error": err.Error()})
 		return
 	}
-	ext := map[string]any{}
-	for k, v := range p.Req.Extension {
-		ext[k] = v
-	}
+	ext := adjustedExtension(p.Req.Extension, p)
 	ext["control_refused"] = map[string]any{"by": in.By, "pending": p.ID}
 	v := g.Refuse(p.Req.Run, p.Req.Action, p.Holder, ext, p.Body, p.Signature, "refused by "+orNobody(in.By))
 	req := p.Req
-	req.asked = p.Holder
+	req.asked, req.adjusted = p.Holder, adjustedRecord(p)
 	status, out := s.settle(r.Context(), g, req, v)
 	s.decided(p, "refused", status, out)
 	writeJSON(w, status, forRelay(out))
@@ -376,6 +406,9 @@ func (s *service) pendingState(w http.ResponseWriter, r *http.Request) {
 	}
 	s.pendMu.Lock()
 	out := map[string]any{"state": p.State, "record": p.Record}
+	if p.State == "replaced" {
+		out = map[string]any{"state": "replaced", "by": p.ReplacedBy}
+	}
 	s.pendMu.Unlock()
 	writeJSON(w, 200, out)
 }

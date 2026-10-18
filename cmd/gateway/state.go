@@ -113,6 +113,10 @@ type storedWord struct {
 	Record       map[string]any  `json:"record,omitempty"`
 	Done         int64           `json:"done,omitempty"`
 	Announcement json.RawMessage `json:"announcement,omitempty"`
+	Adjust       []adjustSpec    `json:"adjust,omitempty"`
+	Adjusted     []adjustChange  `json:"adjusted,omitempty"`
+	Replaces     string          `json:"replaces,omitempty"`
+	ReplacedBy   string          `json:"replaced_by,omitempty"`
 }
 
 // storedOutbox is the receipts outbox: jobs to seal, envelopes to deliver, and the counts.
@@ -375,7 +379,8 @@ func (s *service) applyState(p statePlain, now time.Time) (words, receipts int) 
 			req.Action.Attached = map[string]any{"files": req.Files}
 		}
 		q := &pendingWord{ID: w.ID, Holder: w.Holder, Req: req, Body: w.Body, Signature: w.Signature, Payload: w.Payload, Expires: expires,
-			State: w.State, Record: w.Record, Announcement: w.Announcement, restored: true}
+			State: w.State, Record: w.Record, Announcement: w.Announcement, restored: true,
+			Adjust: w.Adjust, Adjusted: w.Adjusted, Replaces: w.Replaces, ReplacedBy: w.ReplacedBy}
 		if w.Done != 0 {
 			q.Done = time.Unix(w.Done, 0)
 		}
@@ -442,7 +447,8 @@ func (s *service) snapshot() statePlain {
 	s.pendMu.Lock()
 	for _, q := range s.pending {
 		w := storedWord{ID: q.ID, Holder: q.Holder, Req: q.Req, Body: q.Body, Signature: q.Signature, Payload: q.Payload,
-			Expires: q.Expires.Unix(), State: q.State, Record: q.Record, Announcement: q.Announcement}
+			Expires: q.Expires.Unix(), State: q.State, Record: q.Record, Announcement: q.Announcement,
+			Adjust: q.Adjust, Adjusted: q.Adjusted, Replaces: q.Replaces, ReplacedBy: q.ReplacedBy}
 		if !q.Done.IsZero() {
 			w.Done = q.Done.Unix()
 		}

@@ -31,15 +31,16 @@ import (
 // each draft's origin, and a holder whose passkey signs words; gates are made on it at will, as
 // a restart makes a new one.
 type stateRig struct {
-	t        *testing.T
-	mu       sync.Mutex
-	blobs    []stateBlob
-	serve    int // when >= 0, GET answers this blob instead of the latest
-	announce []map[string]any
-	receipts []envelope
-	down     bool // the relay takes no announcement and no receipt
-	creates  []string
-	stateKey []byte
+	t          *testing.T
+	mu         sync.Mutex
+	blobs      []stateBlob
+	serve      int // when >= 0, GET answers this blob instead of the latest
+	announce   []map[string]any
+	receipts   []envelope
+	down       bool // the relay takes no announcement and no receipt
+	creates    []string
+	createdQty []float64
+	stateKey   []byte
 
 	relay, odoo *httptest.Server
 	root, tom   ed25519.PrivateKey
@@ -144,6 +145,8 @@ func newStateRig(t *testing.T) *stateRig {
 			id := int64(100 + len(orders))
 			orders[id] = origin
 			r.creates = append(r.creates, origin)
+			line := vals["order_line"].([]any)[0].([]any)[2].(map[string]any)
+			r.createdQty = append(r.createdQty, line["product_qty"].(float64))
 			answer([]int64{id})
 		case "purchase.order/read":
 			id := int64(args["ids"].([]any)[0].(float64))
