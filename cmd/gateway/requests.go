@@ -44,7 +44,7 @@ type displayer interface {
 }
 
 // requestPlaintext is what the person's phone opens: the act, Odoo's display of it, the agent's
-// reason as the agent's, and the digest of the payload the passkey signs, signed by the gateway.
+// reason and reasoning as the agent's, and the digest of the payload the passkey signs, signed by the gateway.
 func (s *service) requestPlaintext(ctx context.Context, p *pendingWord) map[string]any {
 	plain := map[string]any{
 		"v": 1, "pending": p.ID, "holder": p.Holder, "exp": p.Expires.Unix(), "agent": p.Req.Agent,
@@ -55,6 +55,9 @@ func (s *service) requestPlaintext(ctx context.Context, p *pendingWord) map[stri
 	}
 	if r := strings.TrimSpace(p.Req.Reason); r != "" {
 		plain["reason"] = r
+	}
+	if len(p.Req.Reasoning) > 0 {
+		plain["reasoning"] = p.Req.Reasoning.list()
 	}
 	display := map[string]any{}
 	if a, ok := s.effects[p.Req.Action.Kind].(displayer); ok {

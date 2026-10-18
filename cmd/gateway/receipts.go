@@ -140,6 +140,10 @@ func (s *service) receipt(g *gateway.Gateway, req submitRequest, verdicts []gate
 	if base["params"] == nil {
 		base["params"] = map[string]any{}
 	}
+	// The agent's reasoning for this step, in its words; a summary leaves it out.
+	if len(req.Reasoning) > 0 {
+		base["reasoning"] = req.Reasoning.list()
+	}
 	if strings.HasPrefix(req.Capability, capability.PasskeyPrefix+".") {
 		base["authority"] = map[string]any{"word": req.Capability, "chain": req.Chain}
 	}

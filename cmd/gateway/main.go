@@ -569,9 +569,60 @@ type submitRequest struct {
 	// request and marked as the agent's. Outside the act digest, so it binds nothing the person
 	// signs; inside the submission the agent signed.
 	Reason string `json:"reason,omitempty"`
+	// Reasoning is the agent's account, in a few short sentences of its own, of what it read
+	// and why it chose this supplier, quantity and step. It travels as Reason does: sealed with
+	// the request and into the receipt of the step, outside the act digest, inside the
+	// submission the agent signed.
+	Reasoning reasoning `json:"reasoning,omitempty"`
 	// asked is the holder whose word was asked for this action, set when a waiting write is
 	// decided (pending.go); the receipt says so and goes to them.
 	asked string
+}
+
+// reasoning is the agent's reasoning as the gateway keeps it: at most maxReasoning sentences,
+// each trimmed and cut at maxReasoningChars characters. Whatever else comes in its place (not a
+// list, an entry that is not text, an empty one) is left out rather than refused, since it binds
+// nothing the person signs.
+type reasoning []string
+
+const (
+	maxReasoning      = 8
+	maxReasoningChars = 300
+)
+
+func (r *reasoning) UnmarshalJSON(b []byte) error {
+	*r = nil
+	var list []any
+	if json.Unmarshal(b, &list) != nil {
+		return nil
+	}
+	for _, x := range list {
+		s, ok := x.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if runes := []rune(s); len(runes) > maxReasoningChars {
+			s = strings.TrimSpace(string(runes[:maxReasoningChars]))
+		}
+		*r = append(*r, s)
+		if len(*r) == maxReasoning {
+			break
+		}
+	}
+	return nil
+}
+
+// list is the reasoning as plaintext carries it.
+func (r reasoning) list() []any {
+	out := make([]any, len(r))
+	for i, s := range r {
+		out[i] = s
+	}
+	return out
 }
 
 // maxSubmission is what one submission may weigh. Eight MiB was the first number, sized for

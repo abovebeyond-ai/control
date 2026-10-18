@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -302,7 +303,8 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 	// gets this one, in full; the envelopes wait and go once the relay is back.
 	got, relayUp = nil, false
 	draft := policy.Action{Kind: "odoo.order_draft", Resource: "odoo:acme/purchase.order", Params: map[string]any{"partner_id": float64(76), "lines": []any{map[string]any{"product_id": float64(19), "qty": float64(2)}}}}
-	asked := post(s.submit, "/v1/submit", "", submitRequest{Agent: agent, Action: draft, Reason: "Saaz is below its reorder point"})
+	asked := post(s.submit, "/v1/submit", "", submitRequest{Agent: agent, Action: draft, Reason: "Saaz is below its reorder point",
+		Reasoning: reasoning{"Saaz stock is 18 kg against a reorder point of 40.", "Hopperij Westland has the shortest lead-time."}})
 	// The relay is told who, until when, and the bytes to sign; the request itself is sealed.
 	for i := 0; i < 200; i++ {
 		mu.Lock()
@@ -317,7 +319,7 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 	ann := announced[0]
 	mu.Unlock()
 	rawAnn, _ := json.Marshal(ann)
-	for _, leak := range []string{"Hopperij", "Saaz", "partner_id", "24.5", "reorder", "odoo.order_draft"} {
+	for _, leak := range []string{"Hopperij", "Saaz", "partner_id", "24.5", "reorder", "lead-time", "odoo.order_draft"} {
 		if strings.Contains(string(rawAnn), leak) {
 			t.Fatalf("the announcement carries %q: %s", leak, rawAnn)
 		}
@@ -346,7 +348,8 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 		_ = json.Unmarshal(plain, &p)
 		d := p["display"].(map[string]any)
 		line := d["lines"].([]any)[0].(map[string]any)
-		if d["partner"] != "Hopperij Westland" || line["code"] != "BEER-HOP-SAAZ" || line["unit_cost"] != "24.50" || p["reason"] != "Saaz is below its reorder point" || p["act"] != capability.ActDigest(draft) {
+		if d["partner"] != "Hopperij Westland" || line["code"] != "BEER-HOP-SAAZ" || line["unit_cost"] != "24.50" || p["reason"] != "Saaz is below its reorder point" || p["act"] != capability.ActDigest(draft) ||
+			fmt.Sprint(p["reasoning"]) != "[Saaz stock is 18 kg against a reorder point of 40. Hopperij Westland has the shortest lead-time.]" {
 			t.Fatalf("%s", plain)
 		}
 		var body map[string]any
@@ -383,6 +386,13 @@ func TestEveryActionEndsInSealedReceipts(t *testing.T) {
 	}
 	if p["acme#shane"]["seq"] != float64(2) || p["acme#shane"]["asked"] != true || p["acme#obs-leiestad"]["amount_total"] != "49.00" || p["acme#obs-leiestad"]["reason_class"] != "within grant" {
 		t.Fatalf("%v %v", p["acme#shane"]["seq"], p["acme#obs-leiestad"])
+	}
+	// The agent's reasoning goes into the receipt of the step in full, and never into a summary.
+	if r, _ := hop["reasoning"].([]any); len(r) != 2 || p["acme#shane"]["reasoning"] == nil {
+		t.Fatalf("the receipt does not carry the reasoning: %v", hop)
+	}
+	if _, ok := p["acme#obs-leiestad"]["reasoning"]; ok {
+		t.Fatalf("a summary carries the reasoning: %v", p["acme#obs-leiestad"])
 	}
 	checkInclusion(hop)
 	// SEALED_SAMPLE_OUT=<path> writes these plaintexts for the anchor's checker to read
@@ -440,4 +450,30 @@ func keysOf(m map[string]map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// The agent's reasoning is kept as at most eight sentences of at most 300 characters, trimmed;
+// anything else in its place is left out, never a reason to refuse the submission.
+func TestTheReasoningIsKeptShortAndOnlyAsText(t *testing.T) {
+	long := strings.Repeat("é", 310)
+	var req submitRequest
+	body := `{"agent":"a","reasoning":["  first  ", 7, "", {"x":1}, "` + long + `", "3", "4", "5", "6", "7", "8", "9"]}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	r := req.Reasoning
+	if len(r) != 8 || r[0] != "first" || r[1] != strings.Repeat("é", 300) || r[7] != "8" {
+		t.Fatalf("%q", r)
+	}
+	for _, odd := range []string{`"one line"`, `{"a":"b"}`, `null`, `[1,2]`} {
+		var req submitRequest
+		if err := json.Unmarshal([]byte(`{"agent":"a","reasoning":`+odd+`}`), &req); err != nil || req.Reasoning != nil {
+			t.Fatalf("%s: %v %q", odd, err, req.Reasoning)
+		}
+	}
+	// It is written back as the list it was kept as.
+	raw, _ := json.Marshal(submitRequest{Agent: "a", Reasoning: reasoning{"x"}})
+	if !strings.Contains(string(raw), `"reasoning":["x"]`) {
+		t.Fatalf("%s", raw)
+	}
 }

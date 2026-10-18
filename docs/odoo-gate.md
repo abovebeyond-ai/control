@@ -188,7 +188,8 @@ pinned root, and keeps the list for a minute.
 expired, failed), the order total, state and currency, the limits used, who and when, and the
 inclusion proof with each step's snapshot digest and verdict: no parameters, records, product
 or partner names, prices or reasons in words. **Full detail** adds the parameters, the effect,
-the records, the outcome as recorded and the passkey word with its chain.
+the records, the outcome as recorded, the agent's `reasoning` when it gave one, and the passkey
+word with its chain.
 
 **Proof without the anchor holding records.** Each receipt carries the proof of the action's
 records into the signed checkpoint at the action's end (`inclusion`). The gateway serves those
@@ -219,14 +220,17 @@ plan the order for when the supplier has a lead time; for a quantity change, can
 request the whole order as Odoo has it (name, state, supplier, currency, `date_order`,
 `date_planned`, every line with code, quantity, unit, unit price and subtotal, and the untaxed
 amount, tax and total), a person approving an order and not a step. It seals
-`{v, pending, holder, exp, agent, action, act, display, reason, payload_digest, gate_key,
+`{v, pending, holder, exp, agent, action, act, display, reason, reasoning, payload_digest, gate_key,
 recipient, sig}` (HPKE as receipts, info `bextrust request v1`, aad the canonical JSON of
 `{holder, pending, exp, kid}`) to the person's current entry's `enc` (their chain at the relay,
 verified and not revoked) and to `audit_enc`, signs it with the record key, and tells the relay
 only `{pending, holder, exp, payload, challenge, sealed}`: no action, no names. `act` is
 `capability.ActDigest(action)`, the digest the payload names, so the phone can hold the screen to
 what the passkey signs. `reason` is the agent's own words, sent with the submission
-(`reason` in the body, outside the act digest, inside what the agent signed). The relay hears
+(`reason` in the body, outside the act digest, inside what the agent signed). `reasoning` travels
+the same way: a list in the body of at most eight sentences of what the agent read and why it
+chose this supplier, quantity and step, each trimmed and cut at 300 characters, anything else in
+its place left out; it is sealed into the request and into the receipt of the step. The relay hears
 only the verdict, reason, step and action id of a decided write; the agent reads the whole
 record from the gateway (`GET /v1/pending/{id}`).
 
