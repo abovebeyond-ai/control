@@ -108,10 +108,9 @@ func (c odooClient) displayDraft(ctx context.Context, params map[string]any) (ma
 			line["uom"] = uom
 		}
 		template, _ := many2one(p["product_tmpl_id"])
-		last, err := c.supplierPrice(ctx, partner, id, template, qty[id], today)
-		if err != nil {
-			return nil, err
-		}
+		// The last price is a help, not the decision: a lookup Odoo does not answer leaves it
+		// out rather than the whole screen.
+		last, _ := c.supplierPrice(ctx, partner, id, template, qty[id], today)
 		if last.found {
 			line["last_price"] = money(last.price)
 			if last.day != "" {

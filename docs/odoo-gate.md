@@ -212,8 +212,13 @@ The relay stores ciphertext; what it still sees is who gets a receipt, when, and
 
 When a write waits for a person's word, the gateway reads from Odoo, with the instance key and
 only reading, what the person needs to decide (`effects.Odoo.Display`): for a draft the supplier's
-name and each product's name, code, quantity and cost with the total at cost; for a quantity
-change, cancel or approval request the order's name, state, supplier and current total. It seals
+name and each product's name, code, quantity, unit and cost with the total at cost, the
+supplier's last price per line (its `product.supplierinfo` entry for that quantity, else the last
+confirmed order line, left out when Odoo has neither or does not answer) and the date Odoo will
+plan the order for when the supplier has a lead time; for a quantity change, cancel or approval
+request the whole order as Odoo has it (name, state, supplier, currency, `date_order`,
+`date_planned`, every line with code, quantity, unit, unit price and subtotal, and the untaxed
+amount, tax and total), a person approving an order and not a step. It seals
 `{v, pending, holder, exp, agent, action, act, display, reason, payload_digest, gate_key,
 recipient, sig}` (HPKE as receipts, info `bextrust request v1`, aad the canonical JSON of
 `{holder, pending, exp, kid}`) to the person's current entry's `enc` (their chain at the relay,

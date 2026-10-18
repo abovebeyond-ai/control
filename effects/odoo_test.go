@@ -650,3 +650,30 @@ func TestTheDisplayAgainstALocalOdoo(t *testing.T) {
 	b, _ = json.Marshal(d)
 	t.Logf("draft: %s", b)
 }
+
+// A last price Odoo does not answer for leaves the line without one, not the screen empty.
+func TestADraftWithoutPriceHistoryStillShows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimPrefix(r.URL.Path, "/json/2/") {
+		case "product.product/read":
+			_, _ = w.Write([]byte(`[{"id":19,"display_name":"Hops Saaz","default_code":"BEER-HOP-SAAZ","standard_price":24.5,"uom_id":[12,"kg"],"product_tmpl_id":[5,"Hops Saaz"]}]`))
+		case "res.partner/read":
+			_, _ = w.Write([]byte(`[{"id":76,"name":"Hopperij Westland"}]`))
+		default:
+			w.WriteHeader(403)
+			_, _ = w.Write([]byte(`{"message":"no access"}`))
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "odoo-key-acme"), []byte("k"), 0o600)
+	o := Odoo{SecretsDir: dir, Instances: map[string]OdooInstance{"acme": {Base: srv.URL, DB: "acme"}}}
+	d, err := o.Display(context.Background(), act("odoo.order_draft", map[string]any{"partner_id": float64(76), "lines": []any{map[string]any{"product_id": float64(19), "qty": float64(62)}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := d["lines"].([]any)[0].(map[string]any)
+	if l["uom"] != "kg" || l["last_price"] != nil || d["total_at_cost"] != "1519.00" || d["date_planned"] != nil {
+		t.Fatalf("%v", d)
+	}
+}
