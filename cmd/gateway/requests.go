@@ -15,6 +15,7 @@ import (
 
 	"github.com/abovebeyond-ai/control/canonical"
 	"github.com/abovebeyond-ai/control/capability"
+	"github.com/abovebeyond-ai/control/log"
 	"github.com/abovebeyond-ai/control/policy"
 	"github.com/abovebeyond-ai/control/registry"
 )
@@ -45,7 +46,7 @@ type displayer interface {
 
 // requestPlaintext is what the person's phone opens: the act, Odoo's display of it, the agent's
 // reason and reasoning as the agent's, and the digest of the payload the passkey signs, signed by the gateway.
-func (s *service) requestPlaintext(ctx context.Context, p *pendingWord) map[string]any {
+func (s *service) requestPlaintext(ctx context.Context, p *pendingWord, b budget) map[string]any {
 	plain := map[string]any{
 		"v": 1, "pending": p.ID, "holder": p.Holder, "exp": p.Expires.Unix(), "agent": p.Req.Agent,
 		"action":         map[string]any{"kind": p.Req.Action.Kind, "resource": p.Req.Action.Resource, "params": orEmptyParams(p.Req.Action.Params)},
@@ -71,7 +72,34 @@ func (s *service) requestPlaintext(ctx context.Context, p *pendingWord) map[stri
 		}
 	}
 	plain["display"] = display
+	// The view any app draws, and what the person may adjust; kept with the word, so an
+	// adjustment is checked against what the person was shown.
+	view, adjust := buildView(p.Req.Action, display, b)
+	plain["view"] = view
+	if len(p.Adjusted) > 0 {
+		plain["adjusted"] = map[string]any{"from_pending": p.Replaces, "by": p.Holder, "changes": changesList(p.Adjusted)}
+	}
+	s.pendMu.Lock()
+	p.Adjust = adjust
+	s.pendMu.Unlock()
 	return plain
+}
+
+// budgetOf is what the holder may still spend: their entry's ceiling per order and what is left
+// of their daily allowance, from the store. Unknown without an entry.
+func (s *service) budgetOf(e *registry.Entry) budget {
+	if e == nil {
+		return budget{}
+	}
+	b := budget{known: true, ceiling: e.CeilingEUR * 100}
+	if e.DailyEUR > 0 {
+		spent, err := s.store.SpentOn(e.ID, log.AllowanceDay(time.Now()))
+		if err != nil {
+			return budget{}
+		}
+		b.daily, b.leftDay = true, e.DailyEUR*100-spent
+	}
+	return b
 }
 
 func orEmptyParams(p map[string]any) map[string]any {
@@ -92,10 +120,12 @@ func sha256Of(b []byte) []byte {
 func (s *service) announceSealed(p *pendingWord) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	plain := s.requestPlaintext(ctx, p)
+	entry := s.holderEntry(p.Holder)
+	plain := s.requestPlaintext(ctx, p, s.budgetOf(entry))
 	var envs []sealedRequest
 	org, _, _ := strings.Cut(p.Holder, "#")
-	if key := s.holderKey(p.Holder); key != nil {
+	if entry != nil && entry.Enc != nil {
+		key := entry.Enc
 		if e, err := s.sealRequest(*key, p.Holder, p, plain); err == nil {
 			envs = append(envs, e)
 		} else {
@@ -112,8 +142,12 @@ func (s *service) announceSealed(p *pendingWord) {
 	if envs == nil {
 		envs = []sealedRequest{}
 	}
-	body, _ := json.Marshal(map[string]any{"pending": p.ID, "holder": p.Holder, "exp": p.Expires.Unix(),
-		"payload": base64.RawURLEncoding.EncodeToString(p.Payload), "challenge": capability.Challenge(p.Payload), "sealed": envs})
+	ann := map[string]any{"pending": p.ID, "holder": p.Holder, "exp": p.Expires.Unix(),
+		"payload": base64.RawURLEncoding.EncodeToString(p.Payload), "challenge": capability.Challenge(p.Payload), "sealed": envs}
+	if p.Replaces != "" {
+		ann["replaces"] = p.Replaces
+	}
+	body, _ := json.Marshal(ann)
 	// Kept with the word, so a restart announces it again as it was, and delivered until the
 	// relay takes it.
 	s.pendMu.Lock()
@@ -162,9 +196,9 @@ func (s *service) sealRequest(key registry.EncKey, recipient string, p *pendingW
 	return sealedRequest{Holder: recipient, Pending: p.ID, Exp: exp, Kid: key.Kid, Enc: b(enc), CT: b(ct)}, nil
 }
 
-// holderKey is the enc of the holder's current entry: their chain at the relay, verified from the
-// pinned root and not revoked. nil when there is none to seal to.
-func (s *service) holderKey(holder string) *registry.EncKey {
+// holderEntry is the holder's current entry: their chain at the relay, verified from the pinned
+// root and not revoked. nil when there is none.
+func (s *service) holderEntry(holder string) *registry.Entry {
 	toks, err := s.relayChain(holder)
 	if err != nil || len(toks) == 0 {
 		return nil
@@ -187,7 +221,7 @@ func (s *service) holderKey(holder string) *registry.EncKey {
 		return nil
 	}
 	if leaf := entries[len(entries)-1]; leaf.ID == holder {
-		return leaf.Enc
+		return &leaf
 	}
 	return nil
 }
