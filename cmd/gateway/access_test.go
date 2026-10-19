@@ -352,3 +352,29 @@ func openSealed(t *testing.T, priv *ecdh.PrivateKey, e sealedRequest, info strin
 	}
 	return m
 }
+
+// The writes that wait for a word are the organisation's to see: listed for its reader, with what
+// each asks, and refused to anyone else.
+func TestWaitingWritesAreListedForTheReaderOnly(t *testing.T) {
+	s, mux, agent := readRig(t, nil)
+	s.pending = map[string]*pendingWord{
+		"w1": {ID: "w1", Holder: "acme#shane", State: "waiting", Expires: time.Now().Add(time.Hour),
+			Req: submitRequest{Agent: agent, Action: policy.Action{Kind: "odoo.order_draft", Params: map[string]any{"partner_id": 77}}}},
+		"w2": {ID: "w2", Holder: "acme#shane", State: "done", Expires: time.Now().Add(time.Hour)},
+		"w3": {ID: "w3", Holder: "acme#robby", State: "waiting", Expires: time.Now().Add(-time.Minute)},
+	}
+	for _, token := range []string{"", "client-secret", "relay-secret"} {
+		if code, _, body := call2(mux, "GET", "/v1/pending", token, nil); code != 401 || strings.Contains(body, "w1") {
+			t.Fatalf("pending with %q: %d %s", token, code, body)
+		}
+	}
+	code, out, body := call2(mux, "GET", "/v1/pending", "reader-secret", nil)
+	list, _ := out["pending"].([]any)
+	if code != 200 || len(list) != 1 || !strings.Contains(body, `"odoo.order_draft"`) || !strings.Contains(body, `"acme#shane"`) {
+		t.Fatalf("pending for the reader: %d %s", code, body)
+	}
+	// The relay keeps its own route for one write's state alone.
+	if code, _, _ := call2(mux, "GET", "/v1/pending/w2", "relay-secret", nil); code != 200 {
+		t.Fatalf("the relay's state route: %d", code)
+	}
+}

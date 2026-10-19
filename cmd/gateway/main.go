@@ -356,6 +356,7 @@ func (s *service) routes(veraPub ed25519.PublicKey) *http.ServeMux {
 	mux.HandleFunc("GET /v1/policy", s.reader("policy", s.policy))
 	mux.HandleFunc("GET /v1/attachment", s.reader("attachment", s.attachment))
 	mux.HandleFunc("GET /v1/records", s.reader("records", s.records))
+	mux.HandleFunc("GET /v1/pending", s.reader("pending", s.pendingList))
 	mux.HandleFunc("GET /v1/proof", s.reader("proof", s.proof))
 	// What an anchor reads: tree sizes, roots, keys and attestations, no record.
 	mux.HandleFunc("GET /v1/agents", s.accessed("agents", s.agents))

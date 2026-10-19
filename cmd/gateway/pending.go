@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -428,6 +429,25 @@ func (s *service) answerPending(w http.ResponseWriter, r *http.Request, whole bo
 	}
 	s.pendMu.Unlock()
 	writeJSON(w, 200, out)
+}
+
+// pendingList is GET /v1/pending for the organisation's readers: the writes that wait for a
+// person's word right now, with what each asks, so the organisation's own screen can show one
+// as it waits. A reader already reads every record; this adds the moment before the record.
+func (s *service) pendingList(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	out := []map[string]any{}
+	s.pendMu.Lock()
+	for _, p := range s.pending {
+		if p.State != "waiting" || !now.Before(p.Expires) {
+			continue
+		}
+		out = append(out, map[string]any{"id": p.ID, "holder": p.Holder, "agent": p.Req.Agent,
+			"kind": p.Req.Action.Kind, "params": p.Req.Action.Params, "expires": p.Expires.Unix()})
+	}
+	s.pendMu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i]["expires"].(int64) < out[j]["expires"].(int64) })
+	writeJSON(w, 200, map[string]any{"pending": out})
 }
 
 // sweepPending records the writes whose word did not come in time, and forgets decided ones
