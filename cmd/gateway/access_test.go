@@ -359,7 +359,8 @@ func TestWaitingWritesAreListedForTheReaderOnly(t *testing.T) {
 	s, mux, agent := readRig(t, nil)
 	s.pending = map[string]*pendingWord{
 		"w1": {ID: "w1", Holder: "acme#shane", State: "waiting", Expires: time.Now().Add(time.Hour),
-			Req: submitRequest{Agent: agent, Action: policy.Action{Kind: "odoo.order_draft", Params: map[string]any{"partner_id": 77}}}},
+			Req:     submitRequest{Agent: agent, Action: policy.Action{Kind: "odoo.order_draft", Params: map[string]any{"partner_id": 77}}},
+			Display: map[string]any{"partner": "Mouterij De Schelde", "total_at_cost": "1935.00"}},
 		"w2": {ID: "w2", Holder: "acme#shane", State: "done", Expires: time.Now().Add(time.Hour)},
 		"w3": {ID: "w3", Holder: "acme#robby", State: "waiting", Expires: time.Now().Add(-time.Minute)},
 	}
@@ -370,7 +371,7 @@ func TestWaitingWritesAreListedForTheReaderOnly(t *testing.T) {
 	}
 	code, out, body := call2(mux, "GET", "/v1/pending", "reader-secret", nil)
 	list, _ := out["pending"].([]any)
-	if code != 200 || len(list) != 1 || !strings.Contains(body, `"odoo.order_draft"`) || !strings.Contains(body, `"acme#shane"`) {
+	if code != 200 || len(list) != 1 || !strings.Contains(body, `"odoo.order_draft"`) || !strings.Contains(body, `"acme#shane"`) || !strings.Contains(body, `"Mouterij De Schelde"`) {
 		t.Fatalf("pending for the reader: %d %s", code, body)
 	}
 	// The relay keeps its own route for one write's state alone.

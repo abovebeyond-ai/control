@@ -81,6 +81,7 @@ func (s *service) requestPlaintext(ctx context.Context, p *pendingWord, b budget
 	}
 	s.pendMu.Lock()
 	p.Adjust = adjust
+	p.Display = display
 	s.pendMu.Unlock()
 	return plain
 }

@@ -68,6 +68,9 @@ type pendingWord struct {
 	Adjusted   []adjustChange
 	Replaces   string
 	ReplacedBy string
+	// Display is Odoo's view of the write as the person was shown it (requests.go), kept for the
+	// organisation's readers, who list waiting writes (pendingList).
+	Display map[string]any
 }
 
 // asksWord holds a write that needs a person's word and came without one, and answers 202 with
@@ -442,8 +445,15 @@ func (s *service) pendingList(w http.ResponseWriter, r *http.Request) {
 		if p.State != "waiting" || !now.Before(p.Expires) {
 			continue
 		}
-		out = append(out, map[string]any{"id": p.ID, "holder": p.Holder, "agent": p.Req.Agent,
-			"kind": p.Req.Action.Kind, "params": p.Req.Action.Params, "expires": p.Expires.Unix()})
+		w := map[string]any{"id": p.ID, "holder": p.Holder, "agent": p.Req.Agent,
+			"kind": p.Req.Action.Kind, "params": p.Req.Action.Params, "expires": p.Expires.Unix()}
+		if p.Display != nil {
+			w["display"] = p.Display
+		}
+		if r := strings.TrimSpace(p.Req.Reason); r != "" {
+			w["reason"] = r
+		}
+		out = append(out, w)
 	}
 	s.pendMu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i]["expires"].(int64) < out[j]["expires"].(int64) })
