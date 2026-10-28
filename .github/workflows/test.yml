@@ -32,3 +32,7 @@ jobs:
       - run: go run ./cmd/demo /tmp/demo
       - run: python3 tools/crosscheck.py /tmp/demo --standard=/tmp/standard --proveml=/tmp/pv
       - run: go run ./cmd/verify --store /tmp/demo/store --key "$(cat /tmp/demo/public-key.hex)" --checkpoint /tmp/demo/checkpoint.json
+      # The same judges over a chain of two runs under a lifecycle: a handover and its taker.
+      - run: go run ./cmd/demo --lifecycle /tmp/life
+      - run: python3 tools/crosscheck.py /tmp/life --standard=/tmp/standard --proveml=/tmp/pv
+      - run: go run ./cmd/verify --store /tmp/life/store --key "$(cat /tmp/life/public-key.hex)" --checkpoint /tmp/life/checkpoint.json

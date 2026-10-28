@@ -104,6 +104,10 @@ type Grant struct {
 	// naming a task the grant does not have is refused, and so is a submission
 	// without a capability when the grant is per task.
 	Tasks map[string]TaskGrant `json:"tasks,omitempty"`
+	// Lifecycle, when set, is what a run under this grant must do to end and how long it may
+	// go on without ending (docs/run-lifecycle.md). It admits the run kinds, which reach no far
+	// end, and holds every request of a run to it. A task may carry its own.
+	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
 }
 
 // TaskGrant is what one task under an agent's grant may do: its verbs (within the
@@ -113,6 +117,9 @@ type TaskGrant struct {
 	Kinds       []string `json:"kinds"`
 	PremisesFor []string `json:"premises_for,omitempty"`
 	Judgements  []string `json:"judgements,omitempty"`
+	// Lifecycle replaces the grant's for this task: a coding task's definition of done is not
+	// a measuring task's.
+	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
 }
 
 // PerTask says whether the grant is narrowed per task.
@@ -142,6 +149,9 @@ func (p Policy) ForTask(playbook string) (Policy, string) {
 	}
 	q.Grant.PremisesFor = append([]string{}, t.PremisesFor...)
 	q.Grant.Judgements = append([]string{}, t.Judgements...)
+	if t.Lifecycle != nil {
+		q.Grant.Lifecycle = t.Lifecycle
+	}
 	q.Grant.Tasks = nil
 	return q, ""
 }
@@ -263,7 +273,10 @@ func (p Policy) Bundle() map[string]any {
 	if len(p.Grant.Tasks) > 0 {
 		doc["tasks"] = tasksDocument(p.Grant.Tasks)
 	}
-	// Likewise the operator's keys: a bundle without them hashes as before.
+	// Likewise the lifecycle and the operator's keys: a bundle without them hashes as before.
+	if p.Grant.Lifecycle != nil {
+		doc["lifecycle"] = p.Grant.Lifecycle.Document()
+	}
 	if len(p.Grant.PrincipalKeys) > 0 {
 		keys := map[string]any{}
 		for k, v := range p.Grant.PrincipalKeys {
@@ -291,14 +304,20 @@ func tasksDocument(tasks map[string]TaskGrant) []map[string]any {
 		sort.Strings(kinds)
 		sort.Strings(premises)
 		sort.Strings(judgements)
-		out = append(out, map[string]any{"task": n, "kinds": kinds, "premises_for": premises, "judgements": judgements})
+		row := map[string]any{"task": n, "kinds": kinds, "premises_for": premises, "judgements": judgements}
+		if t.Lifecycle != nil {
+			row["lifecycle"] = t.Lifecycle.Document()
+		}
+		out = append(out, row)
 	}
 	return out
 }
 
 // Evaluate returns verdict and reason.
 func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
-	if !contains(p.Grant.Kinds, a.Kind) {
+	// The run kinds come with the lifecycle: a grant that asks a run to close admits the close.
+	runKind := IsRunKind(a.Kind) && p.Grant.Lifecycle != nil
+	if !contains(p.Grant.Kinds, a.Kind) && !runKind {
 		return "DENY", "kind not in grant"
 	}
 	if err := p.Kinds().Validate(a); err != nil {
@@ -310,7 +329,7 @@ func (p Policy) Evaluate(a Action, phi PathSummary) (string, string) {
 	if reason := p.Kinds().Acts(a.Kind, a.Resource); reason != "" {
 		return "DENY", reason
 	}
-	if p.PathAware && p.Grant.MaxPerKind > 0 && phi.PerKind[a.Kind]+1 > p.Grant.MaxPerKind {
+	if p.PathAware && p.Grant.MaxPerKind > 0 && !runKind && phi.PerKind[a.Kind]+1 > p.Grant.MaxPerKind {
 		return "DENY", "a second " + a.Kind + " in one run: the first already ran"
 	}
 	if verdict, reason, held := previewRule(a, phi); held {
