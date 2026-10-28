@@ -135,7 +135,8 @@ measured into RTMR3 with them. `widen` keys (the owner's tokens, `#operator`, `#
 may sign any version. `repair` keys (Portal, after the owner's passkey) may sign a version
 that adds only reversible kinds and resources (see *A widening by passkey*). `narrow` keys (Elixir) may sign a version only if the gateway itself finds
 it narrower: no new hand, kind, resource, task, system or accepted judgement; no higher count;
-no certificate or per-action word dropped; no change to who speaks for a hand; no system moved
+no certificate or per-action word dropped; no run lifecycle dropped or loosened (a kind or check
+taken out of done, a limit raised or lifted); no change to who speaks for a hand; no system moved
 to another address. Anything else from a narrowing key is refused, by name.
 
 **Forward only.** A version must carry the very next number and name the hash of the version
