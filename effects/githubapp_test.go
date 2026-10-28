@@ -182,7 +182,7 @@ func TestTheOwnerIsAskedToReview(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			asked.Store(body["reviewers"])
 			w.WriteHeader(201)
-			_ = json.NewEncoder(w).Encode(map[string]any{})
+			_ = json.NewEncoder(w).Encode(map[string]any{"number": 9, "requested_reviewers": []map[string]any{{"login": "ShaneDeconinck"}}})
 		default:
 			w.WriteHeader(404)
 			_ = json.NewEncoder(w).Encode(map[string]any{"message": "unexpected " + r.URL.Path})
@@ -209,6 +209,80 @@ func TestTheOwnerIsAskedToReview(t *testing.T) {
 	out = GitHub{SecretsDir: dir, Base: srv.URL, Client: srv.Client()}.Perform(context.Background(), open)
 	if got, _ := asked.Load().([]any); !out.OK || out.Detail["review_requested"] != nil || len(got) != 0 {
 		t.Fatalf("without a reviewer nobody is asked and nothing is said: %+v", out)
+	}
+}
+
+// A review request that fails is asked again, and one counts only when GitHub's answer
+// lists the reviewer. Of the pull requests the gateway opened in October 2026, about one
+// in twenty-five carried no review request: one try, then silence.
+func TestTheReviewIsAskedAgainUntilGitHubListsTheReviewer(t *testing.T) {
+	dir, _ := appDir(t)
+	waits := reviewWaits
+	reviewWaits = []time.Duration{time.Millisecond, time.Millisecond}
+	defer func() { reviewWaits = waits }()
+	var answers []func(w http.ResponseWriter)
+	var tries atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/orgs/abovebeyond-ai/installation":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 77})
+		case r.URL.Path == "/app/installations/77/access_tokens":
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_minted", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls"):
+			w.WriteHeader(201)
+			_ = json.NewEncoder(w).Encode(map[string]any{"html_url": "https://github.com/o/r/pull/9", "number": 9})
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pulls/9/requested_reviewers"):
+			n := int(tries.Add(1))
+			answers[min(n, len(answers))-1](w)
+		default:
+			w.WriteHeader(404)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "unexpected " + r.URL.Path})
+		}
+	}))
+	defer srv.Close()
+	appTokens.Lock()
+	appTokens.m = map[string]struct {
+		token   string
+		expires time.Time
+	}{}
+	appTokens.Unlock()
+	failed := func(w http.ResponseWriter) {
+		w.WriteHeader(502)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Server Error"})
+	}
+	unlisted := func(w http.ResponseWriter) {
+		w.WriteHeader(201)
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": 9, "requested_reviewers": []any{}})
+	}
+	listed := func(w http.ResponseWriter) {
+		w.WriteHeader(201)
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": 9, "requested_reviewers": []map[string]any{{"login": "shanedeconinck"}}})
+	}
+	open := policy.Action{Kind: "pull.open", Resource: "abovebeyond-ai/repo", Params: map[string]any{"branch": "workbench/x", "base": "main", "title": "t", "body": "b"}}
+	g := GitHub{SecretsDir: dir, Base: srv.URL, Client: srv.Client(), Reviewer: "ShaneDeconinck"}
+
+	answers = []func(http.ResponseWriter){failed, unlisted, listed}
+	out := g.Perform(context.Background(), open)
+	if !out.OK || out.Detail["review_requested"] != "ShaneDeconinck" || out.Detail["review_attempts"] != 3 || tries.Load() != 3 {
+		t.Fatalf("a failed and an unlisted answer must be asked again until GitHub lists the reviewer: %+v after %d tries", out, tries.Load())
+	}
+
+	tries.Store(0)
+	answers = []func(http.ResponseWriter){failed}
+	out = g.Perform(context.Background(), open)
+	if !out.OK || out.Detail["review_requested"] != false || out.Detail["review_attempts"] != 3 || tries.Load() != 3 {
+		t.Fatalf("after three failures the pull request stands and the record says no review was requested: %+v after %d tries", out, tries.Load())
+	}
+	if p, _ := out.Detail["review_problem"].(string); !strings.Contains(p, "502") {
+		t.Fatalf("the record must say what GitHub answered last, got %q", p)
+	}
+
+	tries.Store(0)
+	answers = []func(http.ResponseWriter){listed}
+	out = g.Perform(context.Background(), open)
+	if out.Detail["review_requested"] != "ShaneDeconinck" || out.Detail["review_attempts"] != nil || tries.Load() != 1 {
+		t.Fatalf("a request GitHub takes the first time is asked once and says nothing more: %+v after %d tries", out, tries.Load())
 	}
 }
 

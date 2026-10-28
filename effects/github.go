@@ -400,7 +400,7 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 		}
 		detail := map[string]any{"url": body["html_url"], "number": body["number"], "draft": draft}
 		if n, ok := wholeNumber(body["number"]); ok {
-			g.requestReview(call, owner, repo, n, detail)
+			g.requestReview(ctx, call, owner, repo, n, detail)
 		}
 		return done(detail)
 	case "issue.open":
@@ -483,31 +483,73 @@ func (g GitHub) Perform(ctx context.Context, a policy.Action) Outcome {
 			}
 		}
 		detail := map[string]any{"number": number, "url": body["html_url"], "ready": true}
-		g.requestReview(call, owner, repo, number, detail)
+		g.requestReview(ctx, call, owner, repo, number, detail)
 		return done(detail)
 	}
 	return Outcome{Error: "no adapter for " + a.Kind}
 }
 
+// reviewWaits are the pauses before the second and the third review request. One request
+// and no second try left pull requests outside the owner's review list: of the pull
+// requests the gateway opened between 1 and 28 October 2026, about one in twenty-five has
+// no review request in its timeline, across nine releases and five owners, with requests
+// on the pull requests just before and after. Asking again is safe: a second request for
+// the same reviewer changes nothing.
+var reviewWaits = []time.Duration{3 * time.Second, 15 * time.Second}
+
 // requestReview asks the configured reviewer to look at a pull request, and writes what
 // GitHub said into the detail. Best effort by design: the proposal exists either way, and
 // a review request that fails (a login that is not a collaborator, say) is a fact for the
-// record, not a reason to undo the effect.
-func (g GitHub) requestReview(call func(method, path string, body any) (int, map[string]any, error), owner, repo string, number int, detail map[string]any) {
+// record, not a reason to undo the effect. A request counts only when GitHub's answer
+// lists the reviewer; until then it is asked again, len(reviewWaits) times at most.
+func (g GitHub) requestReview(ctx context.Context, call func(method, path string, body any) (int, map[string]any, error), owner, repo string, number int, detail map[string]any) {
 	if g.Reviewer == "" {
 		return
 	}
-	status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, number), map[string]any{"reviewers": []string{g.Reviewer}})
-	switch {
-	case err != nil:
+	for attempt := 1; ; attempt++ {
+		var problem string
+		status, body, err := call("POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", owner, repo, number), map[string]any{"reviewers": []string{g.Reviewer}})
+		switch {
+		case err != nil:
+			problem = err.Error()
+		case status != 201:
+			problem = fmt.Sprintf("GitHub answered %d: %v", status, body["message"])
+		case !listsLogin(body["requested_reviewers"], g.Reviewer):
+			problem = "GitHub answered 201 without " + g.Reviewer + " among the requested reviewers"
+		default:
+			detail["review_requested"] = g.Reviewer
+			if attempt > 1 {
+				detail["review_attempts"] = attempt
+			}
+			return
+		}
+		if attempt <= len(reviewWaits) {
+			select {
+			case <-time.After(reviewWaits[attempt-1]):
+				continue
+			case <-ctx.Done():
+				problem += "; not asked again: " + ctx.Err().Error()
+			}
+		}
 		detail["review_requested"] = false
-		detail["review_problem"] = err.Error()
-	case status != 201:
-		detail["review_requested"] = false
-		detail["review_problem"] = fmt.Sprintf("GitHub answered %d: %v", status, body["message"])
-	default:
-		detail["review_requested"] = g.Reviewer
+		detail["review_problem"] = problem
+		detail["review_attempts"] = attempt
+		return
 	}
+}
+
+// listsLogin says whether a list of GitHub users (requested_reviewers in a pull request)
+// holds the login; GitHub compares logins without regard to case.
+func listsLogin(v any, login string) bool {
+	users, _ := v.([]any)
+	for _, u := range users {
+		if m, ok := u.(map[string]any); ok {
+			if name, _ := m["login"].(string); strings.EqualFold(name, login) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FooterMark is the line the gateway's pull request footer starts with (relying.FooterMark);
