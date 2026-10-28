@@ -217,6 +217,48 @@ func TestATaskNarrowingIsNarrowerAndDroppingItIsNot(t *testing.T) {
 	}
 }
 
+// A lifecycle limits a run, so adding one or tightening it takes away and Elixir may sign it;
+// dropping it, dropping part of the definition of done or lifting a limit is the owner's.
+func TestALifecycleTightensAndLooseningItIsTheOwners(t *testing.T) {
+	cur := bootHead().Agents
+	with := func(l *Lifecycle, task *Lifecycle) map[string]HandGrant {
+		g := cur[shed].Grant
+		g.Lifecycle = l
+		if task != nil {
+			g.Tasks = map[string]TaskGrant{"code": {Kinds: append([]string{}, g.Kinds...), PremisesFor: g.PremisesFor, Judgements: g.Judgements, Lifecycle: task}}
+		}
+		return map[string]HandGrant{shed: {Grant: g}}
+	}
+	life := &Lifecycle{Done: []string{"branch.push", "pull.open"}, Checks: []string{"tests"}, MaxMinutes: 120, MaxRequests: 20, CheckpointEvery: 3, MaxHandovers: 2}
+	if reason := Narrower(cur, nil, with(life, nil), nil); reason != "" {
+		t.Fatalf("a lifecycle where there was none takes away: %s", reason)
+	}
+	tighter := *life
+	tighter.MaxMinutes, tighter.Checks = 60, []string{"tests", "lint"}
+	if reason := Narrower(with(life, nil), nil, with(&tighter, nil), nil); reason != "" {
+		t.Fatalf("a tighter lifecycle takes away: %s", reason)
+	}
+	looser := func(f func(l *Lifecycle)) *Lifecycle { l := *life; f(&l); return &l }
+	for want, next := range map[string]map[string]HandGrant{
+		"drops the run lifecycle":                       with(nil, nil),
+		"drops pull.open from the definition of done":   with(looser(func(l *Lifecycle) { l.Done = []string{"branch.push"} }), nil),
+		"drops the required check tests":                with(looser(func(l *Lifecycle) { l.Checks = nil }), nil),
+		"raises the run's max_minutes":                  with(looser(func(l *Lifecycle) { l.MaxMinutes = 0 }), nil),
+		"raises the run's max_requests":                 with(looser(func(l *Lifecycle) { l.MaxRequests = 50 }), nil),
+		"raises the run's checkpoint_every":             with(looser(func(l *Lifecycle) { l.CheckpointEvery = 0 }), nil),
+		"raises the run's max_handovers":                with(looser(func(l *Lifecycle) { l.MaxHandovers = 9 }), nil),
+		"raises the run's max_minutes in the task code": with(life, looser(func(l *Lifecycle) { l.MaxMinutes = 600 })),
+	} {
+		if reason := Narrower(with(life, nil), nil, next, nil); !strings.Contains(reason, want) {
+			t.Errorf("%s: got %q", want, reason)
+		}
+	}
+	// A task's own lifecycle is held to the one it ran under before, the grant's included.
+	if reason := Narrower(with(life, nil), nil, with(life, &tighter), nil); reason != "" {
+		t.Fatalf("a task tighter than the grant's lifecycle takes away: %s", reason)
+	}
+}
+
 // Holding Portal's word to the working set takes away, so Elixir may sign it; dropping it
 // gives Portal's word back its own reach, which only the owner's token may sign, and the
 // repair key may not either.

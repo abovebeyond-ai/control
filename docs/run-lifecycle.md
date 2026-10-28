@@ -39,7 +39,9 @@ hashes as before.
 | `max_handovers` | how long a chain of runs continuing one another may grow. |
 
 A zero is no limit. The lifecycle is part of the bundle the record names, so the hand cannot
-loosen it and a reader sees which limits judged.
+loosen it and a reader sees which limits judged. In the policy log a lifecycle added or tightened
+is narrower and Elixir may sign it; dropping one, taking a kind or check out of `done`, or raising
+or lifting a limit is the owner's to sign (`policy.Narrower`, since v0.45.0).
 
 ## What the hand says
 

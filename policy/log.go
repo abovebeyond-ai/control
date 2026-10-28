@@ -319,6 +319,9 @@ func grantNarrower(cur, next Grant) string {
 	if j := firstOutside(judgements(next.Judgements), judgements(cur.Judgements)); j != "" {
 		return "accepts the judgement " + j
 	}
+	if reason := lifecycleLooser(cur.Lifecycle, next.Lifecycle); reason != "" {
+		return reason
+	}
 	if len(cur.Tasks) > 0 && len(next.Tasks) == 0 {
 		return "drops the narrowing per task"
 	}
@@ -339,6 +342,51 @@ func grantNarrower(cur, next Grant) string {
 		}
 		if j := firstOutside(judgements(t.Judgements), judgements(was.Judgements)); j != "" {
 			return "accepts the judgement " + j + " in the task " + name
+		}
+		// A task without a lifecycle of its own runs under the grant's (ForTask).
+		curLife, nextLife := was.Lifecycle, t.Lifecycle
+		if curLife == nil {
+			curLife = cur.Lifecycle
+		}
+		if nextLife == nil {
+			nextLife = next.Lifecycle
+		}
+		if reason := lifecycleLooser(curLife, nextLife); reason != "" {
+			return reason + " in the task " + name
+		}
+	}
+	return ""
+}
+
+// lifecycleLooser says how next holds a run to less than cur, or "" (docs/run-lifecycle.md). A
+// lifecycle where there was none takes away: it admits only the run kinds, which reach nothing
+// beyond the record, and limits everything else. Dropping one, dropping a kind from the
+// definition of done or a required check, or lifting a limit gives a run room the owner did not
+// sign, so only the owner's token may.
+func lifecycleLooser(cur, next *Lifecycle) string {
+	if cur == nil {
+		return ""
+	}
+	if next == nil {
+		return "drops the run lifecycle"
+	}
+	if k := firstOutside(cur.Done, next.Done); k != "" {
+		return "drops " + k + " from the definition of done"
+	}
+	if c := firstOutside(cur.Checks, next.Checks); c != "" {
+		return "drops the required check " + c
+	}
+	for _, l := range []struct {
+		name      string
+		cur, next int
+	}{
+		{"max_minutes", cur.MaxMinutes, next.MaxMinutes},
+		{"max_requests", cur.MaxRequests, next.MaxRequests},
+		{"checkpoint_every", cur.CheckpointEvery, next.CheckpointEvery},
+		{"max_handovers", cur.MaxHandovers, next.MaxHandovers},
+	} {
+		if l.cur > 0 && (l.next == 0 || l.next > l.cur) {
+			return "raises the run's " + l.name
 		}
 	}
 	return ""
