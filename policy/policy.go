@@ -364,10 +364,10 @@ func previewRule(a Action, phi PathSummary) (string, string, bool) {
 func (p Policy) RequiresPremises(kind string) bool { return contains(p.Grant.PremisesFor, kind) }
 
 // ResourceCovered: a grant names resources exactly ("owner/repo") or by prefix, an
-// entry ending in "/*" ("vera/hoet/*", since 13 September 2026: a review is made under
-// a project and its id is not known when the permit is written). A prefix entry covers
-// what lies under it and nothing beside it: "vera/hoet/*" covers "vera/hoet/paper1",
-// not "vera/hoet" and not "vera/hoetx/paper1".
+// entry ending in "/*" (since 13 September 2026, first for a hand whose resources did not
+// exist yet when the permit was written). A prefix entry covers what lies under it and
+// nothing beside it: "acme/docs/*" covers "acme/docs/one", not "acme/docs" and not
+// "acme/docsx/one".
 func ResourceCovered(list []string, resource string) bool {
 	for _, x := range list {
 		if x == resource {

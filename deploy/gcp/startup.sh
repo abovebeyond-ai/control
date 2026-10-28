@@ -45,10 +45,9 @@ try:
 except Exception:
     sys.exit(0)
 res=[r for a in c.get("agents",{}).values() for r in a.get("grant",{}).get("resources",[])]
-names=sorted({"github-token-"+r.split("/")[0].lower() for r in res if "/" in r and not r.startswith("vera/")})
+names=sorted({"github-token-"+r.split("/")[0].lower() for r in res if "/" in r})
 if any(r.startswith("portal:") for r in res): names.append("portal-token")
 names+=sorted({"forge-deploy-"+r[len("forge:"):] for r in res if r.startswith("forge:")})
-if any(r.startswith("vera/") for r in res): names.append("vera-token")
 print(" ".join(names))' 2>/dev/null); do
     names="$names control-$n"
   done

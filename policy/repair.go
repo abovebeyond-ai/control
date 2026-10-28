@@ -7,7 +7,7 @@ import (
 // RepairOnly says why next is more than a repair of cur, or "" when it is not: against cur it
 // may add kinds with a radius in the kind table (to a hand or to one of its tasks) and
 // resources, and nothing else. A kind that reaches a person or cannot be called back
-// (review.invite, review.sign, pull.merge, anything B3) has no radius there: adding it takes
+// (branch.delete, pull.ready, pull.merge, anything B3) has no radius there: adding it takes
 // the owner's token, and so does giving a kind a radius, since the table is the owner's. No new hand, nothing about who speaks for a hand, no new system or system address, no
 // higher count, no certificate or per-action word dropped: the rest is Narrower's. A resource
 // is added only to a hand whose every kind is a repair kind, since a new resource reaches every

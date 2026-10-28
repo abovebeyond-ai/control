@@ -5,7 +5,8 @@
 **Machine-readable form:** `statement.json` beside this file, same content. (10.1.7)
 **Claims review:** `claims-review.md`, signed off by the operator. (7.5.2)
 **Brought up to date:** 7 October 2026, for control v0.33.0; what changed since 13 September
-is in *Since 13 September 2026* below, and where it changes a claim the table says so.
+is in *Since 13 September 2026* below, and where it changes a claim the table says so. In
+October 2026 the review hand and its three kinds left with the Vera app (*Hands* below).
 
 ## System (10.1.4, 10.1.6)
 
@@ -33,17 +34,12 @@ pull request's own checks went green, its body rewritten with the green working'
 the footer it was born with kept; refused for a person's pull request or one without the
 gateway's footer). The draft exists because most repositories run their tests on a pull
 request and not on a bare branch, so a change whose only judge is that run has to be a
-pull request before it is judged; the draft says it is not yet a proposal. Since v0.17.0
-(13 September 2026) a second hand, the review hand for Vera, brings three more:
-`review.publish` (a review page to the Vera app, attached and digest bound like a push's
-files), `review.invite` (a sign-in mail to a person), and `review.sign` (the review root
-sealed with a key made inside the machine and named in the register as `#vera`, under a
-working that says every reading on the page has a judgement, `REVIEW_COMPLETE`; the record
-carries the signature and the key, and nothing leaves the machine but the signature). A
-judgement is never a verb: those are people's, on the page. A review's resource is
-`vera/<project>/<id>`, and a grant may name a project's reviews by prefix, `vera/<project>/*`
-(v0.17.2), since a review's id is not known when the permit is written; a prefix covers
-what lies under it and nothing beside it, and the ticket still names the one review.
+pull request before it is judged; the draft says it is not yet a proposal. From v0.17.0
+(13 September 2026) until October 2026 a second hand, the review hand for the Vera app, held
+three more (`review.publish`, `review.invite`, `review.sign`); it left with the app, and its
+records stay in the log, checkable like any other. A grant may name resources by prefix,
+`<prefix>/*` (v0.17.2, first for that hand); a prefix covers what lies under it and nothing
+beside it.
 Each grant names the judgements a certificate of premises may argue for it (v0.13.0):
 the two repair hands accept `FIX_WITHIN_SEMVER`, the major-upgrade hand `MAJOR_PROPOSED`
 and `MAJOR_UNDER_TESTS`, the headers hand `HEADERS_SAFE_SET`; a working that argues
@@ -212,20 +208,21 @@ September; these are changes to the system the claims are about, disclosed as th
 **Gateway.** `abovebeyond-ai/control` v0.33.0 on the same confidential VM, pinned by version
 and checksum in `deploy/gcp/startup.sh`.
 
-**Hands.** Four agents, each a fragment of the DID with its own key:
+**Hands.** Three agents, each a fragment of the DID with its own key:
 
 - `#agent-elixir`, the repair hands as tasks (security-fix, maintenance, major-upgrade,
   headers);
 - `#agent-workbench`, the session on the operator's laptop;
 - `#agent-workbench-shed`, since 5 October 2026: an always-on machine at the operator's home
   with its own key, sealed to its TPM, under the same grant as `#agent-workbench`, so a record
-  says which machine proposed;
-- `#agent-vera`, the review hand.
+  says which machine proposed.
 
 A hand is in the configuration only while the box knows its key. On 6 October 2026 it knows
-two, `#agent-elixir` and `#agent-workbench-shed`: the laptop holds no key since 5 October, and
-Vera's key is not set, so neither `#agent-workbench` nor `#agent-vera` holds a grant in the
-configuration the box writes, and neither can act once it is carried over.
+two, `#agent-elixir` and `#agent-workbench-shed`: the laptop holds no key since 5 October, so
+`#agent-workbench` holds no grant in the configuration the box writes and cannot act once it
+is carried over. A fourth hand, `#agent-vera` (the review hand, from 13 September 2026), held
+no grant after 5 October either, and left with the Vera app in October 2026: the gateway no
+longer performs its kinds, and its records stay in the log.
 
 **In-scope action classes, added.** Beside the classes under *System*:
 

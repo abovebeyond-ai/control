@@ -12,8 +12,8 @@ import (
 // gateway judges by it, serves it on /v1/agents, and Portal, Elixir and the hand read it there
 // instead of keeping lists of their own (docs/kinds.md).
 type Kind struct {
-	// Adapter performs the kind: github, portal, forge, vera, system, or gateway for the run
-	// kinds the gateway performs itself.
+	// Adapter performs the kind: github, portal, forge, system, or gateway for the run kinds
+	// the gateway performs itself.
 	Adapter string `json:"adapter"`
 	// Radius is B1 or B2 for a kind a repair key may add and a working set may admit, empty for
 	// one that only the owner's token grants (it reaches a person or cannot be called back).
@@ -110,16 +110,9 @@ var Builtin = Kinds{
 	"portal.share": {Adapter: "portal", Radius: "B2", Why: "one share in Portal, ended there in one step", Files: "files_sha256", Place: "Records in Portal", Words: "share a document behind a passphrase",
 		Schema: Schema{Required: map[string]string{"title": "string", "files_sha256": "hex64"}, Optional: map[string]string{"days": "int", "passphrase_hash": "string"}}},
 
-	// The review hand (13 September 2026): a page published, a person invited, a root sealed.
-	// None is a repair kind: an invitation reaches a person, a seal cannot be called back.
-	"review.publish": {Adapter: "vera", Files: "page_sha256", Place: "Reviews in Vera", Words: "publish a review page",
-		Schema: Schema{Required: map[string]string{"page_sha256": "hex64"}, Optional: map[string]string{"title": "string", "by": "string"}}},
-	// An empty optional set, not a nil one: the bundle beside the record is read back through
-	// JSON, and a nil map would not digest to what the claims name.
-	"review.invite": {Adapter: "vera", Place: "Reviews in Vera", Words: "invite a reader",
-		Schema: Schema{Required: map[string]string{"email": "string"}, Optional: map[string]string{}}},
-	"review.sign": {Adapter: "vera", Place: "Reviews in Vera", Words: "seal a finished review",
-		Schema: Schema{Required: map[string]string{"root": "string"}, Optional: map[string]string{"readings": "int", "judged": "int"}}},
+	// The review hand's kinds (review.publish, review.invite, review.sign, since 13 September
+	// 2026) left with the Vera app in October 2026. Their records stay checkable: a record
+	// carries its own action and parameters, and nothing in the chain reads this table back.
 
 	// The run kinds (docs/run-lifecycle.md): a hand's own word on its run, judged under a
 	// grant's lifecycle and performed by the gateway, whose record is the whole effect.
