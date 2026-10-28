@@ -86,10 +86,12 @@ type versionBody struct {
 var Formats = []string{"digest", "payload"}
 
 // Fields are the optional fields of a version this gateway reads that an earlier release did
-// not: working_set on a grant, kinds on the body. A body is decoded strictly, so a version
-// naming a field the gateway does not know is refused and blocks the chain: a signer writes
-// one only once it is served here, on /v1/policy and /v1/agents beside the formats.
-var Fields = []string{"working_set", "kinds"}
+// not: working_set on a grant, kinds on the body, lifecycle on a grant or a task. A body is
+// decoded strictly, so a version naming a field the gateway does not know is refused and blocks
+// the chain: a signer writes one only once it is served here, on /v1/policy and /v1/agents
+// beside the formats. v0.44.0 read lifecycle without serving it, and its Narrower let a
+// narrowing key loosen one; it is served from the release that holds that to the owner.
+var Fields = []string{"working_set", "kinds", "lifecycle"}
 
 // Hash names a signed version: sha-256 over the token as it travels, tagged.
 func (s SignedVersion) Hash() string { return HashOf([]byte(s.Token)) }
