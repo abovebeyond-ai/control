@@ -89,6 +89,7 @@ nothing, for a first deployment beside an existing hand.
 | `GET /v1/checkpoint?agent=` | the signed tree head an anchorer or witness picks up |
 | `GET /v1/records?agent=&from=` | the records, for a verifier |
 | `GET /v1/proof?agent=&step=` | an inclusion proof against the current tree |
+| `GET /v1/runs?agent=&waiting=` | the runs judged under a lifecycle, where each stands, and which a follow-on may take over (`docs/run-lifecycle.md`) |
 | `GET /v1/agents` | the agents this gateway judges for, a digest of each grant's kinds and resources, the platform, and whether it is dry |
 | `GET /v1/attachment?agent=&step=&name=` | what was written beside a record: `premises` or `action` |
 | `GET /v1/key` | the public key, issuer and platform |
@@ -122,6 +123,13 @@ grant, and the task the capability names (`task.playbook`) selects that task's o
 `premises_for` and `judgements` out of it; a task's kinds are met with the grant's, so a task
 never widens. A capability naming a task the grant does not have, or no capability at all,
 is refused and recorded. The bundle carries the tasks, the record names the task.
+
+A grant or a task may carry a `lifecycle` (`docs/run-lifecycle.md`): the kinds a run must have
+performed and the checks it must report passed before it may close as done, and how long, how many
+requests, how many effects between checkpoints and how many handovers it may take before only a
+close is judged. It admits the run kinds `run.open`, `run.checkpoint` and `run.close`, which the
+gateway performs itself: a run ends on the record as done, handed over or abandoned, and the next
+session reads the handover through its own `run.open` instead of being told by a person.
 
 `client_token` in the configuration, when set, is what a hand must present as a bearer
 token to submit: a gateway reached from another machine holds credentials and judges within

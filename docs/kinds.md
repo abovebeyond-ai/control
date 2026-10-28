@@ -17,7 +17,7 @@ Each row (`policy.Kind`, `policy/kinds.go`) says:
 
 | field | what it says |
 |---|---|
-| `adapter` | who performs it: `github`, `portal`, `forge`, `vera` or `system` |
+| `adapter` | who performs it: `github`, `portal`, `forge`, `vera`, `system`, or `gateway` for the run kinds of `docs/run-lifecycle.md` |
 | `radius` | `B1` or `B2` for a kind a repair key may add and a working set may admit; empty for a kind only the token grants |
 | `why` | what bounds the radius, in the words the owner signs |
 | `files` | the parameter that binds attached files by digest, if the kind takes files |

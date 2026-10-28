@@ -12,7 +12,8 @@ import (
 // gateway judges by it, serves it on /v1/agents, and Portal, Elixir and the hand read it there
 // instead of keeping lists of their own (docs/kinds.md).
 type Kind struct {
-	// Adapter performs the kind: github, portal, forge, vera or system.
+	// Adapter performs the kind: github, portal, forge, vera, system, or gateway for the run
+	// kinds the gateway performs itself.
 	Adapter string `json:"adapter"`
 	// Radius is B1 or B2 for a kind a repair key may add and a working set may admit, empty for
 	// one that only the owner's token grants (it reaches a person or cannot be called back).
@@ -41,6 +42,9 @@ type Kinds map[string]Kind
 // the only adapter whose kinds need no code in this gateway, so the only one a policy version
 // may name (docs/kinds.md).
 const SystemAdapter = "system"
+
+// GatewayAdapter performs the run kinds: the gateway itself, nothing beyond its own record.
+const GatewayAdapter = "gateway"
 
 // Builtin are the kinds whose effect is code in this release. A kind performed by code keeps
 // its description beside that code: a schema in the policy for an effect the binary carries out
@@ -116,6 +120,15 @@ var Builtin = Kinds{
 		Schema: Schema{Required: map[string]string{"email": "string"}, Optional: map[string]string{}}},
 	"review.sign": {Adapter: "vera", Place: "Reviews in Vera", Words: "seal a finished review",
 		Schema: Schema{Required: map[string]string{"root": "string"}, Optional: map[string]string{"readings": "int", "judged": "int"}}},
+
+	// The run kinds (docs/run-lifecycle.md): a hand's own word on its run, judged under a
+	// grant's lifecycle and performed by the gateway, whose record is the whole effect.
+	RunOpenKind: {Adapter: GatewayAdapter, Place: "Works in runs", Words: "start a run, or take over one handed on",
+		Schema: Schema{Required: map[string]string{}, Optional: map[string]string{"goal": "string", "continues": "string"}}},
+	RunCheckpointKind: {Adapter: GatewayAdapter, Place: "Works in runs", Words: "say where a run stands",
+		Schema: Schema{Required: map[string]string{"summary": "string"}, Optional: map[string]string{"next": "list", "state": "strings"}}},
+	RunCloseKind: {Adapter: GatewayAdapter, Place: "Works in runs", Words: "end a run as done, handed over or abandoned",
+		Schema: Schema{Required: map[string]string{"outcome": "string", "summary": "string"}, Optional: map[string]string{"next": "list", "checks": "records", "state": "strings"}}},
 
 	// Actions on a running system (docs/mandates.md), one kind per action, never a generic
 	// command. The photo repair of one car on Stocklist: without apply it only reports.

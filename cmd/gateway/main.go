@@ -207,6 +207,7 @@ func main() {
 	mux.HandleFunc("GET /v1/checkpoint", s.accessed("checkpoint", s.checkpoint))
 	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
 	mux.HandleFunc("GET /v1/proof", s.accessed("proof", s.proof))
+	mux.HandleFunc("GET /v1/runs", s.accessed("runs", s.runs))
 	// The seal key of the review hand (#vera) is made now, so the register can name it
 	// before the first review is sealed; it is published beside the gateway's own key.
 	veraKey, err := effects.Vera{SecretsDir: cfg.Secrets}.SealKey()
@@ -555,6 +556,14 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case !v.Allowed():
 		outcome, effectReason = map[string]any{"performed": false, "why": "refused"}, "not performed: the request was refused"
+	case policy.IsRunKind(req.Action.Kind):
+		// The run kinds reach no far end, so dry or not they are performed here: the record is
+		// the effect, and a run.open that continues another receives that run's handover.
+		o := effects.Outcome{OK: true, Detail: map[string]any{"run": req.Run}}
+		if prev, _ := req.Action.Params["continues"].(string); req.Action.Kind == policy.RunOpenKind && prev != "" {
+			o.Detail["handover"] = g.Handover(prev)
+		}
+		outcome, effectReason = o, "effect performed: the run's own record"
 	case s.cfg.Dry:
 		outcome, effectReason = map[string]any{"performed": false, "why": "dry"}, "not performed: dry"
 	default:
@@ -585,7 +594,7 @@ func (s *service) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"verdict": v.Verdict, "reason": v.Reason, "step": v.Step, "action": v.ActionID, "token": v.Token, "effect": nil, "steps": []int{v.Step, e.Step}}
-	if v.Allowed() && !s.cfg.Dry {
+	if v.Allowed() && (!s.cfg.Dry || policy.IsRunKind(req.Action.Kind)) {
 		out["effect"] = outcome
 	}
 	// The result, as handed back, is the third: its digest covers the answer above.
@@ -829,6 +838,28 @@ func (s *service) records(w http.ResponseWriter, r *http.Request) {
 		from = 0
 	}
 	writeJSON(w, 200, map[string]any{"agent": agent, "from": from, "records": records[from:]})
+}
+
+// runs lists the runs of an agent judged under a lifecycle (docs/run-lifecycle.md): where each
+// stands and whether a follow-on may continue it. The handover is not here; it is handed over by
+// the run.open that takes it, so reading it is itself on the record.
+func (s *service) runs(w http.ResponseWriter, r *http.Request) {
+	g, err := s.gateway(r.URL.Query().Get("agent"))
+	if err != nil {
+		writeJSON(w, 404, map[string]any{"error": err.Error()})
+		return
+	}
+	list := g.Runs()
+	if r.URL.Query().Get("waiting") != "" {
+		waiting := []gateway.RunView{}
+		for _, v := range list {
+			if v.Waiting {
+				waiting = append(waiting, v)
+			}
+		}
+		list = waiting
+	}
+	writeJSON(w, 200, map[string]any{"agent": r.URL.Query().Get("agent"), "runs": list})
 }
 
 func (s *service) proof(w http.ResponseWriter, r *http.Request) {

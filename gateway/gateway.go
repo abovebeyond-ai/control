@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,7 @@ type Gateway struct {
 	tree        *merkle.Tree
 	step        int
 	runs        map[string]policy.PathSummary // path summary per run; "" is the run of a hand that names none
+	lives       map[string]policy.RunState    // where each run stands in its lifecycle (docs/run-lifecycle.md)
 	// agboms remembers, per action, the digest of the bill of materials the hand
 	// submitted with the request, so the effect and result records name the same one.
 	agboms map[string]string
@@ -135,7 +137,7 @@ func Open(cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
-	g := &Gateway{cfg: cfg, measurement: measurement, alg: alg, head: evidence.GenesisHead(), tree: merkle.New(), runs: map[string]policy.PathSummary{}}
+	g := &Gateway{cfg: cfg, measurement: measurement, alg: alg, head: evidence.GenesisHead(), tree: merkle.New(), runs: map[string]policy.PathSummary{}, lives: map[string]policy.RunState{}}
 	records, err := cfg.Store.Records(cfg.Agent)
 	if err != nil {
 		return nil, err
@@ -177,6 +179,7 @@ func Open(cfg Config) (*Gateway, error) {
 		var done stepAction
 		if found, _ := cfg.Store.Attachment(cfg.Agent, i, "action", &done); found {
 			g.runs[done.Run] = g.summary(done.Run).Fold(done.Action, verdict)
+			g.foldRun(done.Run, done.Action, verdict, int64(num(tok["iat"])), g.lifeOf(c))
 		}
 	}
 	g.step = len(records)
@@ -271,6 +274,90 @@ func (g *Gateway) closeInterrupted(records []evidence.Token) {
 type stepAction struct {
 	Run    string        `json:"run"`
 	Action policy.Action `json:"action"`
+}
+
+// lifeOf is the lifecycle a record was judged under, from the task its claims name.
+func (g *Gateway) lifeOf(c map[string]any) *policy.Lifecycle {
+	task, _ := c["control_task"].(map[string]any)
+	pol, _ := g.cfg.Policy.ForTask(str(task["playbook"]))
+	return pol.Grant.Lifecycle
+}
+
+// foldRun moves a run's lifecycle state past one request, and marks the run it continues as
+// taken: a handover is read once.
+func (g *Gateway) foldRun(run string, action policy.Action, verdict string, at int64, life *policy.Lifecycle) {
+	rs := g.lives[run].Fold(action, verdict, at)
+	if rs.Life == nil {
+		rs.Life = life
+	}
+	if verdict == "ALLOW" && action.Kind == policy.RunOpenKind && rs.Continues != "" {
+		prev := g.lives[rs.Continues]
+		prev.ContinuedBy = run
+		g.lives[rs.Continues] = prev
+		rs.Depth = prev.Depth + 1
+	}
+	g.lives[run] = rs
+}
+
+// chainSummary is the path of a run together with the runs it continues: work handed over is
+// work done, so a follow-on that opens the pull request its predecessor pushed for closes as
+// done. Only the definition of done reads it; the grant's counts stay per run.
+func (g *Gateway) chainSummary(run string, phi policy.PathSummary) policy.PathSummary {
+	out := policy.PathSummary{Steps: phi.Steps, PerKind: map[string]int{}, Resources: phi.Resources}
+	for k, v := range phi.PerKind {
+		out.PerKind[k] = v
+	}
+	seen := map[string]bool{run: true}
+	for prev := g.lives[run].Continues; prev != "" && !seen[prev]; prev = g.lives[prev].Continues {
+		seen[prev] = true
+		for k, v := range g.runs[prev].PerKind {
+			out.PerKind[k] += v
+		}
+	}
+	return out
+}
+
+// Handover is what the run hands to the one that continues it: its handover or last checkpoint,
+// with where it stood. Empty when the run has nothing to hand over.
+func (g *Gateway) Handover(run string) map[string]any {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	rs, ok := g.lives[run]
+	if !ok || rs.Handover == nil {
+		return nil
+	}
+	out := map[string]any{"run": run, "resource": rs.Resource, "state": rs.Claims(), "handover": rs.Handover}
+	if rs.Closed == "" {
+		out["stalled"] = true
+	}
+	return out
+}
+
+// RunView is one run as /v1/runs lists it: where it stands, and whether a follow-on may take it.
+type RunView struct {
+	Run      string         `json:"run"`
+	Resource string         `json:"resource"`
+	State    map[string]any `json:"state"`
+	Stalled  bool           `json:"stalled"`
+	Waiting  bool           `json:"waiting"`
+}
+
+// Runs lists the runs judged under a lifecycle, by name. A run that is waiting is one a
+// follow-on may open with continues; the handover itself is read through that run.open, on
+// the record.
+func (g *Gateway) Runs() []RunView {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.cfg.Clock().Unix()
+	out := []RunView{}
+	for name, rs := range g.lives {
+		if rs.Life == nil || name == "" {
+			continue
+		}
+		out = append(out, RunView{Run: name, Resource: rs.Resource, State: rs.Claims(), Stalled: rs.Life.Stalled(rs, now), Waiting: rs.Life.Waiting(rs, now)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Run < out[j].Run })
+	return out
 }
 
 func (g *Gateway) summary(run string) policy.PathSummary {
@@ -379,7 +466,11 @@ func (g *Gateway) SubmitWith(run string, action policy.Action, principal string,
 					break
 				}
 			}
-			if !p.Covers(action.Kind, action.Resource) {
+			// A run kind reaches no far end and the capability's kinds name effects, so its kind
+			// need not be listed; its resource must, and it is held to the lifecycle of the task
+			// the capability selects (docs/run-lifecycle.md).
+			runKind := policy.IsRunKind(action.Kind) && policy.ResourceCovered(p.Resources, action.Resource)
+			if !p.Covers(action.Kind, action.Resource) && !runKind {
 				capReason = "the capability does not cover " + action.Kind + " on " + action.Resource
 				break
 			}
@@ -504,6 +595,25 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 	default:
 		verdict, reason = pol.Evaluate(action, phi)
 	}
+	// The lifecycle (docs/run-lifecycle.md) has the last word on what the grant allows: a
+	// closed run, a run past its time or its requests, or one that owes a checkpoint is refused
+	// whatever it asks. The state it judged is on the record, so the verdict can be repeated.
+	now := g.cfg.Clock().Unix()
+	if life := pol.Grant.Lifecycle; life != nil {
+		rs := g.lives[run]
+		var prev *policy.RunState
+		if name, _ := action.Params["continues"].(string); action.Kind == policy.RunOpenKind && name != "" {
+			if p, ok := g.lives[name]; ok {
+				prev = &p
+			}
+		}
+		if verdict == "ALLOW" {
+			if v, r := life.Judge(run, action, g.chainSummary(run, phi), rs, now, prev); v != "" {
+				verdict, reason = v, r
+			}
+		}
+		extension["control_lifecycle"] = rs.Claims()
+	}
 
 	link := evidence.Link(g.head, snapshotDigest, verdict)
 	leaf, _ := evidence.Leaf(snapshotDigest, verdict)
@@ -554,7 +664,7 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 		}
 	}
 	token := evidence.Token{
-		"iss": g.cfg.Issuer, "iat": g.cfg.Clock().Unix(), "nonce": "n-" + hex.EncodeToString(nonce),
+		"iss": g.cfg.Issuer, "iat": now, "nonce": "n-" + hex.EncodeToString(nonce),
 		"eat_profile": evidence.Profile, "poc_claims": claims,
 		"submods": map[string]any{"attestation": map[string]any{"platform": g.cfg.Platform, "measurement": g.alg + ":" + g.measurement}},
 	}
@@ -573,6 +683,7 @@ func (g *Gateway) submit(run string, action policy.Action, principal string, ext
 	g.head = link
 	g.tree = treeAfter
 	g.runs[run] = phi.Fold(action, verdict)
+	g.foldRun(run, action, verdict, now, pol.Grant.Lifecycle)
 	g.step++
 
 	if err := g.cfg.Store.Attach(g.cfg.Agent, step, "action", stepAction{Run: run, Action: action}); err != nil {
