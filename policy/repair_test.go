@@ -55,7 +55,7 @@ func TestPortalsKeyAddsNothingElse(t *testing.T) {
 		systems map[string]string
 		reason  string
 	}{
-		"an unlisted kind": {changed(head, func(g *Grant) { g.Kinds = append(g.Kinds, "review.invite") }), head.Systems, "adds the kind review.invite"},
+		"an unlisted kind": {changed(head, func(g *Grant) { g.Kinds = append(g.Kinds, "branch.delete") }), head.Systems, "adds the kind branch.delete"},
 		"a merge":          {changed(head, func(g *Grant) { g.Kinds = append(g.Kinds, "pull.merge") }), head.Systems, "adds the kind pull.merge"},
 		"a new hand": {func() map[string]HandGrant {
 			a := changed(head, func(*Grant) {})
@@ -81,11 +81,11 @@ func TestPortalsKeyAddsNothingElse(t *testing.T) {
 func TestANewResourceDoesNotReachAKindThatIsNotReversible(t *testing.T) {
 	head := bootHead()
 	g := head.Agents[shed].Grant
-	g.Kinds = append(append([]string{}, g.Kinds...), "review.invite")
+	g.Kinds = append(append([]string{}, g.Kinds...), "branch.delete")
 	head.Agents = map[string]HandGrant{shed: {Grant: g}}
-	next := changed(head, func(g *Grant) { g.Resources = append(g.Resources, "vera/other/*") })
-	if reason := RepairOnly(Builtin, head.Agents, head.Systems, next, head.Systems); !strings.Contains(reason, "holds review.invite") {
-		t.Fatalf("a resource added beside review.invite: %q", reason)
+	next := changed(head, func(g *Grant) { g.Resources = append(g.Resources, "acme/other") })
+	if reason := RepairOnly(Builtin, head.Agents, head.Systems, next, head.Systems); !strings.Contains(reason, "holds branch.delete") {
+		t.Fatalf("a resource added beside branch.delete: %q", reason)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestARepairAddsAListedKindToATaskButNoTask(t *testing.T) {
 }
 
 func TestNoKindThatReachesAPersonIsARepairKind(t *testing.T) {
-	for _, k := range []string{"review.invite", "review.sign", "review.publish", "pull.merge", "pull.ready", "branch.delete", "workflow.dispatch", "stocklist.resend", "stocklist.transport_price"} {
+	for _, k := range []string{"pull.merge", "pull.ready", "branch.delete", "workflow.dispatch", "stocklist.resend", "stocklist.transport_price"} {
 		if Builtin.IsRepair(k) {
 			t.Errorf("%s is on the repair list", k)
 		}

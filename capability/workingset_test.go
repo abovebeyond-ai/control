@@ -66,7 +66,7 @@ func TestAWordIsHeldToTheWorkingSetItCarries(t *testing.T) {
 		"another project":       {word(signSet(t, set(nil), op), func(p *Payload) { p.Task.Project = "elsewhere" }), "elsewhere is not in the working set"},
 		"a B1 set":              {word(signSet(t, set(func(c map[string]any) { c["layer"] = "B1" }), op), nil), "above the working set's layer B1"},
 		"a B3 set":              {word(signSet(t, set(func(c map[string]any) { c["layer"] = "B3" }), op), nil), "B1 or B2"},
-		"a kind with no radius": {word(signSet(t, set(nil), op), func(p *Payload) { p.Kinds = append(p.Kinds, "review.invite") }), "review.invite is above"},
+		"a kind with no radius": {word(signSet(t, set(nil), op), func(p *Payload) { p.Kinds = append(p.Kinds, "branch.delete") }), "branch.delete is above"},
 	} {
 		if _, err := InsideWorkingSet(c.p, keys, "did:example:ab", policy.Builtin, now); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Fatalf("%s: %v, want %q", name, err, c.want)

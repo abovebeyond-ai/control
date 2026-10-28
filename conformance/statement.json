@@ -4,7 +4,7 @@
   "claim_date": "2026-09-09",
   "stage": "self-declared",
   "system": {
-    "name": "Elixir's hands, the workbench and the review hand, with the control gateway",
+    "name": "Elixir's hands and the workbench, with the control gateway",
     "operator": "Above Beyond",
     "operator_did": "did:webvh:Qmb8LWd9DWcCY9KxESX69Dfkgf4n1LXtGeje6Hn9647yxD:abovebeyond.ai:id",
     "components": [
@@ -53,9 +53,6 @@
       "issue.open",
       "preview.push",
       "forge.deploy",
-      "review.publish",
-      "review.invite",
-      "review.sign",
       "portal.update",
       "portal.time_entry",
       "portal.expense",
@@ -82,8 +79,7 @@
     "agents": [
       "#agent-elixir",
       "#agent-workbench",
-      "#agent-workbench-shed",
-      "#agent-vera"
+      "#agent-workbench-shed"
     ]
   },
   "domains_claimed": [

@@ -184,13 +184,13 @@ version from a repair key only when, against the version served, it adds nothing
   `studio.research_draft`, `observatory.trend_edit`, `observatory.trend_site`), to a hand or to
   one of its tasks;
 - resources, for a hand that already exists and whose every kind is on that list (a new
-  resource reaches every kind the hand holds, so a hand holding `review.invite` or
+  resource reaches every kind the hand holds, so a hand holding `branch.delete` or
   `workflow.dispatch` gets a new repository only on the token);
 
 and changes nothing else: no new hand, task, system or system address, nothing about who speaks
 for a hand, no higher count, no certificate or per-action word dropped, no judgement accepted.
 The rest is `Narrower`'s check, run on the version with the allowed additions taken off. What
-reaches a person or cannot be called back (`review.invite`, `review.sign`, `pull.merge`,
+reaches a person or cannot be called back (`branch.delete`, `pull.merge`,
 `pull.ready`, anything B3) is not on the list; a test keeps every system kind decided for it.
 
 Elixir marks a draft `repairOnly` by the same rule, ported line for line, and only when the

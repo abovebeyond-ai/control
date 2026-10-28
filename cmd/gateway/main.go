@@ -81,8 +81,6 @@ type config struct {
 	// attribute bytes: measured into RTMR3 before the quote (since v0.15.0), so a
 	// reader can hold the quote to the policy the machine booted with.
 	CarriedConfig string `json:"carried_config,omitempty"`
-	// VeraBase is the Vera app the review hand publishes to (default https://vera.abovebeyond.ai).
-	VeraBase string `json:"vera_base,omitempty"`
 	// Reviewer is the GitHub login the gateway asks to review every pull request it opens
 	// (since v0.24.1). With the App as author, a pull request no longer shows under the
 	// owner's own pull requests; on 16 September 2026 two of them sat unnoticed for that
@@ -184,7 +182,6 @@ func main() {
 		s.revoked.follow(*cfg.Revocations, portalToken(cfg.Secrets))
 	}
 	s.effects.Add(effects.GitHub{SecretsDir: cfg.Secrets, Reviewer: cfg.Reviewer})
-	s.effects.Add(effects.Vera{SecretsDir: cfg.Secrets, Base: cfg.VeraBase})
 	s.effects.Add(effects.Portal{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.Forge{SecretsDir: cfg.Secrets})
 	s.effects.Add(effects.System{Bases: cfg.Systems, Table: cfg.kinds()})
@@ -208,13 +205,9 @@ func main() {
 	mux.HandleFunc("GET /v1/records", s.accessed("records", s.records))
 	mux.HandleFunc("GET /v1/proof", s.accessed("proof", s.proof))
 	mux.HandleFunc("GET /v1/runs", s.accessed("runs", s.runs))
-	// The seal key of the review hand (#vera) is made now, so the register can name it
-	// before the first review is sealed; it is published beside the gateway's own key.
-	veraKey, err := effects.Vera{SecretsDir: cfg.Secrets}.SealKey()
-	fail(err)
 	mux.HandleFunc("GET /v1/key", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"public_key": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "issuer": cfg.Issuer, "platform": s.platform(),
-			"keys": map[string]string{"control-gateway": hex.EncodeToString(key.Public().(ed25519.PublicKey)), "vera": hex.EncodeToString(veraKey.Public().(ed25519.PublicKey))}})
+			"keys": map[string]string{"control-gateway": hex.EncodeToString(key.Public().(ed25519.PublicKey))}})
 	})
 	mux.HandleFunc("GET /v1/attestation", s.accessed("attestation", s.attestation))
 	mux.HandleFunc("GET /v1/attestations", s.accessed("attestations", s.attestations))
@@ -699,7 +692,7 @@ func (s *service) readToken(w http.ResponseWriter, r *http.Request) {
 	known := false
 	for _, a := range s.cfg.Agents {
 		for _, res := range a.Grant.Resources {
-			if o, _, ok := strings.Cut(res, "/"); ok && strings.ToLower(o) == owner && !strings.HasPrefix(res, "vera/") {
+			if o, _, ok := strings.Cut(res, "/"); ok && strings.ToLower(o) == owner {
 				known = true
 			}
 		}
